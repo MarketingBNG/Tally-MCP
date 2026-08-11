@@ -1,0 +1,112 @@
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <CMPINFO>
+    <COMPANY>0</COMPANY>
+    <LEDGER>0</LEDGER>
+   </CMPINFO>
+  </DESC>
+  <DATA>
+   <COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="8">
+    <LEDGER NAME="Aylward Singh_Salary Payable" RESERVEDNAME="">
+     <PARENT TYPE="String">SALARY PAYABLE</PARENT>
+     <CLOSINGBALANCE TYPE="Amount">-77700.00</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Amount">0.00</OPENINGBALANCE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>Aylward Singh_Salary Payable</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </LEDGER>
+    <LEDGER NAME="Accounting Charges" RESERVEDNAME="">
+     <PARENT TYPE="String">Indirect Expenses</PARENT>
+     <CLOSINGBALANCE TYPE="Amount"></CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Amount">0.00</OPENINGBALANCE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>Accounting Charges</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </LEDGER>
+    <LEDGER NAME="Bramley &amp; Sons Accessories Private Limited" RESERVEDNAME="">
+     <PARENT TYPE="String">Sundry Creditors</PARENT>
+     <CLOSINGBALANCE TYPE="Amount">0.00</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Amount">0.00</OPENINGBALANCE>
+     <PARTYGSTIN TYPE="String">29AABCE1234F1Z5</PARTYGSTIN>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>Bramley &amp; Sons Accessories Private Limited</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </LEDGER>
+    <LEDGER NAME="Northwind Retail" RESERVEDNAME="">
+     <PARENT TYPE="String">Unclassified</PARENT>
+     <CLOSINGBALANCE TYPE="Amount">-88800.00</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Amount">-88800.00</OPENINGBALANCE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>Northwind Retail</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </LEDGER>
+    <LEDGER NAME="HDFC Bank Current A/c" RESERVEDNAME="">
+     <PARENT TYPE="String">Bank Accounts</PARENT>
+     <!-- Opening plus the one movement in the fixture period: 505050.51 +
+          150505.05 = 655555.56. Kept internally consistent so a running-balance
+          test means something. -->
+     <CLOSINGBALANCE TYPE="Amount">655555.56</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Amount">505050.51</OPENINGBALANCE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>HDFC Bank Current A/c</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </LEDGER>
+    <LEDGER NAME="Northwind Retail Limited" RESERVEDNAME="">
+     <PARENT TYPE="String">Sundry Debtors</PARENT>
+     <CLOSINGBALANCE TYPE="Amount">0.00</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Amount">0.00</OPENINGBALANCE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>Northwind Retail Limited</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </LEDGER>
+    <LEDGER NAME="Sales - Domestic" RESERVEDNAME="">
+     <PARENT TYPE="String">Sales Accounts</PARENT>
+     <CLOSINGBALANCE TYPE="Amount">50505.05</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Amount">0.00</OPENINGBALANCE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>Sales - Domestic</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </LEDGER>
+    <!-- Empty opening balance: exercises the "no anchor for a running
+         balance" path, which must warn rather than assume zero. -->
+    <LEDGER NAME="Output IGST" RESERVEDNAME="">
+     <PARENT TYPE="String">Duties &amp; Taxes</PARENT>
+     <CLOSINGBALANCE TYPE="Amount">9090.90</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Amount"></OPENINGBALANCE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>Output IGST</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </LEDGER>
+   </COLLECTION>
+  </DATA>
+ </BODY>
+</ENVELOPE>

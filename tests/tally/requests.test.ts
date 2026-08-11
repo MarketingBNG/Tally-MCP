@@ -1,0 +1,121 @@
+import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  buildReportRequest,
+  buildCollectionRequest,
+  buildConnectionProbeRequest,
+  buildLedgerListRequest,
+  buildTrialBalanceRequest,
+  escapeXml,
+  FORBIDDEN_WRITE_VERBS,
+} from '../../src/tally/requests.js';
+
+describe('escapeXml', () => {
+  it('escapes every character that would break the envelope', () => {
+    expect(escapeXml('Gupta & Co <"Ltd">')).toBe('Gupta &amp; Co &lt;&quot;Ltd&quot;&gt;');
+  });
+
+  it('escapes apostrophes in party names', () => {
+    expect(escapeXml("O'Brien")).toBe('O&apos;Brien');
+  });
+});
+
+describe('request builders', () => {
+  it('always issues Export, never a write verb', () => {
+    const requests = [
+      buildReportRequest('Trial Balance'),
+      buildCollectionRequest('Ledgers', 'Ledger', ['Name']),
+      buildConnectionProbeRequest(),
+    ];
+
+    for (const request of requests) {
+      expect(request).toContain('<TALLYREQUEST>Export</TALLYREQUEST>');
+      for (const verb of FORBIDDEN_WRITE_VERBS) {
+        expect(request).not.toContain(`<TALLYREQUEST>${verb}</TALLYREQUEST>`);
+      }
+    }
+  });
+
+  it('converts ISO dates to Tally format', () => {
+    const request = buildTrialBalanceRequest({
+      fromDate: '2026-04-01',
+      toDate: '2026-04-30',
+    });
+
+    expect(request).toContain('<SVFROMDATE>20260401</SVFROMDATE>');
+    expect(request).toContain('<SVTODATE>20260430</SVTODATE>');
+  });
+
+  it('omits company scoping when none is given, deferring to the loaded company', () => {
+    expect(buildReportRequest('DayBook')).not.toContain('SVCURRENTCOMPANY');
+  });
+
+  it('escapes a company name containing XML metacharacters', () => {
+    const request = buildReportRequest('DayBook', { company: 'Gupta & Sons <Pvt>' });
+    expect(request).toContain('<SVCURRENTCOMPANY>Gupta &amp; Sons &lt;Pvt&gt;</SVCURRENTCOMPANY>');
+    // The raw ampersand must not survive, or the envelope itself is malformed.
+    expect(request).not.toMatch(/Gupta & Sons/);
+  });
+
+  it('requests XML by default and JSON only when asked', () => {
+    expect(buildReportRequest('DayBook')).toContain('$$SysName:XML');
+
+    const json = buildReportRequest('DayBook', { format: 'json' });
+    expect(json).toContain('$$SysName:JSON');
+    expect(json).toContain('<SVEXPORTINPLAINFORMAT>Yes</SVEXPORTINPLAINFORMAT>');
+  });
+
+  it('marks collections as non-modifying', () => {
+    const request = buildLedgerListRequest();
+    expect(request).toContain('ISMODIFY="No"');
+    expect(request).toContain('<TYPE>Ledger</TYPE>');
+  });
+
+  it('includes each requested native method', () => {
+    const request = buildCollectionRequest('X', 'Ledger', ['Name', 'Parent', 'ClosingBalance']);
+    expect(request).toContain('<NATIVEMETHOD>Name</NATIVEMETHOD>');
+    expect(request).toContain('<NATIVEMETHOD>Parent</NATIVEMETHOD>');
+    expect(request).toContain('<NATIVEMETHOD>ClosingBalance</NATIVEMETHOD>');
+  });
+
+  it('produces a balanced envelope', () => {
+    const request = buildLedgerListRequest({ company: 'Acme' });
+    expect(request.startsWith('<ENVELOPE>')).toBe(true);
+    expect(request.endsWith('</ENVELOPE>')).toBe(true);
+  });
+});
+
+/**
+ * Security: the read-only guarantee is a headline claim of this project, so
+ * it is asserted against the source tree rather than trusted.
+ */
+describe('read-only guarantee', () => {
+  function collectSourceFiles(dir: string, acc: string[] = []): string[] {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) collectSourceFiles(full, acc);
+      else if (entry.endsWith('.ts')) acc.push(full);
+    }
+    return acc;
+  }
+
+  it('contains no write-verb request anywhere in src/', () => {
+    const files = collectSourceFiles('src');
+    expect(files.length).toBeGreaterThan(0);
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const contents = readFileSync(file, 'utf8');
+      for (const verb of FORBIDDEN_WRITE_VERBS) {
+        // Match the wire form only: prose and identifiers mentioning these
+        // words are fine, an actual request envelope is not.
+        if (contents.includes(`<TALLYREQUEST>${verb}`)) {
+          offenders.push(`${file}: ${verb}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+.DS_Store
+
+# Personal Claude Code permissions, machine-specific.
+.claude/settings.local.json
+
+# Real Tally exports pulled from a live install. These contain actual
+# accounting data — ledger names, party names, amounts, GSTINs. Redacted
+# fixtures for tests belong in tests/fixtures/, never here.
+samples/
+
+# Local MCP client wiring. Holds an absolute path to this checkout, which is
+# machine-specific and usually contains the user's name. See README for the
+# template to copy.
+.mcp.json

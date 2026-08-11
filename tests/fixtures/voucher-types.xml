@@ -1,0 +1,36 @@
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <CMPINFO>
+    <COMPANY>0</COMPANY>
+    <VOUCHERTYPE>0</VOUCHERTYPE>
+   </CMPINFO>
+  </DESC>
+  <DATA>
+   <COLLECTION>
+    <VOUCHERTYPE NAME="Payment" RESERVEDNAME="Payment">
+     <PARENT TYPE="String">Payment</PARENT>
+    </VOUCHERTYPE>
+    <VOUCHERTYPE NAME="Sales" RESERVEDNAME="Sales">
+     <PARENT TYPE="String">Sales</PARENT>
+    </VOUCHERTYPE>
+    <!-- The discriminating case: a company-specific type whose NAME contains
+         neither "sales" nor "purchase", but which derives from Sales. Only
+         Parent identifies it. Name matching would silently miss it. -->
+    <VOUCHERTYPE NAME="Tax Invoice" RESERVEDNAME="">
+     <PARENT TYPE="String">Sales</PARENT>
+    </VOUCHERTYPE>
+    <VOUCHERTYPE NAME="Purchase" RESERVEDNAME="Purchase">
+     <PARENT TYPE="String">Purchase</PARENT>
+    </VOUCHERTYPE>
+    <VOUCHERTYPE NAME="Journal" RESERVEDNAME="Journal">
+     <PARENT TYPE="String">Journal</PARENT>
+    </VOUCHERTYPE>
+   </COLLECTION>
+  </DATA>
+ </BODY>
+</ENVELOPE>
