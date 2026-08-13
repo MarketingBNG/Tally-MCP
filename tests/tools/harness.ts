@@ -72,8 +72,29 @@ export async function callTool(
   return JSON.parse(text) as unknown;
 }
 
-/** Call a tool and assert it succeeded, returning the parsed payload. */
+/**
+ * Call a tool and assert it succeeded, returning the tool's own payload.
+ *
+ * Data tools wrap their payload in the §4 envelope, so this unwraps `data` and
+ * a test can go on asserting about the tool's own shape. Use
+ * `callToolEnvelope` when the envelope itself is what is under test.
+ *
+ * The unwrap is conditional rather than unconditional because
+ * `tally_connection_status` deliberately does not go through `runTool` — it
+ * returns no accounting data, so it has nothing to put in the envelope's
+ * fields, and forcing one on it would be a fiction.
+ */
 export async function callToolOk(
+  registry: ToolRegistry,
+  name: string,
+  args: Record<string, unknown> = {}
+): Promise<Record<string, unknown>> {
+  const payload = await callToolEnvelope(registry, name, args);
+  return isEnveloped(payload) ? (payload.data as Record<string, unknown>) : payload;
+}
+
+/** Call a tool and assert it succeeded, returning the whole envelope. */
+export async function callToolEnvelope(
   registry: ToolRegistry,
   name: string,
   args: Record<string, unknown> = {}
@@ -90,6 +111,11 @@ export async function callToolOk(
     throw new Error(`Tool "${name}" failed: ${JSON.stringify(payload)}`);
   }
   return payload;
+}
+
+/** Distinguish an enveloped response from a bare one, on more than one field. */
+function isEnveloped(payload: Record<string, unknown>): boolean {
+  return 'data' in payload && 'as_of_timestamp' in payload && 'truncated' in payload;
 }
 
 /** Call a tool expecting failure, returning the error payload. */

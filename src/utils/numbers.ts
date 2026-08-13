@@ -60,22 +60,35 @@ export function parseTallyAmount(raw: string | number | null | undefined): strin
   // Drop everything before the first digit outright. This removes a currency
   // prefix whole ("Rs.", "₹", "-Rs. ") rather than leaving its trailing dot
   // behind to be misread as a decimal point.
-  const digitsAndDots = withoutMarker.slice(firstDigit).replace(/[^\d.]/g, '');
+  const body = withoutMarker.slice(firstDigit).replace(/\)$/, '').trim();
 
-  // A prefix such as "Rs." leaves a stray dot, and thousands separators may
-  // be dots in some locales — so the decimal point is the LAST dot, and any
-  // earlier ones are punctuation to discard.
-  const lastDot = digitsAndDots.lastIndexOf('.');
-  let normalised: string;
-  if (lastDot === -1) {
-    normalised = digitsAndDots;
-  } else {
-    const integerPart = digitsAndDots.slice(0, lastDot).replace(/\./g, '');
-    const fractionPart = digitsAndDots.slice(lastDot + 1);
-    normalised = fractionPart === '' ? integerPart : `${integerPart}.${fractionPart}`;
-  }
+  /**
+   * From here the remainder must be a clean number, and anything else is
+   * REFUSED rather than salvaged.
+   *
+   * The previous version deleted every non-digit, then treated the last dot as
+   * the decimal point. That silently fabricated numbers rather than admitting it
+   * could not read them:
+   *
+   *   "1000.00 Kgs."  ->  "100000"   (100x too large)
+   *   "20.00/Kgs."    ->  "2000"     (100x too large)
+   *   "1.2.3"         ->  "12.3"
+   *   "1.234,50"      ->  "1.2345"   (European format, silently mangled)
+   *
+   * Those are exactly the strings Tally puts in stock quantity and rate fields
+   * ("1000.00 Kgs.", "20.00/Kgs." — both observed live), so a caller one field
+   * away from an amount got a plausible figure that was wrong by two orders of
+   * magnitude, with no warning. §6 rule 1: this server does not invent figures,
+   * and a salvaged number is invented. Returning null makes the caller warn.
+   *
+   * Accepted: digits, optional comma grouping in any width (Indian lakh grouping
+   * included), and at most ONE decimal point, whose fraction may be empty
+   * because Tally emits "5000." for a whole number.
+   */
+  if (!/^\d+(,\d+)*(\.\d*)?$/.test(body)) return null;
 
-  if (normalised === '' || !/\d/.test(normalised)) return null;
+  const normalised = body.replace(/,/g, '').replace(/\.$/, '');
+  if (normalised === '') return null;
 
   try {
     const decimal = new Decimal(isNegativeValue ? `-${normalised}` : normalised);
@@ -103,4 +116,3 @@ export function isNegative(money: Money): boolean {
 export function absolute(money: Money): Money {
   return { amount: new Decimal(money.amount).abs().toFixed(), currency: money.currency };
 }
-

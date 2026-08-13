@@ -1,0 +1,151 @@
+<!-- Bank instrument detail for tally_get_bank_reconciliation.
+
+     Shape copied from day-book.xml, whose BANKALLOCATIONS.LIST came from a real
+     export; all values here are invented. Four vouchers, chosen to cover every
+     branch the tool has:
+
+       P-20  cheque WITH a BANKERSDATE      -> reconciled
+       P-21  cheque with BANKERSDATE empty  -> unreconciled (element dropped by
+                                               the parser, which is exactly how
+                                               Tally represents "not done")
+       R-9   e-fund receipt, no bank date   -> unreconciled, and the sign is
+                                               opposite to a payment
+       J-3   journal, no bank allocation    -> contributes no row at all
+
+     Because at least one voucher carries a bank date, the tool can treat the
+     absence of one on the others as meaningful. The all-absent case is covered
+     separately using day-book.xml. -->
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <CMPINFO>
+    <COMPANY>0</COMPANY>
+    <VOUCHER>0</VOUCHER>
+   </CMPINFO>
+  </DESC>
+  <DATA>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Payment" ACTION="Create">
+     <DATE>20260705</DATE>
+     <GUID>bbbb-0001</GUID>
+     <VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>P-20</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <NARRATION>Cheque 100234 issued</NARRATION>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-60000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>HDFC Bank Current A/c</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>60000.00</AMOUNT>
+      <BANKALLOCATIONS.LIST>
+       <DATE>20260705</DATE>
+       <INSTRUMENTDATE>20260705</INSTRUMENTDATE>
+       <INSTRUMENTNUMBER>100234</INSTRUMENTNUMBER>
+       <!-- Populated: this entry has been reconciled against the statement. -->
+       <BANKERSDATE>20260712</BANKERSDATE>
+       <TRANSACTIONTYPE>Cheque</TRANSACTIONTYPE>
+       <PAYMENTFAVOURING>Bramley &amp; Sons Accessories Private Limited</PAYMENTFAVOURING>
+       <CHEQUECROSSCOMMENT>A/c Payee</CHEQUECROSSCOMMENT>
+       <AMOUNT>60000.00</AMOUNT>
+      </BANKALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Payment" ACTION="Create">
+     <DATE>20260720</DATE>
+     <GUID>bbbb-0002</GUID>
+     <VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>P-21</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <NARRATION>Cheque 100235 issued</NARRATION>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-25000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>HDFC Bank Current A/c</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>25000.00</AMOUNT>
+      <BANKALLOCATIONS.LIST>
+       <DATE>20260720</DATE>
+       <INSTRUMENTDATE>20260720</INSTRUMENTDATE>
+       <INSTRUMENTNUMBER>100235</INSTRUMENTNUMBER>
+       <!-- Empty: not yet presented. The parser drops empty elements, so the
+            field is simply absent on the normalised record. -->
+       <BANKERSDATE/>
+       <TRANSACTIONTYPE>Cheque</TRANSACTIONTYPE>
+       <PAYMENTFAVOURING>Bramley &amp; Sons Accessories Private Limited</PAYMENTFAVOURING>
+       <AMOUNT>25000.00</AMOUNT>
+      </BANKALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Receipt" ACTION="Create">
+     <DATE>20260725</DATE>
+     <GUID>bbbb-0003</GUID>
+     <VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>R-9</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Northwind Retail Limited</PARTYLEDGERNAME>
+     <NARRATION>NEFT received</NARRATION>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>HDFC Bank Current A/c</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-40000.00</AMOUNT>
+      <BANKALLOCATIONS.LIST>
+       <DATE>20260725</DATE>
+       <INSTRUMENTDATE>20260725</INSTRUMENTDATE>
+       <BANKERSDATE/>
+       <TRANSACTIONTYPE>e-Fund Transfer</TRANSACTIONTYPE>
+       <TRANSACTIONID>UTR9988776655</TRANSACTIONID>
+       <IFSCODE>HDFC0000123</IFSCODE>
+       <AMOUNT>-40000.00</AMOUNT>
+       <!-- Cash denomination counters. TallyPrime stamps these on every bank
+            instrument whether or not cash is involved; on a live company all
+            2,200 of them were zero and cost 24% of the response. The zeros are
+            dropped, and the ONE non-zero counter here must survive, because on a
+            cash transaction it is real data. -->
+       <DENOMINATIONCOUNT2000X>0</DENOMINATIONCOUNT2000X>
+       <DENOMINATIONCOUNT500X>4</DENOMINATIONCOUNT500X>
+       <DENOMINATIONCOUNT100X>0</DENOMINATIONCOUNT100X>
+      </BANKALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Northwind Retail Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>40000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Journal" ACTION="Create">
+     <DATE>20260728</DATE>
+     <GUID>bbbb-0004</GUID>
+     <VOUCHERTYPENAME>Journal</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>J-3</VOUCHERNUMBER>
+     <NARRATION>Accrual, no bank involved</NARRATION>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Accounting Charges</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-7500.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Aylward Singh_Salary Payable</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>7500.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+  </DATA>
+ </BODY>
+</ENVELOPE>

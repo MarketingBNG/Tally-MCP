@@ -12,17 +12,50 @@
   </DESC>
   <DATA>
    <COLLECTION>
+    <!-- NUMBERINGMETHOD at the top level is a LEGACY field. Verified live
+         2026-08-12: it reads "None" on every voucher type of a real company
+         whose every numbering series is actually Automatic / Auto Retain. The
+         fixtures carry that "None" deliberately, so a normaliser that reads the
+         scalar instead of the nested VOUCHERNUMBERSERIES.LIST fails a test
+         rather than shipping a confident wrong answer. -->
     <VOUCHERTYPE NAME="Payment" RESERVEDNAME="Payment">
      <PARENT TYPE="String">Payment</PARENT>
+     <NUMBERINGMETHOD TYPE="String">None</NUMBERINGMETHOD>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+     <VOUCHERNUMBERSERIES.LIST>
+      <NAME>Default</NAME>
+      <NUMBERINGMETHOD>Automatic</NUMBERINGMETHOD>
+      <NUMBERINGSUBMETHOD>Auto Retain</NUMBERINGSUBMETHOD>
+      <PREVENTDUPLICATES>Yes</PREVENTDUPLICATES>
+     </VOUCHERNUMBERSERIES.LIST>
     </VOUCHERTYPE>
     <VOUCHERTYPE NAME="Sales" RESERVEDNAME="Sales">
      <PARENT TYPE="String">Sales</PARENT>
+     <NUMBERINGMETHOD TYPE="String">None</NUMBERINGMETHOD>
+     <ISDEEMEDPOSITIVE TYPE="Logical">No</ISDEEMEDPOSITIVE>
+     <VOUCHERNUMBERSERIES.LIST>
+      <NAME>Default</NAME>
+      <NUMBERINGMETHOD>Automatic</NUMBERINGMETHOD>
+      <NUMBERINGSUBMETHOD>Auto Retain</NUMBERINGSUBMETHOD>
+      <PREVENTDUPLICATES>No</PREVENTDUPLICATES>
+     </VOUCHERNUMBERSERIES.LIST>
     </VOUCHERTYPE>
     <!-- The discriminating case: a company-specific type whose NAME contains
          neither "sales" nor "purchase", but which derives from Sales. Only
-         Parent identifies it. Name matching would silently miss it. -->
+         Parent identifies it. Name matching would silently miss it.
+
+         Manually numbered, unlike the built-ins above — which is why the
+         numbering series is worth reporting: a repeated voucher number means
+         something different here than on an auto-numbered type. -->
     <VOUCHERTYPE NAME="Tax Invoice" RESERVEDNAME="">
      <PARENT TYPE="String">Sales</PARENT>
+     <NUMBERINGMETHOD TYPE="String">None</NUMBERINGMETHOD>
+     <ISDEEMEDPOSITIVE TYPE="Logical">No</ISDEEMEDPOSITIVE>
+     <VOUCHERNUMBERSERIES.LIST>
+      <NAME>Default</NAME>
+      <NUMBERINGMETHOD>Manual</NUMBERINGMETHOD>
+      <PREVENTDUPLICATES>No</PREVENTDUPLICATES>
+     </VOUCHERNUMBERSERIES.LIST>
     </VOUCHERTYPE>
     <VOUCHERTYPE NAME="Purchase" RESERVEDNAME="Purchase">
      <PARENT TYPE="String">Purchase</PARENT>

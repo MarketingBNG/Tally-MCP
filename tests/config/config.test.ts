@@ -72,6 +72,33 @@ describe('loadConfig', () => {
     expect(() => loadConfig(env({ TALLY_PREFERRED_FORMAT: 'yaml' }))).toThrow(ConfigError);
   });
 
+  /**
+   * The default is set by the CONTEXT budget, not the transport one. It used to
+   * be 900,000 — headroom under a client's 1MB message cap — which let a single
+   * legal response run to roughly 225,000 tokens and dominate the conversation it
+   * belonged to. A real audit page cost about 54,000 tokens before this changed.
+   */
+  it('defaults the response ceiling to a context-sized budget, well under the 1MB transport cap', () => {
+    expect(loadConfig(env()).tallyMaxResponseBytes).toBe(150_000);
+    expect(loadConfig(env()).tallyMaxResponseBytes).toBeLessThan(1_048_576);
+  });
+
+  it('still allows the ceiling to be raised for a deliberate deep dive', () => {
+    expect(loadConfig(env({ TALLY_MAX_RESPONSE_BYTES: '900000' })).tallyMaxResponseBytes).toBe(
+      900_000
+    );
+  });
+
+  it('honours an explicit response ceiling', () => {
+    expect(loadConfig(env({ TALLY_MAX_RESPONSE_BYTES: '250000' })).tallyMaxResponseBytes).toBe(
+      250_000
+    );
+  });
+
+  it('rejects a response ceiling too small to hold any useful page', () => {
+    expect(() => loadConfig(env({ TALLY_MAX_RESPONSE_BYTES: '500' }))).toThrow(ConfigError);
+  });
+
   it('rejects an empty host rather than building a malformed URL', () => {
     expect(() => loadConfig(env({ TALLY_HOST: '' }))).toThrow(ConfigError);
   });

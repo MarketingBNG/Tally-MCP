@@ -125,9 +125,7 @@ export function buildCollectionRequest(
   const methods =
     nativeMethods === '*'
       ? '<FETCH>*</FETCH>'
-      : nativeMethods
-          .map((method) => `<NATIVEMETHOD>${escapeXml(method)}</NATIVEMETHOD>`)
-          .join('');
+      : nativeMethods.map((method) => `<NATIVEMETHOD>${escapeXml(method)}</NATIVEMETHOD>`).join('');
 
   return [
     '<ENVELOPE>',
@@ -166,12 +164,25 @@ export function buildConnectionProbeRequest(): string {
   );
 }
 
-/** Company list, including basic period metadata. */
+/**
+ * Company list, including basic period metadata and the base currency.
+ *
+ * `CurrencyName` is what stops every figure being mislabelled. Tally reports it
+ * as a SYMBOL rather than an ISO code — verified live 2026-08-13, a US company
+ * returned `<CURRENCYNAME>$</CURRENCYNAME>` and
+ * `<COUNTRYNAME>United States of America</COUNTRYNAME>`. Without it the server
+ * fell back to a hard-coded INR and labelled dollar balances as rupees.
+ *
+ * `BaseCurrencySymbol` and `BaseCurrencyFormalName` were probed at the same time
+ * and are NOT supported on this collection: Tally silently omitted them rather
+ * than erroring, which is worth knowing — an unsupported native method here fails
+ * open, so a missing field means "not served", never "not set".
+ */
 export function buildCompanyListRequest(options: TallyRequestOptions = {}): string {
   return buildCollectionRequest(
     'List of Companies',
     'Company',
-    ['Name', 'StartingFrom', 'EndingAt', 'CompanyNumber', 'GUID'],
+    ['Name', 'StartingFrom', 'EndingAt', 'CompanyNumber', 'GUID', 'CurrencyName', 'CountryName'],
     options
   );
 }
@@ -211,6 +222,21 @@ export function buildLedgerListRequest(
 }
 
 /**
+ * Ledger groups — the chart of accounts hierarchy itself, as distinct from
+ * the ledgers filed under it. `Parent` is the group this one nests under
+ * (empty for a primary group), and `IsRevenue`/`IsDeemedPositive` classify it
+ * as P&L vs balance sheet and debit vs credit respectively.
+ */
+export function buildGroupListRequest(options: TallyRequestOptions = {}): string {
+  return buildCollectionRequest(
+    'Groups',
+    'Group',
+    ['Name', 'Parent', 'IsRevenue', 'IsDeemedPositive', 'IsSubLedger'],
+    options
+  );
+}
+
+/**
  * Voucher types defined in the company, with the base type each derives from.
  *
  * Needed because voucher type NAMES are company-specific: a company can define
@@ -220,12 +246,54 @@ export function buildLedgerListRequest(
  * be resolved from Tally rather than guessed.
  *
  * Verified against a live install.
+ *
+ * `allFields` is required to see the numbering setup, and the reason is a trap
+ * worth knowing. The curated form CANNOT return it: the top-level
+ * `NUMBERINGMETHOD` element on a voucher type reads `None` on every type — it is
+ * a legacy field — while the real method lives in the nested
+ * `VOUCHERNUMBERSERIES.LIST`, one entry per numbering series. Verified live
+ * 2026-08-12 on a company where all 26 types reported top-level `None` and every
+ * series was actually `Automatic` / `Auto Retain`, with a real invoice prefix.
+ * Reading the scalar therefore produces a confident answer that is wrong, which
+ * is why `numberingSeries` is normalised from the nested list instead and the
+ * scalar is not reported at all.
+ *
+ * The whole collection with every field measured 142 KB for 26 types, so unlike
+ * ledgers there is no meaningful cost to paying for it. The curated form is kept
+ * because voucher-family resolution needs only name and parent, and it runs on
+ * every family query.
  */
-export function buildVoucherTypeListRequest(options: TallyRequestOptions = {}): string {
+export function buildVoucherTypeListRequest(
+  options: TallyRequestOptions = {},
+  allFields = false
+): string {
   return buildCollectionRequest(
     'VoucherTypes',
     'VoucherType',
-    ['Name', 'Parent', 'NumberingMethod', 'IsDeemedPositive'],
+    allFields ? '*' : ['Name', 'Parent', 'IsDeemedPositive'],
+    options
+  );
+}
+
+/**
+ * The currencies this company defines.
+ *
+ * Cheap (1.7KB on a real company) and it answers one question that matters: is this
+ * company multi-currency? Tally does not report a per-voucher currency on
+ * single-currency books — probed live 2026-08-13, no CURRENCYNAME or FOREX field
+ * appears on any voucher or entry — so this server cannot tell a foreign-currency
+ * transaction from a base-currency one. Where more than one currency is DEFINED, that
+ * gap is disclosed rather than left silent.
+ *
+ * `IsBaseCurrency` is requested but not served — Tally silently omits it, the same
+ * fail-open behaviour as `BaseCurrencySymbol` on the company collection. The base
+ * currency therefore comes from the company's own `CurrencyName`, not from here.
+ */
+export function buildCurrencyListRequest(options: TallyRequestOptions = {}): string {
+  return buildCollectionRequest(
+    'Currencies',
+    'Currency',
+    ['Name', 'MailingName', 'IsBaseCurrency', 'DecimalPlaces'],
     options
   );
 }
@@ -266,16 +334,113 @@ export function buildStockItemListRequest(
 }
 
 /**
- * Vouchers for a date range. This is the reliable date-scoped voucher path.
+ * Vouchers WITH their ledger and inventory entries.
  *
- * `EXPLODEFLAG` is deliberately NOT set. Exploding a voucher adds roughly
- * 50 KB of empty scaffolding apiece — around 200 blank date and tax elements
- * plus legacy cash-denomination counters — none of which this server reads.
- * A single month came back at 1.55 MB with it on. Callers needing inventory
- * detail will need a separate, explicitly-opted-in path.
+ * A collection over `Voucher`, not the `Voucher Register` report, and the
+ * difference is not a preference — the report cannot answer an accounting
+ * question at all. Verified live 2026-08-13 against TallyPrime on a company
+ * with 453 vouchers: the report returns 28 KB of field scaffolding per voucher
+ * (246 distinct tags, almost all empty) and **zero** ledger entries. No
+ * `ALLLEDGERENTRIES.LIST`, no `LEDGERNAME`, no `AMOUNT`. `EXPLODEFLAG` does
+ * not change that. Every voucher therefore parsed with `entries: []`, which
+ * silently zeroed every movement-based figure this server produces — the
+ * tie-out control reported 34 exceptions and 0 vouchers checked against books
+ * that actually balance.
+ *
+ * The entry lists MUST be named explicitly in `FETCH`. `<FETCH>*</FETCH>` is
+ * the trap: it returns 10.9 MB of every scalar Tally holds and still omits the
+ * entries, so it looks like the most complete request available while being
+ * exactly as useless as the report. Verified on the same company — `*` gave 0
+ * entries, the explicit list gave 907 ledger entries and 466 inventory entries.
+ *
+ * DATES ARE NOT SCOPED HERE, and that is Tally's behaviour, not an omission.
+ * A collection ignores SVFROMDATE/SVTODATE: asked for April 2025 alone (13
+ * vouchers) it returned all 453 spanning the full year. So the whole book comes
+ * back and callers filter by date themselves. `staticVariables` still emits the
+ * dates — they cost nothing and a future Tally build may honour them — but
+ * nothing may rely on them having been applied.
  */
-export function buildVoucherRegisterRequest(options: TallyRequestOptions): string {
-  return buildReportRequest('Voucher Register', options);
+export function buildVoucherCollectionRequest(
+  options: TallyRequestOptions = {},
+  allFields = false
+): string {
+  // Order matters for `allFields`: `*` first, then the entry lists, because the
+  // wildcard does not imply them and naming them after it is what brings them back.
+  const fields = allFields
+    ? ['*', 'AllLedgerEntries', 'AllInventoryEntries']
+    : [
+        'Date',
+        'GUID',
+        'VoucherTypeName',
+        'VoucherNumber',
+        'PartyLedgerName',
+        'Narration',
+        'IsCancelled',
+        'IsOptional',
+        'AllLedgerEntries',
+        'AllInventoryEntries',
+      ];
+
+  return [
+    '<ENVELOPE>',
+    '<HEADER>',
+    '<VERSION>1</VERSION>',
+    `<TALLYREQUEST>${EXPORT_ONLY}</TALLYREQUEST>`,
+    '<TYPE>Collection</TYPE>',
+    '<ID>AllVouchers</ID>',
+    '</HEADER>',
+    '<BODY><DESC>',
+    staticVariables(options),
+    '<TDL><TDLMESSAGE>',
+    '<COLLECTION NAME="AllVouchers" ISMODIFY="No" ISFIXED="No">',
+    '<TYPE>Voucher</TYPE>',
+    `<FETCH>${escapeXml(fields.join(','))}</FETCH>`,
+    '</COLLECTION>',
+    '</TDLMESSAGE></TDL>',
+    '</DESC></BODY>',
+    '</ENVELOPE>',
+  ].join('');
+}
+
+/**
+ * Every voucher's `AlterId`, and nothing else — a candidate cache-validation probe.
+ *
+ * NOT USED BY ANY TOOL YET, and deliberately so. The idea is that if the maximum
+ * `AlterId` has not moved, the books have not changed and a cached parse is still
+ * valid — turning a 2.6s / 8.6MB refetch into a ~200ms / 537KB check. Measured live
+ * 2026-08-13: 537.6KB in 199-260ms against 8.6MB in ~2,000ms, so roughly 16x smaller
+ * and 10x faster.
+ *
+ * It is not wired in because the saving is worthless if the assumption is wrong. If
+ * `AlterId` fails to move on any kind of edit — a DELETION being the likely one — a
+ * validated cache would serve stale figures and report them as current, which is
+ * strictly worse than the honest five-minute expiry in place today. Proving it needs
+ * someone to alter, add and delete a voucher in a real company, so it lives in
+ * `scripts/probe-alterid.mjs` until that is done.
+ *
+ * The shape is defined here rather than in the script so that the Export-only
+ * guarantee this file carries covers it too.
+ */
+export function buildVoucherAlterIdRequest(options: TallyRequestOptions = {}): string {
+  return [
+    '<ENVELOPE>',
+    '<HEADER>',
+    '<VERSION>1</VERSION>',
+    `<TALLYREQUEST>${EXPORT_ONLY}</TALLYREQUEST>`,
+    '<TYPE>Collection</TYPE>',
+    '<ID>VoucherAlterIds</ID>',
+    '</HEADER>',
+    '<BODY><DESC>',
+    staticVariables(options),
+    '<TDL><TDLMESSAGE>',
+    '<COLLECTION NAME="VoucherAlterIds" ISMODIFY="No" ISFIXED="No">',
+    '<TYPE>Voucher</TYPE>',
+    '<FETCH>AlterId,MasterId</FETCH>',
+    '</COLLECTION>',
+    '</TDLMESSAGE></TDL>',
+    '</DESC></BODY>',
+    '</ENVELOPE>',
+  ].join('');
 }
 
 /** Trial balance for a date range. */
@@ -291,4 +456,29 @@ export function buildBalanceSheetRequest(options: TallyRequestOptions): string {
 /** Profit and loss for the range. */
 export function buildProfitLossRequest(options: TallyRequestOptions): string {
   return buildReportRequest('Profit and Loss', options);
+}
+
+/**
+ * Monthly cash movement — Tally's own "Cash Flow" report.
+ *
+ * Verified against a live install (2026-08-12): returns alternating
+ * DSPPERIOD/DSPACCINFO siblings, one pair per month, each carrying debit,
+ * credit and net columns where net = debit + credit. This is monthly
+ * movement, NOT a classified cash flow statement — Tally supplies no
+ * operating/investing/financing split.
+ */
+export function buildCashFlowRequest(options: TallyRequestOptions): string {
+  return buildReportRequest('Cash Flow', options);
+}
+
+/**
+ * Monthly funds movement — Tally's own "Funds Flow" report.
+ *
+ * Same wire shape as the cash flow report but different column semantics,
+ * verified live: each month's debit equals the previous month's credit, and
+ * net = credit − debit — Tally is reporting opening funds, closing funds and
+ * the change per month.
+ */
+export function buildFundsFlowRequest(options: TallyRequestOptions): string {
+  return buildReportRequest('Funds Flow', options);
 }

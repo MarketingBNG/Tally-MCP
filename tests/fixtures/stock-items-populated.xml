@@ -1,0 +1,52 @@
+<!-- Shape verified live against a company that actually holds stock (2026-08-12).
+     Values below are taken from that live response. -->
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <CMPINFO>
+    <COMPANY>0</COMPANY>
+    <STOCKITEM>0</STOCKITEM>
+   </CMPINFO>
+  </DESC>
+  <DATA>
+   <COLLECTION>
+    <STOCKITEM NAME="Acetyle-L-Carnitine HCL" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <CATEGORY TYPE="String">Not Applicable</CATEGORY>
+     <BASEUNITS TYPE="String">Kgs.</BASEUNITS>
+     <CLOSINGBALANCE TYPE="Quantity">1000.00 Kgs.</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Quantity">1100.00 Kgs.</OPENINGBALANCE>
+     <OPENINGVALUE TYPE="Amount">-22000.00</OPENINGVALUE>
+     <CLOSINGVALUE TYPE="Amount">-20000.00</CLOSINGVALUE>
+     <CLOSINGRATE TYPE="Rate">20.00/Kgs.</CLOSINGRATE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>Acetyle-L-Carnitine HCL</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </STOCKITEM>
+    <STOCKITEM NAME="L-Carnitine Base" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <CATEGORY TYPE="String">Not Applicable</CATEGORY>
+     <BASEUNITS TYPE="String">Kgs.</BASEUNITS>
+     <CLOSINGBALANCE TYPE="Quantity">9425.00 Kgs.</CLOSINGBALANCE>
+     <OPENINGBALANCE TYPE="Quantity">10325.00 Kgs.</OPENINGBALANCE>
+     <OPENINGVALUE TYPE="Amount">-196598.53</OPENINGVALUE>
+     <CLOSINGVALUE TYPE="Amount">-179461.52</CLOSINGVALUE>
+     <CLOSINGRATE TYPE="Rate">19.04/Kgs.</CLOSINGRATE>
+     <LANGUAGENAME.LIST>
+      <NAME.LIST TYPE="String">
+       <NAME>L-Carnitine Base</NAME>
+      </NAME.LIST>
+      <LANGUAGEID TYPE="Number"> 1033</LANGUAGEID>
+     </LANGUAGENAME.LIST>
+    </STOCKITEM>
+   </COLLECTION>
+  </DATA>
+ </BODY>
+</ENVELOPE>

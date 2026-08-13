@@ -1,0 +1,45 @@
+<!--
+  Ledger masters matching stock-divergence-trial-balance.xml.
+
+  "Stock In Hand" moves from -100000 to -175000 in the period, which is the
+  movement the trial balance leaves out. "City Bank" agrees on both bases, so
+  the difference reported can only come from the stock account.
+
+  "Owner Capital" sits under a DIFFERENT top-level group and agrees exactly, so
+  a test can assert no warning is raised for it.
+
+  All values are invented. See tests/fixtures/README.md.
+-->
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <CMPINFO>
+    <COMPANY>0</COMPANY>
+    <LEDGER>0</LEDGER>
+   </CMPINFO>
+  </DESC>
+  <DATA>
+   <COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="8">
+    <LEDGER NAME="Stock In Hand" RESERVEDNAME="">
+     <PARENT TYPE="String">Stock-in-Hand</PARENT>
+     <OPENINGBALANCE TYPE="Amount">-100000.00</OPENINGBALANCE>
+     <CLOSINGBALANCE TYPE="Amount">-175000.00</CLOSINGBALANCE>
+    </LEDGER>
+    <LEDGER NAME="City Bank" RESERVEDNAME="">
+     <PARENT TYPE="String">Bank Accounts</PARENT>
+     <OPENINGBALANCE TYPE="Amount">-5000.00</OPENINGBALANCE>
+     <CLOSINGBALANCE TYPE="Amount">-25000.00</CLOSINGBALANCE>
+    </LEDGER>
+    <LEDGER NAME="Owner Capital" RESERVEDNAME="">
+     <PARENT TYPE="String">Capital Account</PARENT>
+     <OPENINGBALANCE TYPE="Amount">-1000.00</OPENINGBALANCE>
+     <CLOSINGBALANCE TYPE="Amount">-1000.00</CLOSINGBALANCE>
+    </LEDGER>
+   </COLLECTION>
+  </DATA>
+ </BODY>
+</ENVELOPE>

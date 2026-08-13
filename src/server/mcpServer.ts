@@ -6,19 +6,26 @@ import { registerConnectionTools } from '../tools/connection.js';
 import { checkConnection } from '../tools/connection.js';
 import { registerCompanyTools } from '../tools/companies.js';
 import { registerLedgerTools } from '../tools/ledgers.js';
+import { registerGroupTools } from '../tools/groups.js';
 import { registerLedgerTransactionTools } from '../tools/ledgerTransactions.js';
 import { registerReportTools } from '../tools/reports.js';
 import { registerVoucherTools } from '../tools/vouchers.js';
-import { registerTradingTools } from '../tools/trading.js';
+import { registerVoucherTypeTools } from '../tools/voucherTypes.js';
+import { registerBankReconciliationTools } from '../tools/bankReconciliation.js';
 import { registerInventoryTools } from '../tools/inventory.js';
 import { registerOutstandingTools } from '../tools/outstanding.js';
 import { registerGstTools } from '../tools/gst.js';
-import { registerFlowReportTools } from '../tools/flowReports.js';
 import { registerSearchTools } from '../tools/search.js';
+import { registerPartyStatementTools } from '../tools/partyStatement.js';
+import { registerTieOutTools } from '../tools/tieOut.js';
+import { registerMaterialityTools } from '../tools/materiality.js';
+import { registerSummaryTools } from '../tools/summarise.js';
 import { registerPrompts } from './prompts.js';
+import { serializeToolPayload } from '../tools/toolResult.js';
 import { buildCompanyListRequest } from '../tally/requests.js';
 import { normalizeCompanies } from '../tally/normalize.js';
 import { TallyError } from '../tally/TallyError.js';
+import { SERVER_VERSION } from '../version.js';
 
 /**
  * MCP server assembly.
@@ -40,7 +47,7 @@ export function createMcpServer(deps: ServerDeps): McpServer {
 
   const server = new McpServer({
     name: 'tally-mcp',
-    version: '0.1.0',
+    version: SERVER_VERSION,
   });
 
   // One client, so every tool shares the single request queue.
@@ -49,15 +56,20 @@ export function createMcpServer(deps: ServerDeps): McpServer {
   registerConnectionTools(server, toolDeps);
   registerCompanyTools(server, toolDeps);
   registerLedgerTools(server, toolDeps);
+  registerGroupTools(server, toolDeps);
   registerLedgerTransactionTools(server, toolDeps);
   registerReportTools(server, toolDeps);
   registerVoucherTools(server, toolDeps);
-  registerTradingTools(server, toolDeps);
+  registerSummaryTools(server, toolDeps);
+  registerVoucherTypeTools(server, toolDeps);
+  registerBankReconciliationTools(server, toolDeps);
   registerInventoryTools(server, toolDeps);
   registerOutstandingTools(server, toolDeps);
   registerGstTools(server, toolDeps);
-  registerFlowReportTools(server, toolDeps);
   registerSearchTools(server, toolDeps);
+  registerPartyStatementTools(server, toolDeps);
+  registerTieOutTools(server, toolDeps);
+  registerMaterialityTools(server, toolDeps);
 
   registerResources(server, toolDeps);
   registerPrompts(server);
@@ -98,7 +110,7 @@ function registerResources(
           {
             uri: uri.href,
             mimeType: 'application/json',
-            text: JSON.stringify(status, null, 2),
+            text: serializeToolPayload(status),
           },
         ],
       };
@@ -136,7 +148,7 @@ function registerResources(
 
       return {
         contents: [
-          { uri: uri.href, mimeType: 'application/json', text: JSON.stringify(body, null, 2) },
+          { uri: uri.href, mimeType: 'application/json', text: serializeToolPayload(body) },
         ],
       };
     }

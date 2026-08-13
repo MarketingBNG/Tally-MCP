@@ -134,10 +134,60 @@ export function attributesOf(node: TallyNode): Record<string, string> {
 export function textOf(node: TallyNode): string | null {
   for (const child of childrenOf(node)) {
     const text = child[TEXT_KEY];
-    if (typeof text === 'string') return text;
+    if (typeof text === 'string') return decodeNumericRefs(text);
     if (typeof text === 'number') return String(text);
   }
   return null;
+}
+
+/**
+ * Turn numeric character references into the characters they denote.
+ *
+ * fast-xml-parser decodes NAMED entities (`&amp;`, `&quot;`) but leaves NUMERIC
+ * ones alone, and Tally emits numeric ones heavily. Verified live 2026-08-13: a
+ * real bank narration came back as
+ *
+ *   "...24906415108227233530943&#13;&#10;RECURRING CKCD 5968..."
+ *
+ * so the accountant read six literal escape characters where the statement has a
+ * line break. Worse, `matchesText` could not match a phrase spanning the break,
+ * so a narration search silently missed vouchers that do contain the phrase.
+ *
+ * This runs AFTER `sanitizeTallyXml`, which has already removed references to
+ * characters XML forbids (603 of them on one real company). Anything left should
+ * be legal, but the guard is kept: a reference to a control character is dropped
+ * rather than decoded, because putting a raw 0x04 into a ledger name would just
+ * move the corruption downstream.
+ *
+ * Known limitation, accepted: a literal `&#13;` that Tally escaped as `&amp;#13;`
+ * arrives here already decoded to `&#13;` and is turned into a carriage return.
+ * That requires an accountant to have typed the escape sequence itself into a
+ * narration, and reading it as a newline is a far smaller error than showing
+ * every real line break as `&#13;&#10;`.
+ */
+function decodeNumericRefs(text: string): string {
+  if (!text.includes('&#')) return text;
+
+  return text.replace(/&#(x[0-9a-f]+|\d+);/gi, (match, digits: string) => {
+    const code =
+      digits[0] === 'x' || digits[0] === 'X'
+        ? Number.parseInt(digits.slice(1), 16)
+        : Number.parseInt(digits, 10);
+
+    if (!Number.isFinite(code)) return match;
+
+    // Tab, newline and carriage return are the only control characters XML
+    // permits; the rest are dropped, matching what the sanitiser does upstream.
+    const isLegal =
+      code === 0x09 ||
+      code === 0x0a ||
+      code === 0x0d ||
+      (code >= 0x20 && code <= 0xd7ff) ||
+      (code >= 0xe000 && code <= 0xfffd) ||
+      (code >= 0x10000 && code <= 0x10ffff);
+
+    return isLegal ? String.fromCodePoint(code) : '';
+  });
 }
 
 /** Every direct child carrying the given tag name. */
@@ -283,8 +333,7 @@ export function nestedRecordsOf(
     // Empty scaffolding: no value at any depth. Dropping it is the whole point.
     if (Object.keys(fields).length === 0 && Object.keys(nested).length === 0) continue;
 
-    const record: NestedRecord =
-      Object.keys(nested).length === 0 ? { fields } : { fields, nested };
+    const record: NestedRecord = Object.keys(nested).length === 0 ? { fields } : { fields, nested };
 
     (grouped[tag] ??= []).push(record);
   }
@@ -358,10 +407,12 @@ export function pairReportRows(
  * The trial balance and P&L put it directly in `DSPACCNAME > DSPDISPNAME`,
  * while the balance sheet wraps the same structure one level deeper inside
  * `BSNAME`. A descendant search covers both without special-casing either.
+ * The flow reports' `DSPPERIOD` carries the name as its own text with no
+ * `DSPDISPNAME` wrapper at all, hence the fallback.
  */
 export function displayNameOf(nameNode: TallyNode): string | null {
   const display = findFirst([nameNode], 'DSPDISPNAME');
-  return display === null ? null : textOf(display);
+  return display === null ? textOf(nameNode) : textOf(display);
 }
 
 /**

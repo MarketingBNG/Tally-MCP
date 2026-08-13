@@ -1,25 +1,18 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
 import {
-  buildLedgerListRequest,
-  buildStockItemListRequest,
-  buildVoucherRegisterRequest,
-} from '../tally/requests.js';
-import { normalizeLedgers, normalizeStockItems, normalizeVouchers } from '../tally/normalize.js';
-import {
   companySchema,
   dateRangeSchema,
+  PERIOD_NOTE,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
 } from '../schemas/common.js';
-import { resolvePagination } from '../utils/pagination.js';
-import {
-  assertCompanyIsLoaded,
-  resolvePeriod,
-  runTool,
-  type ToolDeps,
-} from './toolResult.js';
+import { resolvePeriod, runTool, type ToolDeps } from './toolResult.js';
 import { voucherMatchesAnyField } from './voucherFilters.js';
+import { matchesText } from '../utils/text.js';
+import { fetchLedgers } from './ledgers.js';
+import { fetchStockItems } from './inventory.js';
+import { fetchVouchers } from './vouchers.js';
 
 /**
  * Cross-entity search.
@@ -51,18 +44,20 @@ const DESCRIPTION = [
     'proper filters.',
   '',
   'RETURNS: matches grouped by entity type (ledgers, vouchers, stockItems), each with a small ' +
-    'identifying summary rather than the full record. Follow up with tally_get_ledger, ' +
-    'tally_get_voucher or tally_get_stock_item for detail.',
+    'identifying summary rather than the full record. Follow up with tally_get_ledgers, ' +
+    'tally_get_vouchers or tally_get_stock_items (by name) for detail.',
   '',
   'SCOPE AND LIMITS — read these, they affect whether an empty result means anything:',
-  '  - Vouchers are searched WITHIN A DATE RANGE ONLY, defaulting to the financial year ' +
-    'containing today. A voucher outside that range will not be found however well it matches. ' +
-    'Widen fromDate/toDate to search further back.',
+  '  - Vouchers are searched WITHIN THE DATE RANGE ONLY. A voucher outside it will not be found ' +
+    'however well it matches; widen fromDate/toDate to search further back.',
   '  - Ledgers and stock items are masters and are searched in full, ignoring the date range.',
   '  - Each type is capped (default 20 matches). "truncated" in the response tells you a cap was ' +
     'hit and the result is incomplete.',
   '  - Voucher matching covers number, party, narration, entry ledger names and every field ' +
-    'value including nested structures.',
+    'value including nested structures. Each field is matched on its own, so a term cannot match ' +
+    'by spanning two unrelated fields.',
+  '',
+  PERIOD_NOTE,
   '',
   UNTRUSTED_CONTENT_NOTICE,
   '',
@@ -95,34 +90,25 @@ export function registerSearchTools(server: McpServer, deps: ToolDeps): void {
       }),
     },
     async (args) =>
-      runTool('tally_search', deps.logger, async () => {
-        // Validates page/pageSize semantics are not silently accepted here.
-        resolvePagination(1, 1);
-
+      runTool('tally_search', deps, async () => {
         const period = resolvePeriod(args.fromDate, args.toDate);
-        await assertCompanyIsLoaded(deps, args.company);
 
-        const companyOption = args.company === undefined ? {} : { company: args.company };
         const types = new Set(args.entityTypes ?? ['ledger', 'voucher', 'stockItem']);
         const limit = args.limit ?? DEFAULT_LIMIT;
-        const needle = args.query.toLowerCase();
         const warnings: string[] = [];
 
-        const results: Record<string, unknown> = {};
+        // Typed rather than `unknown`, so the envelope's row count and
+        // truncation flag can be derived from the same capped lists the
+        // caller sees rather than recomputed alongside them.
+        const results: Record<string, { total: number; truncated: boolean; matches: unknown[] }> =
+          {};
 
         if (types.has('ledger')) {
-          const response = await deps.client.send(
-            buildLedgerListRequest({ ...companyOption, format: deps.config.tallyPreferredFormat }),
-            'standard'
-          );
-          const { data, warnings: w } = normalizeLedgers(response.body);
-          warnings.push(...response.repairs, ...w);
+          const { ledgers: data, warnings: w } = await fetchLedgers(deps, args.company);
+          warnings.push(...w);
 
-          const matches = data.filter(
-            (ledger) =>
-              ledger.name.toLowerCase().includes(needle) ||
-              (ledger.parent ?? '').toLowerCase().includes(needle) ||
-              (ledger.gstin ?? '').toLowerCase().includes(needle)
+          const matches = data.filter((ledger) =>
+            matchesText(args.query, ledger.name, ledger.parent, ledger.gstin)
           );
 
           results.ledgers = summarise(matches, limit, (ledger) => ({
@@ -134,32 +120,28 @@ export function registerSearchTools(server: McpServer, deps: ToolDeps): void {
         }
 
         if (types.has('voucher')) {
-          const response = await deps.client.send(
-            buildVoucherRegisterRequest({
-              ...companyOption,
-              fromDate: period.fromDate,
-              toDate: period.toDate,
-              format: deps.config.tallyPreferredFormat,
-            }),
-            'report'
-          );
           // Full fields so the search covers nested references too.
-          const { data, warnings: w } = normalizeVouchers(response.body, true);
-          warnings.push(...response.repairs, ...w);
+          const { vouchers: data, warnings: w } = await fetchVouchers(
+            deps,
+            args.company,
+            period,
+            true
+          );
+          warnings.push(...w);
 
-          const matches = data.filter((voucher) => {
-            const haystack = [
-              voucher.voucherNumber,
-              voucher.partyLedgerName,
-              voucher.narration,
-              ...voucher.entries.map((entry) => entry.ledgerName),
-            ]
-              .filter((value): value is string => value !== null)
-              .join(' ')
-              .toLowerCase();
-
-            return haystack.includes(needle) || voucherMatchesAnyField(voucher, args.query);
-          });
+          // Matched field by field rather than against one joined string, so a
+          // term cannot match by straddling the boundary between two unrelated
+          // fields — a false positive that would look like a real hit.
+          const matches = data.filter(
+            (voucher) =>
+              matchesText(
+                args.query,
+                voucher.voucherNumber,
+                voucher.partyLedgerName,
+                voucher.narration,
+                ...voucher.entries.map((entry) => entry.ledgerName)
+              ) || voucherMatchesAnyField(voucher, args.query)
+          );
 
           results.vouchers = summarise(matches, limit, (voucher) => ({
             date: voucher.date,
@@ -172,21 +154,10 @@ export function registerSearchTools(server: McpServer, deps: ToolDeps): void {
         }
 
         if (types.has('stockItem')) {
-          const response = await deps.client.send(
-            buildStockItemListRequest({
-              ...companyOption,
-              format: deps.config.tallyPreferredFormat,
-            }),
-            'standard'
-          );
-          const { data, warnings: w } = normalizeStockItems(response.body);
-          warnings.push(...response.repairs, ...w);
+          const { items: data, warnings: w } = await fetchStockItems(deps, args.company, false);
+          warnings.push(...w);
 
-          const matches = data.filter(
-            (item) =>
-              item.name.toLowerCase().includes(needle) ||
-              (item.parent ?? '').toLowerCase().includes(needle)
-          );
+          const matches = data.filter((item) => matchesText(args.query, item.name, item.parent));
 
           results.stockItems = summarise(matches, limit, (item) => ({
             name: item.name,
@@ -195,12 +166,22 @@ export function registerSearchTools(server: McpServer, deps: ToolDeps): void {
           }));
         }
 
+        // Truncation is per entity type here, and the envelope carries one
+        // flag — so ANY capped list makes the whole answer partial. Reporting
+        // false because two of three lists were complete would be exactly the
+        // silent-truncation failure §6 rule 4 exists to prevent.
+        const summaries = Object.values(results);
+
         return {
-          query: args.query,
-          /** Vouchers only — masters are not date-scoped. */
-          voucherPeriodSearched: period,
-          ...results,
-          ...(warnings.length > 0 ? { warnings } : {}),
+          data: {
+            query: args.query,
+            /** Vouchers only — masters are not date-scoped. */
+            voucherPeriodSearched: period,
+            ...results,
+            ...(warnings.length > 0 ? { warnings } : {}),
+          },
+          rows: summaries.reduce((count, summary) => count + summary.matches.length, 0),
+          truncated: summaries.some((summary) => summary.truncated),
         };
       })
   );

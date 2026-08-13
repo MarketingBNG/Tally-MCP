@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
+import { DEFAULT_CURRENCY } from '../utils/numbers.js';
 import {
   buildCompanyListRequest,
   buildLedgerListRequest,
@@ -13,7 +14,7 @@ import {
 } from '../tally/normalize.js';
 import { TallyError } from '../tally/TallyError.js';
 import { companySchema, READ_ONLY_NOTICE, UNTRUSTED_CONTENT_NOTICE } from '../schemas/common.js';
-import { assertCompanyIsLoaded, runTool, type ToolDeps } from './toolResult.js';
+import { runTool, whole, type ToolDeps } from './toolResult.js';
 
 /**
  * Company listing.
@@ -43,8 +44,9 @@ const DESCRIPTION = [
 ].join('\n');
 
 const GET_DESCRIPTION = [
-  'Describe the loaded company: its details, the size of its chart of accounts, and — ' +
-    'importantly — which data fields it actually uses.',
+  'Describe the loaded company: its details, the size of its chart of accounts, which data ' +
+    'fields it actually uses, and — with includeFeatures — which TallyPrime features it has ' +
+    'switched on.',
   '',
   'WHEN TO USE: as the FIRST call when asked to audit, review or explore a company you have ' +
     'not looked at yet in this conversation. Different companies in TallyPrime enable different ' +
@@ -59,32 +61,19 @@ const GET_DESCRIPTION = [
     'defaults rather than anything this company recorded; treat them as noise unless the value ' +
     'itself is what you need.',
   '',
+  'FEATURES (with includeFeatures: true): which TallyPrime features this company has switched ' +
+    'on, inferred from the data it actually holds — whether it keeps inventory, records GST, ' +
+    'uses bill-wise tracking or cost centres. TallyPrime does not expose its feature switches ' +
+    '(the F11 settings) over this interface, so each flag is inferred from evidence in the data ' +
+    'and comes with that evidence attached. Read a flag as "the data shows this" rather than ' +
+    '"the setting is on": a company could have a feature enabled but not yet used it, which ' +
+    'reads here as absent. Adds one extra request (the stock item list) beyond the base call.',
+  '',
   'COST: this reads every field of every ledger and is the most expensive call in the server — ' +
     'several megabytes on a mid-sized company. Call it once to orient yourself, then use the ' +
     'narrower tools.',
   '',
   'DOES NOT RETURN: transactions, or any interpretation of what the fields mean.',
-  '',
-  UNTRUSTED_CONTENT_NOTICE,
-  '',
-  READ_ONLY_NOTICE,
-].join('\n');
-
-const FEATURES_DESCRIPTION = [
-  'Report which TallyPrime features this company has switched on, inferred from the data it ' +
-    'actually holds.',
-  '',
-  'WHEN TO USE: to find out whether a line of questioning is even possible before pursuing it — ' +
-    'whether the company keeps inventory, records GST, uses bill-wise tracking or cost centres.',
-  '',
-  'HOW IT IS DETERMINED: TallyPrime does not expose its feature switches (the F11 settings) ' +
-    'over this interface, so each flag is inferred from evidence in the data — whether stock ' +
-    'items exist, whether GST fields are populated on ledgers, and so on. Each flag therefore ' +
-    'comes with the evidence behind it. Read them as "the data shows this" rather than "the ' +
-    'setting is on": a company could have a feature enabled but not yet used it, which reads ' +
-    'here as absent.',
-  '',
-  'RETURNS: one entry per feature with a boolean and the evidence supporting it.',
   '',
   UNTRUSTED_CONTENT_NOTICE,
   '',
@@ -101,15 +90,18 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
     'tally_list_companies',
     { description: DESCRIPTION, inputSchema: z.object({}) },
     async () =>
-      runTool('tally_list_companies', deps.logger, async () => {
+      runTool('tally_list_companies', deps, async () => {
         const response = await deps.client.send(buildCompanyListRequest(), 'standard');
         const { data, warnings } = normalizeCompanies(response.body);
 
         const allWarnings = [...response.repairs, ...warnings];
-        return {
-          companies: data,
-          ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
-        } satisfies CompanyListResult;
+        return whole(
+          {
+            companies: data,
+            ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
+          } satisfies CompanyListResult,
+          data.length
+        );
       })
   );
 
@@ -117,10 +109,20 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
     'tally_get_company',
     {
       description: GET_DESCRIPTION,
-      inputSchema: z.object({ company: companySchema }),
+      inputSchema: z.object({
+        company: companySchema,
+        includeFeatures: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also infer which TallyPrime features (inventory, GST, bill-wise tracking, cost ' +
+              'centres, interest calculation, banking) this company has switched on. Costs one ' +
+              'extra request. Defaults to false.'
+          ),
+      }),
     },
     async (args) =>
-      runTool('tally_get_company', deps.logger, async () => {
+      runTool('tally_get_company', deps, async () => {
         const listResponse = await deps.client.send(buildCompanyListRequest(), 'standard');
         const companies = normalizeCompanies(listResponse.body).data;
 
@@ -143,6 +145,14 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
           );
         }
 
+        // Taken from the record already in hand rather than re-resolved: this is
+        // the currency EVERY figure below is denominated in, and it is a symbol
+        // as Tally reports it ("$" on a US company), not an ISO code.
+        const currency =
+          company.currency === null || company.currency.trim() === ''
+            ? DEFAULT_CURRENCY
+            : company.currency.trim();
+
         // Full-field ledger fetch: the field names that come back ARE the
         // answer to "what does this company record".
         const ledgerRequest = buildLedgerListRequest(
@@ -150,7 +160,7 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
           true
         );
         const ledgerResponse = await deps.client.send(ledgerRequest, 'report');
-        const { data: ledgers, warnings } = normalizeLedgers(ledgerResponse.body, true);
+        const { data: ledgers, warnings } = normalizeLedgers(ledgerResponse.body, true, currency);
 
         // Count, per field, how many ledgers carry it AND how many distinct
         // values it takes.
@@ -202,114 +212,109 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
 
         const allWarnings = [...listResponse.repairs, ...ledgerResponse.repairs, ...warnings];
 
-        return {
-          company,
-          ledgerCount: ledgers.length,
-          groups: Object.fromEntries([...groups.entries()].sort((a, b) => b[1] - a[1])),
-          /**
-           * Fields that differ between ledgers — where this company's actual
-           * data lives, and the place to aim an investigation.
-           */
-          distinguishingFields: Object.fromEntries(
-            [...Object.entries(varying)].sort(byLedgerCountDesc)
-          ),
-          /**
-           * Fields Tally set identically on every ledger. Almost always
-           * product defaults rather than anything this company recorded.
-           */
-          uniformFields: uniform,
-          ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
-        };
-      })
-  );
+        let features: unknown;
+        if (args.includeFeatures === true) {
+          const companyOption = args.company === undefined ? {} : { company: args.company };
+          const stockResponse = await deps.client.send(
+            buildStockItemListRequest({
+              ...companyOption,
+              format: deps.config.tallyPreferredFormat,
+            }),
+            'standard'
+          );
+          const stockItems = normalizeStockItems(stockResponse.body, currency).data;
+          features = inferCompanyFeatures(ledgers, stockItems);
+        }
 
-  server.registerTool(
-    'tally_get_company_features',
-    {
-      description: FEATURES_DESCRIPTION,
-      inputSchema: z.object({ company: companySchema }),
-    },
-    async (args) =>
-      runTool('tally_get_company_features', deps.logger, async () => {
-        await assertCompanyIsLoaded(deps, args.company);
-        const companyOption = args.company === undefined ? {} : { company: args.company };
-
-        const ledgerResponse = await deps.client.send(
-          buildLedgerListRequest(
-            { ...companyOption, format: deps.config.tallyPreferredFormat },
-            true
-          ),
-          'report'
-        );
-        const { data: ledgers, warnings } = normalizeLedgers(ledgerResponse.body, true);
-
-        const stockResponse = await deps.client.send(
-          buildStockItemListRequest({
-            ...companyOption,
-            format: deps.config.tallyPreferredFormat,
-          }),
-          'standard'
-        );
-        const stockItems = normalizeStockItems(stockResponse.body).data;
-
-        const countWhere = (predicate: (fields: Record<string, string>) => boolean): number =>
-          ledgers.filter((ledger) => predicate(ledger.fields ?? {})).length;
-
-        // GST evidence deliberately comes from three independent places.
-        //
-        // Checking only party GSTINs reported gst:false on a real company that
-        // has 15 GST tax ledgers and GST registration stamped on its vouchers —
-        // it simply had not recorded GSTINs against its parties. One narrow
-        // signal produced a confidently wrong answer, so all three are reported.
-        const partiesWithGstin = ledgers.filter((ledger) => ledger.gstin !== null).length;
-        const partiesWithRegistrationType = countWhere(
-          (fields) => fields.GSTREGISTRATIONTYPE !== undefined
-        );
-        const gstTaxLedgers = countWhere((fields) => fields.GSTDUTYHEAD !== undefined);
-        const gstLedgers = partiesWithGstin + partiesWithRegistrationType + gstTaxLedgers;
-        const billWise = countWhere((fields) => fields.ISBILLWISEON === 'Yes');
-        const costCentres = countWhere((fields) => fields.ISCOSTCENTRESON === 'Yes');
-        const interest = countWhere((fields) => fields.ISINTERESTON === 'Yes');
-        const bankLedgers = countWhere((fields) => fields.IFSCODE !== undefined);
-
-        // Evidence alongside every flag: a bare boolean invites being read as
-        // the F11 setting, which is not what this can observe.
-        return {
-          company: args.company ?? '(currently loaded)',
-          features: {
-            inventory: {
-              inUse: stockItems.length > 0,
-              evidence: `${String(stockItems.length)} stock item(s) exist`,
-            },
-            gst: {
-              inUse: gstLedgers > 0,
-              evidence:
-                `${String(partiesWithGstin)} ledger(s) carry a GSTIN, ` +
-                `${String(partiesWithRegistrationType)} carry a GST registration type, ` +
-                `${String(gstTaxLedgers)} are GST tax ledgers (with a duty head)`,
-            },
-            billWiseTracking: {
-              inUse: billWise > 0,
-              evidence: `${String(billWise)} ledger(s) have bill-wise tracking enabled`,
-            },
-            costCentres: {
-              inUse: costCentres > 0,
-              evidence: `${String(costCentres)} ledger(s) have cost centres enabled`,
-            },
-            interestCalculation: {
-              inUse: interest > 0,
-              evidence: `${String(interest)} ledger(s) have interest calculation enabled`,
-            },
-            banking: {
-              inUse: bankLedgers > 0,
-              evidence: `${String(bankLedgers)} ledger(s) record bank details such as an IFSC code`,
-            },
+        // One row: this describes a single company. The ledger count is a
+        // property of that description, not a row count of its own.
+        return whole(
+          {
+            company,
+            ledgerCount: ledgers.length,
+            groups: Object.fromEntries([...groups.entries()].sort((a, b) => b[1] - a[1])),
+            /**
+             * Fields that differ between ledgers — where this company's actual
+             * data lives, and the place to aim an investigation.
+             */
+            distinguishingFields: Object.fromEntries(
+              [...Object.entries(varying)].sort(byLedgerCountDesc)
+            ),
+            /**
+             * Fields Tally set identically on every ledger. Almost always
+             * product defaults rather than anything this company recorded.
+             */
+            uniformFields: uniform,
+            ...(features === undefined ? {} : { features }),
+            ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
           },
-          caveat:
-            'Each flag reflects what the DATA shows, not the F11 configuration, which TallyPrime ' +
-            'does not expose here. A feature that is enabled but unused reads as not in use.',
-          ...(warnings.length > 0 ? { warnings } : {}),
-        };
+          1
+        );
       })
   );
+}
+
+/**
+ * Infer which TallyPrime features (F11 settings) this company has switched
+ * on, from evidence in the data it actually holds — TallyPrime does not
+ * expose the settings themselves over this interface.
+ *
+ * GST evidence deliberately comes from three independent places. Checking
+ * only party GSTINs reported gst:false on a real company that has 15 GST tax
+ * ledgers and GST registration stamped on its vouchers — it simply had not
+ * recorded GSTINs against its parties. One narrow signal produced a
+ * confidently wrong answer, so all three are reported.
+ */
+function inferCompanyFeatures(
+  ledgers: readonly { gstin: string | null; fields?: Record<string, string> }[],
+  stockItems: readonly unknown[]
+): unknown {
+  const countWhere = (predicate: (fields: Record<string, string>) => boolean): number =>
+    ledgers.filter((ledger) => predicate(ledger.fields ?? {})).length;
+
+  const partiesWithGstin = ledgers.filter((ledger) => ledger.gstin !== null).length;
+  const partiesWithRegistrationType = countWhere(
+    (fields) => fields.GSTREGISTRATIONTYPE !== undefined
+  );
+  const gstTaxLedgers = countWhere((fields) => fields.GSTDUTYHEAD !== undefined);
+  const gstLedgers = partiesWithGstin + partiesWithRegistrationType + gstTaxLedgers;
+  const billWise = countWhere((fields) => fields.ISBILLWISEON === 'Yes');
+  const costCentres = countWhere((fields) => fields.ISCOSTCENTRESON === 'Yes');
+  const interest = countWhere((fields) => fields.ISINTERESTON === 'Yes');
+  const bankLedgers = countWhere((fields) => fields.IFSCODE !== undefined);
+
+  // Evidence alongside every flag: a bare boolean invites being read as
+  // the F11 setting, which is not what this can observe.
+  return {
+    inventory: {
+      inUse: stockItems.length > 0,
+      evidence: `${String(stockItems.length)} stock item(s) exist`,
+    },
+    gst: {
+      inUse: gstLedgers > 0,
+      evidence:
+        `${String(partiesWithGstin)} ledger(s) carry a GSTIN, ` +
+        `${String(partiesWithRegistrationType)} carry a GST registration type, ` +
+        `${String(gstTaxLedgers)} are GST tax ledgers (with a duty head)`,
+    },
+    billWiseTracking: {
+      inUse: billWise > 0,
+      evidence: `${String(billWise)} ledger(s) have bill-wise tracking enabled`,
+    },
+    costCentres: {
+      inUse: costCentres > 0,
+      evidence: `${String(costCentres)} ledger(s) have cost centres enabled`,
+    },
+    interestCalculation: {
+      inUse: interest > 0,
+      evidence: `${String(interest)} ledger(s) have interest calculation enabled`,
+    },
+    banking: {
+      inUse: bankLedgers > 0,
+      evidence: `${String(bankLedgers)} ledger(s) record bank details such as an IFSC code`,
+    },
+    caveat:
+      'Each flag reflects what the DATA shows, not the F11 configuration, which TallyPrime ' +
+      'does not expose here. A feature that is enabled but unused reads as not in use.',
+  };
 }

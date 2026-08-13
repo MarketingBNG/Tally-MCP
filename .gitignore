@@ -1,6 +1,10 @@
 node_modules/
 dist/
 coverage/
+
+# Built release zips, staging folders and the cached Node runtime download.
+# Releases are rebuilt from a tag, never committed.
+release/
 .env
 *.log
 .DS_Store
@@ -12,6 +16,26 @@ coverage/
 # accounting data — ledger names, party names, amounts, GSTINs. Redacted
 # fixtures for tests belong in tests/fixtures/, never here.
 samples/
+
+# Output of `npm run check:live`. Same reason as samples/: these are real tool
+# responses from a live company, holding real party names and amounts.
+.live-check/
+
+# Any other scratch directory holding responses captured from a live install —
+# reconciliation runs, one-off probes, raw XML pulled while debugging. These
+# hold real balances, party names and bank narrations. Named broadly on
+# purpose: the leak that matters is the ad-hoc directory nobody thought to add
+# here, so new capture output must land somewhere already covered.
+.recon/
+.probe/
+*.live.json
+*.live.xml
+
+# Generated tool-reference document. Kept on disk for the accountant audience,
+# out of git because it is a build artefact of the tool list rather than its
+# source: docs/ is authoritative, and a committed copy goes stale silently (it
+# still says 33 tools, from before the v1/v2 consolidation into 19).
+Tally-MCP-Tool-Reference.docx
 
 # Local MCP client wiring. Holds an absolute path to this checkout, which is
 # machine-specific and usually contains the user's name. See README for the

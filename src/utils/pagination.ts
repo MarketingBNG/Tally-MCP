@@ -9,13 +9,29 @@ import { TallyError } from '../tally/TallyError.js';
  * server fetches everything Tally returns and slices it in memory.
  *
  * Because of that, oversized queries are refused up front rather than
- * attempted: see `assertWithinRecordLimit()`. Every tool description that
- * takes page/pageSize must say this so Claude does not mistake paging for
- * a way to make an expensive query cheap.
+ * attempted: see `assertResultSetFits()` in toolResult.ts. Every tool
+ * description that takes page/pageSize must say this so Claude does not
+ * mistake paging for a way to make an expensive query cheap.
  */
 
 export const DEFAULT_PAGE_SIZE = 100;
 export const MAX_PAGE_SIZE = 500;
+
+/**
+ * Default page size for a fetch carrying every field TallyPrime holds.
+ *
+ * Measured against the live shape: one full-field voucher serialises to roughly
+ * 18 KB, so the ordinary default of 100 is about 1.7MB — over the 1MB ceiling
+ * an MCP client will accept, while being ~2% of TALLY_MAX_RECORDS. Defaulting
+ * lower means the obvious request ("list July's vouchers with all fields")
+ * succeeds instead of being refused for a reason the user did not cause.
+ *
+ * Only the *default* changes. An explicit pageSize is still honoured up to
+ * MAX_PAGE_SIZE, and the byte ceiling in toolResult.ts catches it if the result
+ * is genuinely too big — a caller who asks for a specific page size should get
+ * a measured answer, not a silent substitution.
+ */
+export const FIELD_HEAVY_PAGE_SIZE = 25;
 
 export interface PaginationParams {
   page: number;
@@ -41,10 +57,19 @@ export interface PaginatedResult<T> {
   warnings?: string[];
 }
 
-/** Normalise and validate caller-supplied paging parameters. */
-export function resolvePagination(page?: number, pageSize?: number): PaginationParams {
+/**
+ * Normalise and validate caller-supplied paging parameters.
+ *
+ * `defaultPageSize` lets a tool lower the default for a request it knows will
+ * be field-heavy. It never lowers an explicit request.
+ */
+export function resolvePagination(
+  page?: number,
+  pageSize?: number,
+  defaultPageSize: number = DEFAULT_PAGE_SIZE
+): PaginationParams {
   const resolvedPage = page ?? 1;
-  const resolvedSize = pageSize ?? DEFAULT_PAGE_SIZE;
+  const resolvedSize = pageSize ?? defaultPageSize;
 
   if (!Number.isInteger(resolvedPage) || resolvedPage < 1) {
     throw new TallyError(
@@ -60,27 +85,6 @@ export function resolvePagination(page?: number, pageSize?: number): PaginationP
   }
 
   return { page: resolvedPage, pageSize: resolvedSize };
-}
-
-/**
- * Refuse a query whose full result set would exceed the in-memory ceiling.
- *
- * Called *before* committing to a fetch wherever a cheap size estimate is
- * available, so the user gets RESULT_LIMIT_EXCEEDED rather than a confusing
- * TALLY_TIMEOUT that suggests a connectivity problem.
- */
-export function assertWithinRecordLimit(
-  estimatedRecords: number,
-  maxRecords: number,
-  hint: string
-): void {
-  if (estimatedRecords > maxRecords) {
-    throw new TallyError(
-      'RESULT_LIMIT_EXCEEDED',
-      `This query would return about ${String(estimatedRecords)} records, above the limit of ${String(maxRecords)}.`,
-      { suggestion: hint }
-    );
-  }
 }
 
 /**

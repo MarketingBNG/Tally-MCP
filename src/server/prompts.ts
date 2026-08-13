@@ -94,13 +94,13 @@ export function registerPrompts(server: McpServer): void {
                 'distinguishingFields to learn what it records. A company without GST fields ' +
                 'cannot answer GST questions, and knowing that now avoids reporting an absence ' +
                 'as a finding.',
-              '2. tally_get_trial_balance — the overall position, and a check that the books ' +
-                'balance.',
-              '3. Follow what you actually see. Use tally_get_profit_loss and ' +
-                'tally_get_balance_sheet for position, tally_list_ledgers for the chart of ' +
-                'accounts, tally_search_vouchers to pull specific transactions.',
-              '4. When something needs explaining, fetch the full record: tally_get_voucher ' +
-                'returns every field plus nested inventory, bank and tax detail.',
+              '2. tally_get_statement with statement: "trial_balance" — the overall position, ' +
+                'and a check that the books balance.',
+              '3. Follow what you actually see. Use tally_get_statement with statement: ' +
+                '"profit_loss" or "balance_sheet" for position, tally_get_ledgers for the chart ' +
+                'of accounts, tally_get_vouchers with filters to pull specific transactions.',
+              '4. When something needs explaining, fetch the full record: tally_get_vouchers ' +
+                'with a voucherNumber returns every field plus nested inventory, bank and tax detail.',
               '',
               'Report what the data shows and what it does not. If the books cannot answer part ' +
                 'of the question, say so plainly rather than inferring — an admitted gap is more ' +
@@ -151,15 +151,15 @@ export function registerPrompts(server: McpServer): void {
               '',
               'Suggested approach:',
               '',
-              '1. tally_search_vouchers with the narrowest filters that fit the question. It can ' +
+              '1. tally_get_vouchers with the narrowest filters that fit the question. It can ' +
                 'filter by ledger, party, narration, voucher type and amount range. For a ' +
                 'reference, cheque or UTR number, use fieldMatch — it searches every field value, ' +
                 'including nested bank and tax structures, which matters because the field name ' +
                 'differs between companies.',
               '2. Pull the complete record for anything that needs explaining, via ' +
-                'tally_get_voucher.',
-              '3. Cross-check against tally_get_ledger or the statements where the answer depends ' +
-                'on balances rather than individual entries.',
+                'tally_get_vouchers with its voucherNumber.',
+              '3. Cross-check against tally_get_ledgers with a name, or tally_get_statement, ' +
+                'where the answer depends on balances rather than individual entries.',
               '',
               'Show the specific vouchers behind any claim — number, date, party, amount — so ' +
                 'the user can verify it in Tally. If the pattern the user suspects is not there, ' +
@@ -199,9 +199,9 @@ export function registerPrompts(server: McpServer): void {
                 company === undefined ? ' currently open' : ` "${company}"`
               }.`,
               '',
-              'Cover the results (tally_get_profit_loss), the position at the end ' +
-                '(tally_get_balance_sheet), and the activity that produced them ' +
-                '(tally_list_vouchers or tally_search_vouchers).',
+              'Cover the results (tally_get_statement, statement: "profit_loss"), the position ' +
+                'at the end (tally_get_statement, statement: "balance_sheet"), and the activity ' +
+                'that produced them (tally_get_vouchers, with or without filters).',
               '',
               'A caution specific to short periods: a group with no movement in the period comes ' +
                 'back null, not zero. That means "Tally reported nothing here", and on a single ' +

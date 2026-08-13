@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   resolvePagination,
   paginate,
-  assertWithinRecordLimit,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
 } from '../../src/utils/pagination.js';
@@ -76,25 +75,5 @@ describe('paginate', () => {
   it('surfaces warnings when records failed to parse', () => {
     const result = paginate(items, { page: 1, pageSize: 10 }, ['2 records could not be read']);
     expect(result.warnings).toEqual(['2 records could not be read']);
-  });
-});
-
-describe('assertWithinRecordLimit', () => {
-  it('permits a query at exactly the limit', () => {
-    expect(() => assertWithinRecordLimit(5000, 5000, 'narrow it')).not.toThrow();
-  });
-
-  it('refuses an oversized query with RESULT_LIMIT_EXCEEDED, not a timeout', () => {
-    // Discovering size by timing out would report TALLY_TIMEOUT and send the
-    // user chasing a connectivity problem that does not exist.
-    try {
-      assertWithinRecordLimit(5001, 5000, 'Try a single month.');
-      expect.unreachable('should have thrown');
-    } catch (error) {
-      const tallyError = error as TallyError;
-      expect(tallyError.code).toBe('RESULT_LIMIT_EXCEEDED');
-      expect(tallyError.suggestion).toBe('Try a single month.');
-      expect(tallyError.message).toContain('5000');
-    }
   });
 });

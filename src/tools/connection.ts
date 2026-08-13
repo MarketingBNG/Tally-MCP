@@ -6,6 +6,8 @@ import type { Logger } from '../utils/logger.js';
 import { TallyError } from '../tally/TallyError.js';
 import { buildConnectionProbeRequest } from '../tally/requests.js';
 import { READ_ONLY_NOTICE } from '../schemas/common.js';
+import { serializeToolPayload } from './toolResult.js';
+import { SERVER_VERSION } from '../version.js';
 
 /**
  * Connectivity check.
@@ -18,6 +20,15 @@ import { READ_ONLY_NOTICE } from '../schemas/common.js';
 export interface ConnectionStatusResult {
   connected: boolean;
   endpoint: string;
+  /**
+   * Version of this server, from package.json.
+   *
+   * Included on success and on failure, deliberately: the commonest support
+   * conversation starts with a user whose install is broken, and the version is
+   * the first thing needed to help them. A field only present when things work
+   * is absent exactly when it matters.
+   */
+  serverVersion: string;
   /** Round-trip time for the probe, in milliseconds. */
   responseTimeMs?: number;
   /** Wire format Tally actually replied in, once known. */
@@ -39,9 +50,12 @@ const DESCRIPTION = [
   'WHEN TO USE: as a first step when any other Tally tool fails, or to confirm setup ' +
     'before starting an analysis. Cheap and safe to call at any time.',
   '',
-  'RETURNS: whether the connection succeeded, the endpoint tried, round-trip time, ' +
-    'the wire format and character encoding TallyPrime replied with, and — on failure — ' +
-    'a stable error code with a specific suggestion for fixing it.',
+  'RETURNS: whether the connection succeeded, the endpoint tried, the version of this ' +
+    'server, round-trip time, the wire format and character encoding TallyPrime replied ' +
+    'with, and — on failure — a stable error code with a specific suggestion for fixing it.',
+  '',
+  'Use this when the user asks which version they are running, or when helping them ' +
+    'troubleshoot an install — the version is reported whether or not the connection works.',
   '',
   'DOES NOT RETURN: any accounting data. It does not read ledgers, vouchers or reports, ' +
     'and does not tell you which company is loaded — use tally_list_companies for that.',
@@ -64,7 +78,9 @@ export function registerConnectionTools(
     async () => {
       const result = await checkConnection(deps);
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        // Not size-checked like runTool's payloads: a connection probe is a
+        // fixed handful of fields and cannot approach the client's ceiling.
+        content: [{ type: 'text', text: serializeToolPayload(result) }],
         // A failed connectivity probe is a real tool failure, so flag it —
         // but the payload is still structured, never a stack trace.
         ...(result.connected ? {} : { isError: true }),
@@ -93,6 +109,7 @@ export async function checkConnection(deps: {
     return {
       connected: true,
       endpoint: config.tallyBaseUrl,
+      serverVersion: SERVER_VERSION,
       responseTimeMs: elapsed,
       responseFormat: response.isJson ? 'json' : 'xml',
       encoding: response.encoding,
@@ -110,6 +127,7 @@ export async function checkConnection(deps: {
     return {
       connected: false,
       endpoint: config.tallyBaseUrl,
+      serverVersion: SERVER_VERSION,
       error: tallyError.toClientPayload().error,
     };
   }

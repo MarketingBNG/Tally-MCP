@@ -3,10 +3,12 @@
 Where the project actually stands, measured against `PROJECT_SPEC.md` rather
 than against how finished it feels. Companion to
 [known-limitations.md](known-limitations.md), which covers *why* things behave
-as they do; this file covers *how much* is done.
+as they do, and [performance.md](performance.md), which covers what each tool
+costs in tokens and time; this file covers *how much* is done.
 
-**Last updated:** 2026-08-10, verified against a live TallyPrime 7.x install
-holding a real operating company (330 ledgers, ~30 vouchers/month).
+**Last updated:** 2026-08-13, verified against two live TallyPrime installs — the
+original 330-ledger/~30-vouchers-per-month company, and the second live company (a US LLC, FY 25-26),
+453 vouchers over a full financial year.
 
 ---
 
@@ -15,11 +17,11 @@ holding a real operating company (330 ledgers, ~30 vouchers/month).
 | Measure | Status |
 |---|---|
 | **Built** | ~95% |
-| **Verified against real data** | ~85% |
-| Tools | 29 registered (13 v1, 16 v2) |
+| **Verified against real data** | ~90% |
+| Tools | 19 registered — the newest is `tally_summarise_movements` (see [Efficiency pass](#efficiency-pass-2026-08-13)) |
 | Prompts / resources | 4 / 2 |
-| Tests | 266 passing, 2 skipped, across 16 files |
-| `typecheck` / `lint` / `build` | All clean (re-run 2026-08-10) |
+| Tests | 530 passing, 2 skipped, across 29 files. One skip is the fixture-vs-`samples/` guard, which runs only where `samples/` exists — i.e. precisely on a machine that has pulled real exports |
+| `typecheck` / `lint` / `test` / `build` | Enforced by CI on every push (Windows + Linux) |
 | Definition of done | **8 of 8** |
 
 Construction is finished. The gap between "built" and "verified" is the honest
@@ -35,33 +37,318 @@ different company's data, not more code.
 ### v1 — 13 of 14
 
 `tally_connection_status`, `tally_list_companies`, `tally_get_company`,
-`tally_list_ledgers`, `tally_search_ledgers`, `tally_get_ledger`,
-`tally_get_ledger_transactions`, `tally_list_vouchers`, `tally_search_vouchers`,
-`tally_get_voucher`, `tally_get_trial_balance`, `tally_get_balance_sheet`,
-`tally_get_profit_loss`
+`tally_get_ledgers`, `tally_get_ledgers`, `tally_get_ledger`,
+`tally_get_ledger_transactions`, `tally_get_vouchers`, `tally_get_vouchers`,
+`tally_get_vouchers`, `tally_get_statement (statement: 'trial_balance')`, `tally_get_statement (statement: 'balance_sheet')`,
+`tally_get_statement (statement: 'profit_loss')`
 
 **Not built: `tally_get_day_book`** — deliberately. On a real install the
 `DayBook` report ignores the date range it is given and reports Tally's own
-current period: 3 vouchers for a five-year range where `Voucher Register`
-returned 30 for one month inside it. A date filter that is silently ignored is
-worse than one that fails, so the report is not exposed.
-`tally_list_vouchers` covers the same ground correctly.
+current period: 3 vouchers for a five-year range where the `Voucher Register`
+report returned 30 for one month inside it. A date filter that is silently ignored
+is worse than one that fails, so the report is not exposed.
+
+The register is not exposed either, for a worse reason found on 2026-08-13: it
+returns voucher *headers* with no ledger entries at all. `tally_get_vouchers` reads
+a `Voucher` collection, which is the only shape that returns the debit and credit
+lines, and applies the date range itself. See
+[known-limitations.md](known-limitations.md#the-voucher-register-report-returns-no-ledger-entries-at-all).
 
 ### v2 — 16 of 16
 
-`tally_get_company_features`, `tally_get_sales`, `tally_search_sales`,
-`tally_get_purchases`, `tally_search_purchases`, `tally_list_stock_items`,
-`tally_search_stock_items`, `tally_get_stock_item`,
-`tally_get_inventory_movements`, `tally_get_receivables`,
-`tally_get_payables`, `tally_get_gst_summary`, `tally_get_gst_transactions`,
-`tally_search`, plus `tally_get_cash_flow` and `tally_get_fund_flow`.
+`tally_get_company (includeFeatures: true)`, `tally_get_vouchers (family: 'sales')`,
+`tally_get_vouchers (family: 'purchases')`, `tally_get_stock_items`,
+`tally_get_inventory_movements`, `tally_get_outstanding (side: 'receivable')`,
+`tally_get_outstanding (side: 'payable')`, `tally_get_gst (view: 'summary')`, `tally_get_gst (view: 'transactions')`,
+`tally_search`, plus `tally_get_statement (statement: 'cash_flow')` and `tally_get_statement (statement: 'fund_flow')`.
 
-The last two are registered and **always** return
-`TALLY_UNSUPPORTED_OPERATION` with an explanation and a redirection. Both
-require a classification that is a judgement about the business, and this
-server holds no business rules. Registering them rather than omitting them
-means the limitation is discoverable instead of leaving Claude guessing at a
-tool that does not exist.
+Added after the v2 milestone: `tally_get_groups`, `tally_get_groups`,
+`tally_get_party_statement`, and `tally_get_ledgers / tally_get_groups / tally_get_stock_items (conditions)` — bringing the total
+to 33.
+
+### Added 2026-08-12 — four gaps closed without a probe trip
+
+Chosen because each is buildable from a **verified** retrieval path, so none
+required guessing a report ID. See [known-limitations.md](known-limitations.md)
+for the reasoning behind each design.
+
+| What | Built on | Note |
+|---|---|---|
+| `tally_get_voucher_types` | The `VoucherTypes` collection the server already read internally for family resolution | Nothing exposed the list, so a caller could filter on `voucherType` with no way to discover valid values. `numberingSeries` (from the nested `VOUCHERNUMBERSERIES.LIST`, not the misleading top-level scalar — see known-limitations.md) and `isDeemedPositive` added to the normaliser |
+| `tally_get_bank_reconciliation` | `BANKALLOCATIONS.LIST` on voucher entries | Not Tally's own Bank Reconciliation report — that export ID is unverified. Status can be reported as unknown; a status filter fails rather than guessing |
+| Period comparison on `tally_get_statement` | Two fetches of an existing verified report | Pairs rows by name only when unambiguous; computes no change against a null |
+| Opt-in ageing on `tally_get_outstanding` | Bill allocations already collected for the bills field | Ageing by bill AGE, never overdue. Off by default, so the previous contract is unchanged |
+
+Total at that point: **18 registered tools** (the count after the v1/v2
+consolidation into merged tools, not the 33 pre-merge tool *modes*). Now **19**,
+with `tally_summarise_movements` added on 2026-08-13.
+
+### Live verification of the four, 2026-08-12
+
+Run against a live TallyPrime on 127.0.0.1:9000 holding **the second live
+company (a US LLC, FY 25-26)** — a different company from the one used for the v1/v2 verification, and
+notably one whose financial year has already passed, so every call had to name
+its period. 453 vouchers, 26 voucher types, one bank ledger.
+
+Method, because a live run against someone's open books is not a normal test:
+`dist/` was exercised rather than `src/`, since that is what Claude Desktop
+launches; every call was awaited in sequence, because Tally's listener serves one
+request at a time; the run aborts on the first connection-class failure, since one
+malformed request poisons a session; and **no report or collection ID was sent
+that was not already verified** — all four features reuse existing builders, which
+is what made the run no riskier than any existing tool. 30 tool calls, no abort,
+Tally still serving afterwards.
+
+Two passes were needed. The first raised `TALLY_MAX_RESPONSE_BYTES` and
+`TALLY_MAX_RECORDS` to see whole answers — which means it could not have caught a
+tool that only works with the ceilings raised. Everything was re-run at the
+shipped defaults of that date (900,000 bytes / 5,000 records) and passed there
+too. The response-byte default was lowered again on 2026-08-13 — see
+[performance.md](performance.md) — so "shipped defaults" today means 150,000
+bytes; `npm run check:live` re-runs the equivalent check against whatever is
+current.
+
+| Check | Result |
+|---|---|
+| Voucher types | 26 types. **"Export Invoice" and "GWI Invoices" both derive from `Sales`** and contain no "sales" in the name — the exact case the tool exists for, found in the wild |
+| Comparison, identical periods on both sides | 9 rows paired, **every change exactly `0`**, nothing mispaired. Note this check is weaker than it looks — it passes trivially if the end date is ignored, which is exactly what turned out to be happening |
+| Mid-year statement | Correctly flagged `coversPeriodRequested: false` with `figuresActuallyCover` and a warning |
+| Mid-year comparison | Correctly refused with `TALLY_UNSUPPORTED_OPERATION` |
+| Comparison vs two independent fetches | `rows` byte-identical to the period fetched alone, `comparison.rows` likewise; all 7 subtractions re-derived; 7 nulls correctly left uncomputed |
+| Bank reconciliation | 200+ instruments across cheque, cheque/DD, inter-bank transfer and "others"; signs correct (payment positive, receipt negative) |
+| Bank vs the verified voucher tool | Same amount, sign, and reference for the same voucher, via an independent path |
+| Ageing | **Produced nothing — see below.** Not a defect |
+| Guard rails | Half a comparison range, descending buckets, and a status filter with no evidence all refused with the right codes |
+| Defaulted period against a company whose year has passed | Correctly returned zero rows *with* the warning naming the company and its year |
+| Family-resolution regression | `buildVoucherTypeListRequest` changed today; family resolution still resolves `["export invoice", "gwi invoices", "sales"]`, and the new tool agrees with it |
+
+**A third defect, found by adversarially reviewing the live run rather than by the
+run itself, and it is the serious one.** TallyPrime **ignores the requested end
+date** on `Trial Balance`, `Profit and Loss` and `Cash Flow`, accumulating from
+`fromDate` to the financial year end instead — a three-month cash flow request
+returned nine months, and a first-quarter trial balance returned the whole year.
+That makes any mid-year statement a cumulative position rather than the period
+asked for, and it made period comparison capable of reporting a fabricated
+movement the exact size of the earlier period: a Q2-vs-Q1 comparison would have
+shown sales down 211,852.50 when they were flat. Comparison now refuses unless the
+period ends at the year end, and every statement response carries
+`coversPeriodRequested`. Full account, including why the original trial balance
+reconciliation could not have caught it, in
+[known-limitations.md](known-limitations.md#the-statements-ignore-the-requested-end-date-and-accumulate-to-the-year-end).
+
+This one also revises an earlier claim on this page: **definition-of-done item 3
+verified less than it appeared to.** It reconciled a period ending 28-Jul-26 on a
+company with no transactions after that date, so "accumulated to the year end" and
+"as at the end date" were the same figures. The reconciliation is still correct
+about signs, decimals, empty-vs-zero and the positional pairing — it simply could
+not have detected the end-date behaviour.
+
+**Two further defects were found and fixed, both invisible to fixtures:**
+
+1. **The numbering-method scalar was reporting the opposite of the truth.**
+   TallyPrime's top-level `NUMBERINGMETHOD` on a voucher type is a legacy field
+   reading `None` on all 26 types, while the real method lives in the nested
+   `VOUCHERNUMBERSERIES.LIST` — where 25 of 26 were `Automatic / Auto Retain`.
+   Now reported as `numberingSeries[]`, and the fixture keeps the misleading
+   `None` so a regression fails a test. The corrected field immediately surfaced
+   something worth an auditor's attention: **one sales type, `GWI Invoices`, is
+   `Automatic (Manual Override)` and is the only one of the 26 that prevents
+   duplicate numbers.**
+2. **24% of the bank payload was scaffolding.** Eleven cash-denomination counters
+   per instrument — 2,200 across 200 cheques and wires, every one zero, including
+   the counter for the demonetised ₹2,000 note. Zero-valued ones are now dropped
+   and a non-zero one is always kept; the full-year response fell 244 KB → 185 KB.
+
+### Still unproven after the live run
+
+Stated separately because a passing run is easy to over-read.
+
+| Path | Why unproven | Consequence |
+|---|---|---|
+| `reconciled: true` | **No populated `BANKERSDATE` exists on either available company.** 406 such elements in the raw response, all empty — verified by counting tags in the 22 MB payload. So the field is genuinely in Tally's schema and this company has simply never reconciled | The honest path (status `null`, filters refused) is live-confirmed. The path that reports a cheque as *cleared* has never run on real data |
+| Ageing on real bills | This company records **no bill references at all** — 919 `BILLALLOCATIONS.LIST` blocks, zero with a populated `NAME`, no `BILLTYPE` anywhere. Bill-wise accounting is off | The netting, the sign rule and the buckets are fixture-tested only. The empty schedule the live run produced is the company, not the code |
+| Cost centres | Zero `CATEGORYALLOCATIONS.LIST` in the whole year | The "richer company" that [next-steps.md](next-steps.md) waits on is **still not available** — this one has no cost centres and no bill-wise either |
+| ~~`balance_sheet` and `fund_flow`~~ | **Closed 2026-08-13** — both called live for the first time, full-year and first-quarter each | Both ignore the end date: mid-year rows identical to full-year rows. The guard was exactly right, including for the balance sheet |
+| Period comparison producing a *useful* answer | Only the year-end-anchored shape is permitted, and no accountant has yet been asked whether "two cumulative positions" answers the question they meant | The feature is safe but may be answering a narrower question than "this quarter vs last" |
+
+One real bug was found and fixed during this work, recorded because it would have
+been invisible in review: the first ageing implementation classified a negative
+net as a settlement against an earlier bill. Since Tally encodes debits negative,
+that would have reported **every open receivable** as a settlement. Direction is
+now taken from the raising allocation's own sign, with a regression test.
+
+`tally_get_statement (statement: 'cash_flow')` and `tally_get_statement (statement: 'fund_flow')` returned
+`TALLY_UNSUPPORTED_OPERATION` until 2026-08-12; they now return Tally's own
+month-by-month movement (debit, credit, net per month), verified against a
+live install. They remain deliberately unclassified — the
+operating/investing/financing split is a judgement about the business, and
+the tool descriptions say to present the data as monthly movement, never as a
+classified statement. See docs/known-limitations.md.
+
+### Performance pass, 2026-08-13
+
+Prompted by a user report that auditing one company used over 20% of a session
+and took too long. Measured, fixed, and re-verified live in two rounds; full
+detail in [performance.md](performance.md).
+
+**Round 1:** uniform-field folding on vouchers and bank instruments (25
+full-detail vouchers 54,255 → 19,577 tokens); response ceiling 900,000 → 150,000
+bytes; parsed-record caching (not just the raw HTTP response); cache TTL 20,000ms
+→ 300,000ms (a 9-question audit's waiting time 64s → 12s); validation moved
+before fetching (a rejected call 1,180ms → 1ms); `data_fetched_at` added to the
+envelope, distinct from `as_of_timestamp`, so a cached figure is never mis-dated
+now that the TTL is long enough to matter.
+
+**Round 2**, same day: audited every remaining tool for the identical fold rather
+than assuming more existed. `tally_get_ledger_transactions`, `tally_search`,
+`tally_get_party_statement` and `tally_get_gst` were already lean and needed
+nothing. `tally_get_ledgers` and `tally_get_stock_items` under `includeAllFields`
+were not, and turned out to be the largest win found: **54 full-detail ledgers
+fell from ~37,700 to ~4,600 tokens, 8.2x smaller** — bigger than the voucher
+saving, because a ledger's field-to-substance ratio is worse than a voucher's.
+Re-verified against live Tally after both rounds; `npm run check:live` still
+passes (17 calls, 14/14 assertions).
+
+### Correctness pass, 2026-08-13 — nine wrong-figure bugs
+
+Prompted by a user asking how accurate the data actually was. Answered by
+comparing tool output against live TallyPrime rather than against fixtures, which
+is the only way any of this could have been found: **every one of these bugs was
+green across the whole test suite.** Full detail and evidence in
+[known-limitations.md](known-limitations.md).
+
+The root cause, and the reason the rest were invisible:
+
+**Voucher ledger entries were never retrieved at all.** The `Voucher Register`
+report returns voucher headers only — 28KB of empty scaffolding per voucher across
+246 tags, and zero `ALLLEDGERENTRIES.LIST`. Every voucher parsed with
+`entries: []`, so every figure derived from movements was empty or wrong.
+`tally_check_tie_out` reported **34 balance exceptions and 0 vouchers checked** on
+books that balance to the paisa. Fixed by reading a `Voucher` collection with the
+entry lists named explicitly in `FETCH` — `<FETCH>*</FETCH>` is a trap that
+returns everything except the entries.
+
+Because those code paths had never executed against real data, they hid more:
+
+| Bug | Effect |
+|---|---|
+| Party entry counted twice on invoices (`ALLLEDGERENTRIES` and `LEDGERENTRIES` are alternatives, not halves) | 29 of 453 real vouchers failed double entry |
+| Every amount labelled `INR` regardless of company | A US company's dollar balances reported as rupees |
+| `??` on a legitimately-null running balance | Closing balance silently reported as the **opening** balance |
+| Unreadable amounts skipped in party-statement totals | Totals understated, and irreconcilable against `movementCount` |
+| Number parser salvaged a figure from anything | `"1000.00 Kgs."` → `100000`, **100× too large**, no warning |
+| Amount filter scored unreadable vouchers as 0 | `minAmount` silently dropped them from an audit population |
+| Numeric character references never decoded | Narrations showed `&#13;&#10;`; narration search could not match across a line break |
+| `matchedLedgerNames` compared case-sensitively | A party countable in its statement *and* as an "other mention" |
+| Company GST registration read from `vouchers[0]` only | Reported as absent while every other voucher carried it |
+
+Two things were deliberately **not** treated as bugs after checking live data:
+`Stock In Hand` and `Profit & Loss A/c` cannot satisfy a balance roll-forward
+because Tally derives those balances rather than posting to them, so they are now
+reported as `notCheckable` rather than as exceptions; and the empty
+`BILLALLOCATIONS.LIST` structures are genuinely empty on this company (bill-wise
+tracking is off on all 54 ledgers), not a retrieval failure.
+
+Verified after the pass: 516 tests pass including 6 new regression tests, `npm run
+check:live` passes 17 calls / 14-of-14 assertions, tie-out passes (452 vouchers, 41
+accounts, 0 exceptions), and the computed closing balance for the bank ledger now
+matches Tally's own reported figure exactly (`-72,707.96`) across 406 movements.
+
+One cost was accepted: the collection ignores `SVFROMDATE`/`SVTODATE`, so the whole
+book is fetched and dates are applied locally. The fetch is nonetheless faster than
+the register it replaced (8.6MB/2.0s against 21MB/7.8s), but a narrow date range no
+longer reduces TallyPrime's work — [performance.md](performance.md) is corrected
+accordingly.
+
+### Cross-path reconciliation pass, 2026-08-13 — every tool against every other tool
+
+Prompted by asking how to make accuracy provable rather than asserted. The
+existing checks each compared one tool against Tally; this pass compared the
+tools against **each other**, on live books, so that a figure had to survive two
+or three independent request-and-parse paths to count as verified. All 19 tools
+were exercised (the standing `check:live` covers 6), including the first-ever
+live calls to `balance_sheet` and `fund_flow`.
+
+15 reconciliations, all passing after the fix below:
+
+- Trial balance nets to zero; tie-out clean (452 vouchers, 41 accounts, 0
+  exceptions); every returned voucher's entries sum to zero.
+- `tally_summarise_movements` nets to zero on all five dimensions.
+- **Closing = opening + movements independently re-derived for all 38 checkable
+  ledgers** — masters path vs voucher-entry path, zero mismatches.
+- `tally_get_ledger_transactions` computed closing = Tally's reported closing =
+  ledger master (`City Bank`, −72,707.96, 406 movements), and the same
+  three-way agreement on `tally_get_party_statement` (494,397.50).
+- Every `Money` in every response carries the company's own currency.
+
+**One real defect found, fixed the same day:** TallyPrime's own Trial Balance
+carries `Stock In Hand` at its **opening** value while the Balance Sheet and the
+ledger masters carry **closing** — Current Assets differed by 96,620.00 (20%)
+between two tools, each faithfully reporting Tally's own figure.
+`tally_get_statement (trial_balance)` now cross-checks each group row against
+the ledger masters and warns with both figures, the difference, and the account
+whose movement explains it. 4 regression tests, confirmed to fail without the
+fix. Full account in
+[known-limitations.md](known-limitations.md#the-trial-balance-carries-stock-at-its-opening-value-the-balance-sheet-and-ledger-masters-carry-closing).
+
+Also established: `balance_sheet` and `fund_flow` ignore the end date exactly
+as the other three statements do (mid-year rows identical to full-year), so the
+guard that assumed as much is now verified rather than conservative.
+
+### Efficiency pass, 2026-08-13
+
+Prompted by asking how to spend fewer tokens per session without losing accuracy.
+Three of the seven candidate changes were taken; the rest were declined or deferred
+because they trade accuracy or completeness for size, which is the wrong trade for
+this project. Measurements in [performance.md](performance.md).
+
+**One fetch instead of two.** The nested structures — bank allocations, bill
+allocations, inventory lines, tax breakdowns — arrive in the ordinary curated
+request. Verified: the lean 8.6MB response and the 18.3MB `FETCH *` response carry
+identical numbers of them (948 / 977 / 466 / 1,032). One flag controlled both "keep
+the nested structures" and "keep every scalar field", so four tools were paying 10MB
+to reach data they already had. Splitting the flags: receivables 7.7s → **2.6s**,
+bank reconciliation 6.2s → **3.0s**, stock movements 5.8s → **2.6s**, and those
+tools now share the lean fetch rather than forcing a second one.
+
+**`tally_summarise_movements`.** Totals per ledger, group, month, voucher type or
+party, summed in Decimal on the server. Two reasons: "sales by month" cost ~16,939
+tokens as a voucher list and costs ~1,061 as a summary, and until now there was NO
+way to get a total — the only path was to return the rows and let the model add
+them, which §6 rule 1 forbids.
+
+It groups ENTRIES, never vouchers, because a voucher has no single amount and
+totalling one would mean choosing which leg counts as the transaction. That has a
+useful side effect: an unfiltered summary must net to exactly zero, which is double
+entry proven at aggregate level through a different code path from the tie-out. It
+does, on all four dimensions.
+
+Two defects were found and fixed while building it, both by cross-checking against
+Tally's own master rather than by testing:
+
+- The net was **sign-inverted** — the sales ledger summarised to −412,276.25 where
+  TallyPrime reports +412,276.25 for the same ledger. Arithmetically consistent, and
+  the opposite of what an accountant sees.
+- The `ledger` filter selected whole VOUCHERS, so "sales by month" returned twelve
+  months of zero (both legs of each transaction landed in the same bucket). It now
+  restricts entries.
+
+**Tool-list trim.** Measured over stdio: 19 tools cost ~18,000 tokens of description
+and schema before a single question is asked — more than any individual response. The
+evidence inside the descriptions ("verified live", measurements, the proof behind each
+rule) moved out to the docs, and the four notices repeated in all 19 tools were
+shortened. That took ~3,500 tokens off. Every behavioural RULE was kept verbatim and
+15 of them are now asserted present by a check over the built tool list, because
+cutting a rule to save tokens trades a token bill for a wrong answer.
+
+**Declined or deferred, with reasons:** summary-first defaults on the heavy tools and
+a smaller default `pageSize` were declined — both risk an incomplete answer reading as
+a complete one, and a receivables list missing page 2 looks exactly like a full one.
+`ALTERID`-based cache validation is deferred until it can be proven that Tally bumps
+`ALTERID` on every edit including deletions; if it does not, the server would serve
+stale figures confidently, which is worse than today's honest five-minute expiry. A
+disk cache is deferred as an architecture decision — it contradicts the "no database"
+line and writes a client's books to disk.
 
 ### Cross-cutting requirements — complete
 
@@ -77,7 +364,7 @@ notices in tool descriptions.
 | # | Requirement | Status |
 |---|---|---|
 | 1 | `build`, `typecheck`, `lint` pass | ✅ |
-| 2 | Unit + integration tests pass against the mock | ✅ 266 passing, 2 skipped |
+| 2 | Unit + integration tests pass against the mock | ✅ 524 passing, 1 skipped — current count in the Summary table above |
 | 3 | Every v1 tool returns non-error against real Tally, **and the trial balance matches Tally's own on-screen figures** | ✅ **reconciled exactly** |
 | 4 | Every tool discoverable over MCP, returning schema-valid JSON | ✅ |
 | 5 | No write/create/update/delete path anywhere | ✅ enforced by a test scanning `src/` |
@@ -142,7 +429,7 @@ arithmetically faithful.
 - Nested structures — real cheque detail recovered from `BANKALLOCATIONS.LIST`
 - 73 payables, 1 receivable, 15 GST tax ledgers
 - Company scoping guard, refusing a company Tally does not have open
-- All 29 tools listed and callable over real MCP stdio
+- All tools listed and callable over real MCP stdio
 
 ## Unproven: built but not observed
 

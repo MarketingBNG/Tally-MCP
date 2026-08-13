@@ -1,0 +1,259 @@
+<!-- Bill allocations for the opt-in ageing schedule on tally_get_outstanding.
+
+     Shape copied from day-book-trading.xml, whose BILLALLOCATIONS.LIST came
+     from a real export; all values here are invented. Period covered is
+     1-Apr-2026 to 31-Jul-2026, and every case is dated so that ageing as at
+     31-Jul-2026 lands in a known bucket.
+
+     Bramley (Sundry Creditors) — payables, so bills arrive POSITIVE:
+       B-1        raised 01-Apr, 100000, open        -> 121 days, "90+ days"
+       B-3        raised 10-Jul,  30000, open        ->  21 days, "0-30 days"
+       B-2        raised 01-Jul,  50000, paid 15-Jul -> nets to zero, settled
+       B-4        raised 05-Jul,  10000, paid 12000  -> net reverses, overSettled
+       B-OLD-99   settlement only, no raising alloc  -> earlier-bill settlement
+       (no ref)   On Account allocation              -> unreferenced
+
+     Northwind Retail Limited (Sundry Debtors) — receivables, so the bill
+     arrives NEGATIVE. This is the case that matters most: an open receivable
+     and an over-settled payable have the same sign, so anything judging
+     outstanding-ness by sign alone gets one of them wrong.
+       S-9        raised 05-Jul, -20000, open        ->  26 days, "0-30 days" -->
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <CMPINFO>
+    <COMPANY>0</COMPANY>
+    <VOUCHER>0</VOUCHER>
+   </CMPINFO>
+  </DESC>
+  <DATA>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Purchase" ACTION="Create">
+     <DATE>20260401</DATE>
+     <GUID>cccc-0001</GUID>
+     <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>B-1</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>100000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <NAME>B-1</NAME>
+       <BILLTYPE>New Ref</BILLTYPE>
+       <AMOUNT>100000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Accounting Charges</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-100000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Purchase" ACTION="Create">
+     <DATE>20260701</DATE>
+     <GUID>cccc-0002</GUID>
+     <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>B-2</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>50000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <NAME>B-2</NAME>
+       <BILLTYPE>New Ref</BILLTYPE>
+       <AMOUNT>50000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Accounting Charges</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-50000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Purchase" ACTION="Create">
+     <DATE>20260705</DATE>
+     <GUID>cccc-0003</GUID>
+     <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>B-4</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>10000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <NAME>B-4</NAME>
+       <BILLTYPE>New Ref</BILLTYPE>
+       <AMOUNT>10000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Accounting Charges</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-10000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Purchase" ACTION="Create">
+     <DATE>20260710</DATE>
+     <GUID>cccc-0004</GUID>
+     <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>B-3</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>30000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <NAME>B-3</NAME>
+       <BILLTYPE>New Ref</BILLTYPE>
+       <AMOUNT>30000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Accounting Charges</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-30000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Sales" ACTION="Create">
+     <DATE>20260705</DATE>
+     <GUID>cccc-0005</GUID>
+     <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>S-9</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Northwind Retail Limited</PARTYLEDGERNAME>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Northwind Retail Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-20000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <NAME>S-9</NAME>
+       <BILLTYPE>New Ref</BILLTYPE>
+       <AMOUNT>-20000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Sales - Domestic</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>20000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Payment" ACTION="Create">
+     <DATE>20260712</DATE>
+     <GUID>cccc-0006</GUID>
+     <VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>PY-4</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <NARRATION>Overpaid against B-4</NARRATION>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-12000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <NAME>B-4</NAME>
+       <BILLTYPE>Agst Ref</BILLTYPE>
+       <AMOUNT>-12000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>HDFC Bank Current A/c</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>12000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Payment" ACTION="Create">
+     <DATE>20260715</DATE>
+     <GUID>cccc-0007</GUID>
+     <VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>PY-1</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <NARRATION>Settled B-2 in full</NARRATION>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-50000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <NAME>B-2</NAME>
+       <BILLTYPE>Agst Ref</BILLTYPE>
+       <AMOUNT>-50000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>HDFC Bank Current A/c</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>50000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Payment" ACTION="Create">
+     <DATE>20260720</DATE>
+     <GUID>cccc-0008</GUID>
+     <VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>PY-2</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <NARRATION>Part payment against an invoice raised before this period</NARRATION>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-15000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <NAME>B-OLD-99</NAME>
+       <BILLTYPE>Agst Ref</BILLTYPE>
+       <AMOUNT>-15000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>HDFC Bank Current A/c</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>15000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <VOUCHER VCHTYPE="Payment" ACTION="Create">
+     <DATE>20260722</DATE>
+     <GUID>cccc-0009</GUID>
+     <VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+     <VOUCHERNUMBER>PY-3</VOUCHERNUMBER>
+     <PARTYLEDGERNAME>Bramley &amp; Sons Accessories Private Limited</PARTYLEDGERNAME>
+     <NARRATION>On account, not applied to any bill</NARRATION>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Bramley &amp; Sons Accessories Private Limited</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-5000.00</AMOUNT>
+      <BILLALLOCATIONS.LIST>
+       <!-- No reference at all: Tally's "On Account" case. The empty NAME is
+            dropped by the parser, so the allocation arrives with no reference
+            and must not be merged into a real bill. -->
+       <NAME/>
+       <BILLTYPE>On Account</BILLTYPE>
+       <AMOUNT>-5000.00</AMOUNT>
+      </BILLALLOCATIONS.LIST>
+     </ALLLEDGERENTRIES.LIST>
+     <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>HDFC Bank Current A/c</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>5000.00</AMOUNT>
+     </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>
+   </TALLYMESSAGE>
+  </DATA>
+ </BODY>
+</ENVELOPE>

@@ -1,0 +1,137 @@
+===============================================================================
+  TallyPrime for Claude
+  Ask Claude questions about your Tally books, in plain English.
+===============================================================================
+
+  This lets Claude read your TallyPrime data so you can ask things like:
+
+     "What is my cash balance?"
+     "Who owes me money, oldest first?"
+     "Show me last month's sales"
+     "What did I spend with Google this year?"
+
+  It can only READ your books. It cannot create, change or delete anything in
+  TallyPrime. There is no way for it to alter your accounts.
+
+
+-------------------------------------------------------------------------------
+  BEFORE YOU START
+-------------------------------------------------------------------------------
+
+  Three things need to be true. All of them are one-time, except the last.
+
+  1. Claude Desktop is installed on this computer.
+
+  2. TallyPrime's connection setting is switched on. It is OFF by default.
+
+        a. Open TallyPrime.
+        b. From the Gateway of Tally, press  F1  and choose  Settings.
+        c. Choose  Connectivity.
+        d. Choose  Client/Server configuration.
+        e. Set  TallyPrime acts as  to  Both  (or  Server ).
+        f. Check that  Port  is  9000.
+        g. Press  Ctrl+A  to save.
+
+     You only do this once on this computer.
+
+  3. TallyPrime is OPEN, with your company loaded, whenever you want to ask
+     Claude something.
+
+     This one is not optional and cannot be worked around. Tally only answers
+     while it is running, and it serves one company at a time -- whichever one
+     you have open. If you want to ask about a different company, open that
+     company in Tally first.
+
+
+-------------------------------------------------------------------------------
+  HOW TO INSTALL
+-------------------------------------------------------------------------------
+
+  1. Put this folder somewhere it can stay. Your Documents folder is fine.
+     Do not run it from inside the zip file.
+
+  2. Double-click  Setup
+
+     It will tell you what it did, and whether it could see your Tally.
+
+  3. Close Claude Desktop completely, then open it again.
+
+     Closing the window is NOT enough. Claude keeps running in the
+     notification area, next to the clock. Right-click its icon there and
+     choose Quit, then start Claude Desktop again.
+
+  4. Ask Claude:  "What is my cash balance in Tally?"
+
+  That is it.
+
+
+-------------------------------------------------------------------------------
+  IF SOMETHING IS NOT WORKING
+-------------------------------------------------------------------------------
+
+  Double-click  Check-Tally
+
+  It checks everything and tells you, in plain language, what to fix. It reads
+  only; it changes nothing.
+
+  The two most common problems:
+
+     "Claude cannot see my Tally"
+        TallyPrime is closed, or step 2 above was never done.
+        Run Check-Tally -- it will tell you which.
+
+     "It worked yesterday, not today"
+        Usually TallyPrime is not open yet, or no company is loaded.
+
+
+-------------------------------------------------------------------------------
+  IF YOU MOVE THIS FOLDER
+-------------------------------------------------------------------------------
+
+  Double-click  Setup  again. That is the whole fix.
+
+  Claude remembers where this folder was. Moving or renaming it breaks the
+  link, and running Setup again repairs it.
+
+
+-------------------------------------------------------------------------------
+  INSTALLING A NEWER VERSION
+-------------------------------------------------------------------------------
+
+  1. Close Claude Desktop completely -- including its icon by the clock.
+     This matters. If Claude is still running, some files cannot be replaced
+     and you will end up with a half-updated folder.
+
+  2. Unzip the new version.
+
+  3. Double-click  Setup
+
+  4. Open Claude Desktop again.
+
+  To check which version you have: double-click Check-Tally, or just ask
+  Claude "what version of the Tally connection are you using?"
+
+
+-------------------------------------------------------------------------------
+  REMOVING IT
+-------------------------------------------------------------------------------
+
+  Delete this folder. Nothing was installed anywhere else on your computer.
+
+  Claude Desktop will still have an entry pointing at the folder you deleted;
+  it will simply stop working, and can be left alone or removed by whoever set
+  this up for you.
+
+
+-------------------------------------------------------------------------------
+  A NOTE ON YOUR DATA
+-------------------------------------------------------------------------------
+
+  This program talks to TallyPrime on this computer only, over your own
+  machine's internal connection. It does not send your books anywhere by
+  itself.
+
+  Claude Desktop does send the specific figures you ask about to Claude, in
+  order to answer your question -- the same as if you had typed them in. If
+  that matters for a particular client, ask about that client's data only when
+  you mean to.

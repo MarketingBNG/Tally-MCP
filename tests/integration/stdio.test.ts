@@ -118,6 +118,10 @@ describe.skipIf(!built)('stdio integration', () => {
       const tools = (response.result as { tools: { name: string; description: string }[] }).tools;
       const names = tools.map((tool) => tool.name);
       expect(names).toContain('tally_connection_status');
+      // Registration in mcpServer.ts is easy to forget on a new tool, and the
+      // symptom is invisible until a real client asks for the list.
+      expect(names).toContain('tally_get_voucher_types');
+      expect(names).toContain('tally_get_bank_reconciliation');
 
       // Tool descriptions are load-bearing: Claude selects on them.
       const status = tools.find((tool) => tool.name === 'tally_connection_status');

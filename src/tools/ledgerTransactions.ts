@@ -1,25 +1,28 @@
 import { z } from 'zod';
-import { Decimal } from 'decimal.js';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { buildLedgerListRequest, buildVoucherRegisterRequest } from '../tally/requests.js';
-import { normalizeLedgers, normalizeVouchers, type Voucher } from '../tally/normalize.js';
 import { TallyError } from '../tally/TallyError.js';
-import { DEFAULT_CURRENCY, type Money } from '../utils/numbers.js';
 import {
   companySchema,
   dateRangeSchema,
   paginationSchema,
+  PERIOD_NOTE,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
 } from '../schemas/common.js';
 import { paginate, resolvePagination } from '../utils/pagination.js';
 import {
-  assertCompanyIsLoaded,
   assertResultSetFits,
+  findByName,
+  fromPage,
+  noteEmptyDefaultedPeriod,
+  periodWasDefaulted,
   resolvePeriod,
   runTool,
   type ToolDeps,
 } from './toolResult.js';
+import { buildMovements } from './ledgerMovements.js';
+import { fetchLedgers } from './ledgers.js';
+import { fetchVouchers } from './vouchers.js';
 
 /**
  * Per-ledger transaction statement.
@@ -61,8 +64,7 @@ const DESCRIPTION = [
     'not the end of the range requested here, so the two agree only when the range covers the ' +
     'whole period.',
   '',
-  'PERIOD: if fromDate and toDate are both omitted, the Indian financial year containing today ' +
-    'is used, and the period used is echoed back. Supply both dates or neither.',
+  PERIOD_NOTE,
   '',
   'PAGINATION: client-side over a full fetch of the period. The running balance is computed ' +
     'across the WHOLE period before slicing, so page 2 continues correctly from page 1.',
@@ -75,26 +77,6 @@ const DESCRIPTION = [
 const NARROW_HINT =
   'Narrow the date range. Tally returns the whole period in one response, so a shorter period ' +
   'is the only way to make this query smaller.';
-
-export interface LedgerMovement {
-  date: string | null;
-  voucherNumber: string | null;
-  voucherType: string | null;
-  /** Party on the voucher, where Tally recorded one. */
-  partyLedgerName: string | null;
-  narration: string | null;
-  /** The other ledgers on this voucher — what the entry was against. */
-  contraLedgers: string[];
-  amount: Money | null;
-  side: 'debit' | 'credit';
-  /**
-   * Balance after this entry, computed by this server rather than reported by
-   * Tally. Null when an amount could not be read, since continuing the
-   * running total past an unreadable figure would make every later balance
-   * wrong without saying so.
-   */
-  runningBalance: Money | null;
-}
 
 export function registerLedgerTransactionTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -109,23 +91,14 @@ export function registerLedgerTransactionTools(server: McpServer, deps: ToolDeps
       }),
     },
     async (args) =>
-      runTool('tally_get_ledger_transactions', deps.logger, async () => {
+      runTool('tally_get_ledger_transactions', deps, async () => {
         const pagination = resolvePagination(args.page, args.pageSize);
         const period = resolvePeriod(args.fromDate, args.toDate);
-        await assertCompanyIsLoaded(deps, args.company);
-
-        const companyOption = args.company === undefined ? {} : { company: args.company };
 
         // The ledger master, for the opening balance and to confirm the ledger
         // exists at all — a typo should not look like a ledger with no activity.
-        const ledgerResponse = await deps.client.send(
-          buildLedgerListRequest({ ...companyOption, format: deps.config.tallyPreferredFormat }),
-          'standard'
-        );
-        const ledgers = normalizeLedgers(ledgerResponse.body).data;
-        const ledger =
-          ledgers.find((candidate) => candidate.name === args.name) ??
-          ledgers.find((candidate) => candidate.name.toLowerCase() === args.name.toLowerCase());
+        const { ledgers, warnings: ledgerWarnings } = await fetchLedgers(deps, args.company);
+        const ledger = findByName(ledgers, args.name, (candidate) => candidate.name);
 
         if (ledger === undefined) {
           throw new TallyError(
@@ -133,27 +106,25 @@ export function registerLedgerTransactionTools(server: McpServer, deps: ToolDeps
             `No ledger named "${args.name}" exists in the loaded company.`,
             {
               suggestion:
-                'Check the spelling, or use tally_search_ledgers to find the ledger by a fragment of its name.',
+                'Check the spelling, or use tally_get_ledgers with a `query` fragment to find the ledger by name.',
             }
           );
         }
 
-        const voucherResponse = await deps.client.send(
-          buildVoucherRegisterRequest({
-            ...companyOption,
-            fromDate: period.fromDate,
-            toDate: period.toDate,
-            format: deps.config.tallyPreferredFormat,
-          }),
-          'report'
-        );
-        const { data: vouchers, warnings: voucherWarnings } = normalizeVouchers(
-          voucherResponse.body
+        const { vouchers, warnings: voucherWarnings } = await fetchVouchers(
+          deps,
+          args.company,
+          period
         );
 
         const warnings = [
-          ...ledgerResponse.repairs,
-          ...voucherResponse.repairs,
+          ...(await noteEmptyDefaultedPeriod(
+            deps,
+            period,
+            periodWasDefaulted(args.fromDate, args.toDate),
+            vouchers.length
+          )),
+          ...ledgerWarnings,
           ...voucherWarnings,
         ];
 
@@ -162,7 +133,7 @@ export function registerLedgerTransactionTools(server: McpServer, deps: ToolDeps
 
         const last = movements[movements.length - 1];
 
-        return {
+        return fromPage(paginate(movements, pagination, warnings), {
           ledger: {
             name: ledger.name,
             parent: ledger.parent,
@@ -170,78 +141,26 @@ export function registerLedgerTransactionTools(server: McpServer, deps: ToolDeps
           },
           period,
           openingBalance: ledger.openingBalance,
-          /** Computed here from opening balance plus the period movements. */
-          computedClosingBalance: last?.runningBalance ?? ledger.openingBalance,
+          /**
+           * Computed here from opening balance plus the period movements.
+           *
+           * NOT `last?.runningBalance ?? ledger.openingBalance`. `??` fires on
+           * null as well as undefined, and a running balance is legitimately
+           * null: `buildMovements` abandons the running total for good the
+           * moment any entry carries an unreadable amount. So the fallback
+           * reported the OPENING balance as the closing one — a real figure in
+           * the wrong field, indistinguishable from a ledger that genuinely did
+           * not move. The two cases are different and only one may fall back:
+           *   - no movements at all  -> closing IS opening
+           *   - total not computable -> null, and the warning says why
+           */
+          computedClosingBalance: last === undefined ? ledger.openingBalance : last.runningBalance,
           /**
            * Tally's own figure, as at its current period end rather than the
            * requested range. Provided for comparison, not as the same thing.
            */
           tallyReportedClosingBalance: ledger.closingBalance,
-          ...paginate(movements, pagination, warnings),
-        };
+        });
       })
   );
-}
-
-/**
- * Turn vouchers into movements on one ledger, carrying a running balance.
- *
- * Sorted by date before accumulating: the register is returned in Tally's own
- * order, and a running balance that follows an unsorted sequence is arithmetic
- * nonsense even though every individual figure is right.
- */
-function buildMovements(
-  vouchers: readonly Voucher[],
-  ledgerName: string,
-  openingBalance: Money | null,
-  warnings: string[]
-): LedgerMovement[] {
-  const target = ledgerName.toLowerCase();
-  const movements: LedgerMovement[] = [];
-
-  const sorted = [...vouchers].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
-
-  let running: Decimal | null = new Decimal(openingBalance?.amount ?? 0);
-  const currency = openingBalance?.currency ?? DEFAULT_CURRENCY;
-
-  if (openingBalance === null) {
-    // No opening balance means the running total has no anchor. Starting from
-    // zero would silently present a relative total as an absolute balance.
-    running = null;
-    warnings.push(
-      `TallyPrime reported no opening balance for "${ledgerName}", so running balances cannot be computed and are reported as null. The movements themselves are unaffected.`
-    );
-  }
-
-  for (const voucher of sorted) {
-    for (const entry of voucher.entries) {
-      if (entry.ledgerName.toLowerCase() !== target) continue;
-
-      if (entry.amount === null) {
-        // One unreadable amount invalidates every balance after it.
-        running = null;
-        warnings.push(
-          `An entry on voucher ${voucher.voucherNumber ?? '(no number)'} had an unreadable amount, so running balances from that point on are reported as null.`
-        );
-      } else if (running !== null) {
-        running = running.plus(entry.amount.amount);
-      }
-
-      movements.push({
-        date: voucher.date,
-        voucherNumber: voucher.voucherNumber,
-        voucherType: voucher.voucherType,
-        partyLedgerName: voucher.partyLedgerName,
-        narration: voucher.narration,
-        contraLedgers: voucher.entries
-          .filter((other) => other.ledgerName.toLowerCase() !== target)
-          .map((other) => other.ledgerName),
-        amount: entry.amount,
-        side: entry.side,
-        runningBalance: running === null ? null : { amount: running.toFixed(), currency },
-      });
-    }
-  }
-
-  return movements;
 }

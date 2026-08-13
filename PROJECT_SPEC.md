@@ -138,7 +138,7 @@ Tally generally does not paginate server-side; a request returns its full result
 
 Split into two tiers. Build and fully verify v1 against real TallyPrime (using the ground-truth samples above) before starting v2 — don't build all 20+ tools in parallel against assumptions.
 
-For every tool, write a description that tells Claude: what it does, when to use it, what filters it takes, what it returns, what it does *not* return, and whether pagination applies. Tool descriptions are load-bearing — Claude picks tools based on them, so don't be lazy here. Also avoid unnecessary overlap between tools (e.g. don't ship both `tally_get_sales` and a redundant `tally_list_vouchers(type: Sales)` path that does the same thing under a different name — pick one, and let the other tool's description explain the distinction if you keep both).
+For every tool, write a description that tells Claude: what it does, when to use it, what filters it takes, what it returns, what it does *not* return, and whether pagination applies. Tool descriptions are load-bearing — Claude picks tools based on them, so don't be lazy here. Also avoid unnecessary overlap between tools (e.g. don't ship both `tally_get_trading (family: 'sales')` and a redundant `tally_get_vouchers(type: Sales)` path that does the same thing under a different name — pick one, and let the other tool's description explain the distinction if you keep both).
 
 ### v1 — core (build, verify against real Tally, and confirm working before moving to v2)
 
@@ -149,36 +149,36 @@ For every tool, write a description that tells Claude: what it does, when to use
 - `tally_list_companies`, `tally_get_company`
 
 **Ledgers**
-- `tally_list_ledgers`, `tally_search_ledgers`, `tally_get_ledger`, `tally_get_ledger_transactions`
+- `tally_get_ledgers`, `tally_get_ledgers`, `tally_get_ledger`, `tally_get_ledger_transactions`
 
 **Vouchers**
-- `tally_list_vouchers`, `tally_get_voucher`, `tally_search_vouchers`, `tally_get_day_book`
+- `tally_get_vouchers`, `tally_get_vouchers`, `tally_get_vouchers`, `tally_get_day_book`
 - Filters: date range, voucher type/number, ledger, party, amount range, narration, reference number, pagination.
-- `tally_get_voucher` should return everything useful for investigating a transaction (ledger entries, debit/credit, tax, inventory allocations, bill allocations, cost centres, godowns, currency, status, cancellation/optional status, source references) — but skip Tally metadata that has no accounting relevance.
+- `tally_get_vouchers` should return everything useful for investigating a transaction (ledger entries, debit/credit, tax, inventory allocations, bill allocations, cost centres, godowns, currency, status, cancellation/optional status, source references) — but skip Tally metadata that has no accounting relevance.
 
 **Financial reports**
-- `tally_get_trial_balance`, `tally_get_profit_loss`, `tally_get_balance_sheet`
+- `tally_get_statement (statement: 'trial_balance')`, `tally_get_statement (statement: 'profit_loss')`, `tally_get_statement (statement: 'balance_sheet')`
 - Return structured line items with correct debit/credit sign — never coerce negative accounting values to positive.
 
 ### v2 — expansion (only after v1 is verified and working)
 
 **Company**
-- `tally_get_company_features`
+- `tally_get_company (includeFeatures: true)`
 
 **Sales / Purchases**
-- `tally_get_sales`, `tally_search_sales`, `tally_get_purchases`, `tally_search_purchases`
+- `tally_get_trading (family: 'sales')`, `tally_get_trading (family: 'sales')`, `tally_get_trading (family: 'purchases')`, `tally_get_trading (family: 'purchases')`
 
 **Inventory**
-- `tally_list_stock_items`, `tally_search_stock_items`, `tally_get_stock_item`, `tally_get_inventory_movements`
+- `tally_get_stock_itemss`, `tally_get_stock_itemss`, `tally_get_stock_items`, `tally_get_inventory_movements`
 
 **More reports**
-- `tally_get_cash_flow`, `tally_get_fund_flow` — subject to the fallback policy above; these are plausible candidates for `TALLY_UNSUPPORTED_OPERATION` if the export path isn't reliable.
+- `tally_get_statement (statement: 'cash_flow')`, `tally_get_statement (statement: 'fund_flow')` — subject to the fallback policy above; these are plausible candidates for `TALLY_UNSUPPORTED_OPERATION` if the export path isn't reliable.
 
 **Outstanding**
-- `tally_get_receivables`, `tally_get_payables` — party, invoice, reference, due date, amount, overdue amount, age where available.
+- `tally_get_outstanding (side: 'receivable')`, `tally_get_outstanding (side: 'payable')` — party, invoice, reference, due date, amount, overdue amount, age where available.
 
 **GST**
-- `tally_get_gst_summary`, `tally_get_gst_transactions` — return actual Tally data only; never calculate or infer tax liability. Also a fallback-policy candidate.
+- `tally_get_gst (view: 'summary')`, `tally_get_gst (view: 'transactions')` — return actual Tally data only; never calculate or infer tax liability. Also a fallback-policy candidate.
 
 **Search**
 - `tally_search` — cross-entity convenience search (ledger/voucher/stockItem), scoped by company/date range, not an unbounded full-database query.
@@ -234,7 +234,7 @@ For every tool, write a description that tells Claude: what it does, when to use
 Don't tell me v1 is finished until all of this is true:
 1. `npm run build`, `npm run typecheck`, `npm run lint` all pass.
 2. v1 unit + integration tests pass against the mock built from real samples.
-3. If real Tally was reachable: every v1 tool returned a non-error, schema-valid response against real data, **and** `tally_get_trial_balance` totals were compared against TallyPrime's own on-screen trial balance and match — including sign and debit/credit placement. A mismatch is a v1 blocker, not a note. This is the cheapest end-to-end check on the whole normalization and money-handling layer, so don't skip it.
+3. If real Tally was reachable: every v1 tool returned a non-error, schema-valid response against real data, **and** `tally_get_statement (statement: 'trial_balance')` totals were compared against TallyPrime's own on-screen trial balance and match — including sign and debit/credit placement. A mismatch is a v1 blocker, not a note. This is the cheapest end-to-end check on the whole normalization and money-handling layer, so don't skip it.
 4. Every v1 tool is discoverable via the MCP server and returns valid structured JSON matching its Zod schema.
 5. Grep the codebase for any write/create/update/delete Tally operation — confirm there are none.
 6. Confirm the Claude Desktop config example you wrote actually matches current Claude Desktop docs.

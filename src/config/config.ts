@@ -58,7 +58,77 @@ const configSchema = z.object({
     .max(100_000, 'TALLY_MAX_RECORDS must be at most 100000.')
     .default(5000),
 
+  /**
+   * Ceiling on the serialised size of a single tool response, in bytes.
+   *
+   * This is a *transport* limit, distinct from TALLY_MAX_RECORDS above, which
+   * counts records. The two are not interchangeable: MCP clients cap the size
+   * of a tool result — Claude Desktop rejects anything over 1MB with "Tool
+   * result is too large" — and a response can breach that while holding a
+   * fraction of the record ceiling. One full-field voucher runs to roughly
+   * 18 KB, so the default page of 100 is about 1.7MB: comfortably inside 5000
+   * records and comfortably over the client's limit.
+   *
+   * When a client discards an oversized result, Claude never sees it and the
+   * user gets a dead end with nothing to act on. Refusing here instead, with
+   * the page size that would fit, keeps the failure inside this server's own
+   * vocabulary where it can say what to do about it.
+   *
+   * ## Why the default is far below the client's 1MB limit
+   *
+   * It was 900,000 — chosen as headroom under Claude Desktop's 1MB cap. That
+   * conflated two different budgets. The transport limit is about whether a
+   * single message can be delivered; the **context** limit is about how many
+   * such messages fit in a conversation. A 900 KB response is roughly 225,000
+   * tokens, so one legal call could consume a fifth of a large context window
+   * and a whole small one — measured on a real audit, a single page of 25
+   * full-detail vouchers cost about 54,000 tokens.
+   *
+   * 150,000 bytes is roughly 37,000 tokens: enough for a substantial page,
+   * small enough that no one call dominates the conversation it belongs to.
+   * Raise it deliberately (`TALLY_MAX_RESPONSE_BYTES`) for a one-off deep dive;
+   * the RESPONSE_TOO_LARGE error already names a page size that fits, computed
+   * from the measured size, so the normal remedy is a retry rather than config.
+   */
+  tallyMaxResponseBytes: z.coerce
+    .number()
+    .int()
+    .min(10_000, 'TALLY_MAX_RESPONSE_BYTES must be at least 10000.')
+    .max(50_000_000, 'TALLY_MAX_RESPONSE_BYTES must be at most 50000000.')
+    .default(150_000),
+
   logLevel: z.enum(LOG_LEVELS).default('info'),
+
+  /**
+   * How long an identical Tally request, and the records parsed from it, may be
+   * served from memory instead of being fetched and parsed again.
+   *
+   * TallyPrime has no server-side cache of its own, and a single audit turns into
+   * many tool calls over the same period's voucher register — bank
+   * reconciliation, outstanding, GST, inventory movements and the voucher list
+   * all read it. Measured live on a company with 453 vouchers: that register is
+   * **21MB and takes about 7 seconds** for TallyPrime to produce, of which 87% is
+   * Tally's own time and 13% is parsing here.
+   *
+   * **Default raised from 20,000 to 300,000 (5 minutes) on 2026-08-13**, because
+   * 20 seconds is shorter than a person thinks for. A real audit pauses between
+   * questions while the answer is read, so the cache lapsed constantly and each
+   * lapse cost the full 7 seconds again — the single largest contributor to "the
+   * audit takes too long". At 5 minutes an audit of one period runs off one fetch.
+   *
+   * The trade-off, stated so it is a decision rather than an accident: a change
+   * made in TallyPrime **while** a conversation is in progress may not be seen for
+   * up to 5 minutes. This server cannot write, so the only way to hit it is to
+   * edit the books by hand mid-audit. If that is a real risk for a session, set
+   * TALLY_CACHE_TTL_MS lower for it; 0 disables caching entirely and restores the
+   * old behaviour of re-fetching everything.
+   */
+  tallyCacheTtlMs: z.coerce
+    .number()
+    .int()
+    .min(0, 'TALLY_CACHE_TTL_MS must be at least 0.')
+    .max(300_000, 'TALLY_CACHE_TTL_MS must be at most 300000.')
+    .default(300_000),
 });
 
 export type AppConfig = Readonly<Omit<z.infer<typeof configSchema>, 'tallyReportTimeoutMs'>> & {
@@ -88,6 +158,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tallyReportTimeoutMs: env.TALLY_REPORT_TIMEOUT_MS,
     tallyPreferredFormat: env.TALLY_PREFERRED_FORMAT,
     tallyMaxRecords: env.TALLY_MAX_RECORDS,
+    tallyMaxResponseBytes: env.TALLY_MAX_RESPONSE_BYTES,
+    tallyCacheTtlMs: env.TALLY_CACHE_TTL_MS,
     logLevel: env.LOG_LEVEL,
   });
 

@@ -1,5 +1,7 @@
 # tally-mcp
 
+[![CI](https://github.com/MarketingBNG/Tally-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/MarketingBNG/Tally-MCP/actions/workflows/ci.yml)
+
 A read-only [MCP](https://modelcontextprotocol.io) server that lets Claude
 Desktop read accounting data directly out of TallyPrime running on the same
 machine, so you can audit and analyse it in plain language.
@@ -10,13 +12,17 @@ counts as suspicious — that judgement depends on your business and your
 question, and it stays with you.
 
 > **Status: v1 and v2 feature-complete — all 8 done-criteria met.**
-> 29 tools, four prompts and two resources, exercised against a live TallyPrime
-> install and from inside real Claude Desktop. `tally_get_trial_balance` has
-> been **reconciled row by row against TallyPrime's own on-screen trial
-> balance** — all 9 rows, both columns, and a grand total matching on each side.
-> What remains is verification, not construction: the inventory and
-> sales/purchase tools are built and fixture-tested but have not yet met a
-> company that carries stock or records sales.
+> 19 tools, four prompts and two resources, exercised against two live TallyPrime
+> installs and from inside real Claude Desktop. `tally_get_statement` has been
+> **reconciled row by row against TallyPrime's own on-screen trial balance** —
+> all 9 rows, both columns, and a grand total matching on each side. Inventory
+> and sales/purchase tools have since met a company carrying real stock and
+> sales, and a second live pass on 2026-08-12 verified voucher types, bank
+> reconciliation, statement comparison and bill ageing, finding and fixing two
+> defects fixtures alone could not have caught (see
+> [known-limitations.md](docs/known-limitations.md)). Two paths remain
+> unproven for want of a company that reconciles its bank or tracks bills —
+> `reconciled: true` and ageing against real bills.
 >
 > Full breakdown in [docs/project-status.md](docs/project-status.md), including
 > what is built but not yet proven against real data. See
@@ -172,59 +178,205 @@ fix.
 | `TALLY_TIMEOUT_MS` | `30000` | Timeout for ordinary requests |
 | `TALLY_REPORT_TIMEOUT_MS` | 4× base | Timeout for large reports |
 | `TALLY_PREFERRED_FORMAT` | `json` | `json` or `xml`; JSON needs Tally 7.0+ |
-| `TALLY_MAX_RECORDS` | `5000` | Refuse queries larger than this |
+| `TALLY_MAX_RECORDS` | `5000` | Refuse queries returning more records than this |
+| `TALLY_MAX_RESPONSE_BYTES` | `150000` | Refuse responses larger than this. Sized by **context** budget (~37,500 tokens), not by the client's 1MB message cap — see below |
+| `TALLY_CACHE_TTL_MS` | `300000` | Reuse an identical Tally response, and the records parsed from it, for this long. **The biggest lever on audit speed** — see below. `0` disables caching |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, `debug` |
 
 Invalid configuration fails at startup with a message naming every bad value
 at once, rather than failing mysteriously on first use.
 
+### Speed and size: the two settings that matter
+
+> Per-tool token and timing figures for all 19 tools, measured against a live
+> install, are in **[docs/performance.md](docs/performance.md)**.
+
+Both defaults were changed on 2026-08-13 after measuring a real audit, and both
+are worth understanding before tuning.
+
+**`TALLY_CACHE_TTL_MS` governs how long an audit takes.** One period's voucher
+register is **21MB and takes TallyPrime about 7 seconds** — 87% of the wall clock
+is Tally's own time, 13% is parsing here. Five separate tools read that same
+register: bank reconciliation, outstanding, GST, inventory movements, and the
+voucher list. At the old 20-second TTL the cache lapsed while you read the last
+answer, so each question paid the 7 seconds again.
+
+Measured on a 9-question audit of a full financial year with 25 seconds of
+thinking between questions:
+
+| Cache TTL | Time spent waiting |
+|---|---|
+| 20,000 (old) | **64s** |
+| 300,000 (new) | **12s** — an 81% cut |
+
+Both the raw response and the *parsed records* are cached now; the parse alone was
+1.2 seconds per call. The trade-off: an edit made in TallyPrime while a
+conversation is running may not be seen for up to five minutes. This server cannot
+write, so the only way to hit that is editing the books by hand mid-audit. Every
+response carries `data_fetched_at` — when the data was actually read, as distinct
+from `as_of_timestamp`, when the answer was produced — so a cached figure is never
+mis-dated in a workpaper.
+
+**`TALLY_MAX_RESPONSE_BYTES` governs how much of your conversation one answer
+eats.** It was 900,000, chosen as headroom under Claude Desktop's 1MB message cap.
+That conflated transport budget with context budget: a 900KB response is roughly
+225,000 tokens. Raise it deliberately for a one-off deep dive, but expect one such
+call to dominate the conversation.
+
 ## Tools
 
 ### Available now
+
+19 tools, registered in [src/server/mcpServer.ts](src/server/mcpServer.ts). Modes
+of the same tool (e.g. list vs. get-by-name) are noted in one row rather than
+repeated.
 
 | Tool | Purpose |
 |---|---|
 | `tally_connection_status` | Check reachability; returns a specific fix on failure |
 | `tally_list_companies` | The company TallyPrime currently has loaded |
-| `tally_get_company` | Company profile — size, groups, and which fields it actually uses |
-| `tally_list_ledgers` | Chart of accounts with opening/closing balances |
-| `tally_search_ledgers` | Find ledgers by name or parent group |
-| `tally_get_ledger` | One ledger by exact name |
+| `tally_get_company` | Company profile — size, groups, fields in use; `includeFeatures` infers which TallyPrime features the data shows in use |
+| `tally_get_ledgers` | Chart of accounts: list, search, fetch one by exact `name`, or filter with `conditions` — balances, GSTIN |
+| `tally_get_groups` | The chart-of-accounts group hierarchy: list, search, or filter |
+| `tally_get_voucher_types` | Transaction types this company defines, with the built-in each derives from and its numbering series |
 | `tally_get_ledger_transactions` | Statement of movements on one ledger, with a running balance |
-| `tally_get_trial_balance` | Closing debit/credit per group |
-| `tally_get_balance_sheet` | Financial position at a date |
-| `tally_get_profit_loss` | Income and expenditure for a period |
-| `tally_list_vouchers` | Transactions in a period, with ledger entries |
-| `tally_search_vouchers` | Filter by ledger, party, narration, type, amount, or any field value |
-| `tally_get_voucher` | One voucher in full, including nested inventory, bank and tax detail |
-| `tally_get_company_features` | Which TallyPrime features this company's data shows in use |
-| `tally_get_sales` / `tally_search_sales` | Sales-family vouchers, resolved by base voucher type |
-| `tally_get_purchases` / `tally_search_purchases` | Purchase-family vouchers |
-| `tally_list_stock_items` / `tally_search_stock_items` / `tally_get_stock_item` | Inventory masters |
-| `tally_get_inventory_movements` | Stock movements, from voucher inventory lines |
-| `tally_get_receivables` / `tally_get_payables` | Party balances with bill references |
-| `tally_get_gst_summary` / `tally_get_gst_transactions` | GST as recorded, never calculated |
+| `tally_get_party_statement` | Every matching ledger for a party name, plus other mentions, in one call |
+| `tally_get_statement` | `trial_balance` / `balance_sheet` / `profit_loss` / `cash_flow` / `fund_flow`, optionally compared across two periods — see below |
+| `tally_get_vouchers` | Transactions in a period: list, filter by ledger/party/narration/type/amount/field, fetch one by number, or restrict to a trading `family` |
+| `tally_summarise_movements` | Totals per ledger, group, month, voucher type or party, summed in exact decimal on the server. Use it whenever the answer is a figure rather than a list — about 16x smaller than reading the transactions |
+| `tally_get_stock_items` | Inventory masters: list, search, fetch one by name, or filter |
+| `tally_get_inventory_movements` | Stock movements, derived from voucher inventory lines |
+| `tally_get_outstanding` | Receivables or payables with bill references; `includeAgeing` buckets by bill AGE, not overdue — see below |
+| `tally_get_gst` | `summary` (tax ledgers/registration in use) or `transactions` (GST-bearing vouchers), as recorded, never calculated |
 | `tally_search` | Cross-entity search over ledgers, vouchers and stock items |
-| `tally_get_cash_flow` / `tally_get_fund_flow` | Registered, always `TALLY_UNSUPPORTED_OPERATION` — see below |
+| `tally_get_bank_reconciliation` | Bank instruments with cheque/UTR detail and reconciled status — see below |
+| `tally_check_tie_out` | Does the arithmetic hold? Every voucher balances, every ledger rolls forward |
+| `tally_calculate_materiality` | Overall / performance / clearly-trivial thresholds, with the basis recorded |
 
-All 29 are exposed over MCP and exercised against a live TallyPrime install.
+All are exposed over MCP and exercised against a live TallyPrime install. The
+four newest — voucher types, bank reconciliation, statement comparison, and
+ageing — were verified with 30 sequential calls against a real company on
+2026-08-12, at the shipped size and record limits. That run found and fixed two
+defects fixtures could not have caught, and left two paths still unproven
+(`reconciled: true`, and ageing against real bills, neither of which exists on any
+company available so far). Both are recorded in
+[docs/project-status.md](docs/project-status.md#live-verification-of-the-four-2026-08-12).
+Per-tool token and timing figures for all 18: [docs/performance.md](docs/performance.md).
 
-### Two tools that deliberately refuse
+### Bank reconciliation, comparison and ageing — read the caveats
 
-`tally_get_cash_flow` and `tally_get_fund_flow` always fail with
-`TALLY_UNSUPPORTED_OPERATION` and explain why, rather than being omitted — an
-absent tool leaves Claude guessing, a refusing one redirects.
+Three of the newest capabilities produce output that looks more authoritative
+than the underlying data supports, so each states its own limits in the response
+rather than only in this README:
 
-Both need a classification (operating/investing/financing; sources/applications
-of funds) that is a judgement about the business, and this server holds no
-business rules. Producing one from an assumed mapping would present an invented
-classification as fact. The error points at
-`tally_get_ledger_transactions` and `tally_get_balance_sheet`, which return the
-underlying data so the statement can be assembled with its basis stated.
+- **`tally_get_bank_reconciliation`** derives from the bank instrument detail on
+  vouchers, not from TallyPrime's own Bank Reconciliation screen (that export ID
+  is unverified, and a wrong one can close TallyPrime). Reconciled status comes
+  from the bank statement date Tally stamps on an entry. If **no** entry in the
+  period carries one, the status is reported as `null` — unknown — and a filter
+  on status fails outright, because "nothing has been reconciled" and "this
+  company doesn't use the feature" are different answers. It lists instruments;
+  it does not draw up a reconciliation statement.
+- **The statements ignore the requested END date.** Verified live: TallyPrime
+  honours `fromDate` on the trial balance, P&L and cash flow and discards
+  `toDate`, accumulating to the financial year end — a three-month cash flow
+  request returned nine months. Every response now carries
+  `coversPeriodRequested`, and where it is false the figures are a cumulative
+  position, not the period asked for. **Period comparison is refused** unless the
+  period ends at the year end, because otherwise both sides accumulate to the same
+  end and the subtraction yields minus the whole of the earlier period — a wrong
+  figure of exactly plausible size. Beyond that, comparison pairs rows by name
+  only where unambiguous, and computes no change against a null.
+- **`includeAgeing`** buckets bills by how long ago they were **raised**, not by
+  how overdue they are — Tally does not reliably record credit terms, and this
+  server will not assume them. Bill references are netted first, and the schedule
+  covers only bills raised inside the requested period, which it says on every
+  call.
+
+Full reasoning for each: [docs/known-limitations.md](docs/known-limitations.md).
+
+### Every answer is wrapped in a provenance envelope
+
+Every data tool returns the same six fields around its own payload, so a figure
+can be traced and a partial answer can never pass for a complete one:
+
+```jsonc
+{
+  "data":             { /* the tool's own payload, unchanged */ },
+  "company_id":       "ACME TRADING PRIVATE LIMITED",  // by name; Tally exposes no company GUID
+  "as_of_timestamp":  "2026-08-12T16:31:00.000Z",
+  "source_query":     ["<ENVELOPE>…</ENVELOPE>"],      // every request sent, replayable
+  "row_count":        100,
+  "truncated":        true                              // did you get everything that matched?
+}
+```
+
+`truncated` is the one that matters. Before this envelope, three different
+tools signalled a partial result three different ways — a `hasMore` flag, a
+thrown error, or a nested `truncated` field — and a consumer reading only one
+of them could take a clipped list for the whole population. Now there is a
+single field, in the same place, on every reply. It is never guessed: a tool
+that cannot know whether it returned everything refuses instead.
+
+Failures carry `company_id`, `as_of_timestamp` and `source_query` too, so a
+diagnosis can see what was actually sent. They carry no `row_count` — nothing
+was returned, and a `0` there would read as "asked, found nothing" rather than
+"failed".
+
+`tally_connection_status` is the one exemption. It answers "did TallyPrime
+reply?" and returns no accounting data, so it has no company, no rows and
+nothing to truncate.
+
+`source_query` holds the literal XML sent to TallyPrime. Replaying it
+reproduces the figures — that is the point, and it is what makes a number in a
+workpaper defensible months later.
+
+### Tie-out, and the normalised ledger model underneath it
+
+`tally_check_tie_out` runs two independent checks: that every voucher's debits
+equal its credits, and that every ledger's closing balance equals its opening
+balance plus the period's movements. It is the first working piece of the
+`tie_out_gate` control, and it needs no warehouse — both sides of the
+comparison already come out of TallyPrime.
+
+Three things about it are deliberate:
+
+- **No tolerance band.** A one-paisa difference is an exception. Deciding what
+  is immaterial is the engagement team's judgement, not this server's — and
+  `tally_calculate_materiality` is where that judgement gets recorded.
+- **"Not checkable" is reported separately from "passed".** A ledger with no
+  opening balance, or a voucher with an unreadable amount, cannot be verified
+  either way. Counting those as passes would overstate the assurance.
+- **Its default period differs from every other tool's.** The comparison is
+  against Tally's period-end closing balance, so given no dates this checks the
+  financial year the company's books begin in, rather than the one containing
+  today. It says which range it used.
+
+It is also the first audit test written against the **normalised ledger model**
+([src/model/ledger.ts](src/model/ledger.ts)) rather than against Tally's own
+shapes, reached through the Tally adapter in
+[src/model/fromTally.ts](src/model/fromTally.ts). That model is a draft pending
+review — see [docs/normalised-ledger-model.md](docs/normalised-ledger-model.md),
+which sets out the one open decision (how a debit is represented) and why it
+has to be settled before a second accounting system is supported.
+
+### Cash flow and fund flow: movement, not classified statements
+
+`tally_get_statement (statement: 'cash_flow')` and `tally_get_statement (statement: 'fund_flow')` return TallyPrime's own
+month-by-month figures — one row per month with Tally's debit, credit and net
+columns, sign convention preserved (retrieval verified against a live install).
+
+What they deliberately do NOT do is classify. A formal cash flow statement
+splits movements into operating, investing and financing activities; a fund
+flow statement decides sources versus applications. Both are judgements about
+the business, and this server holds no business rules — so the data is labelled
+as monthly movement, and the tool descriptions instruct Claude to present it
+that way and to make any classification together with the user, stating the
+basis used.
 
 ### Voucher families, not voucher names
 
-`tally_get_sales` resolves which voucher types count as sales from Tally's own
+`tally_get_vouchers (family: 'sales')` resolves which voucher types count as sales from Tally's own
 voucher type list, matching on **base type** rather than name. A company that
 defines "Tax Invoice" deriving from `Sales` is included; matching the name for
 "sales" would have missed it and under-reported the period. The types actually
@@ -240,6 +392,17 @@ They contain **no accounting rules and no thresholds** — nothing defines what
 first, and the quirks of this data source that would otherwise produce a
 confidently wrong answer (null is not zero, debits arrive negative, one company
 at a time, fields differ per company).
+
+### Currency
+
+Every amount is labelled with the **loaded company's own base currency**, read from
+Tally rather than assumed. Note that Tally reports it as a *symbol* — `$`, `₹`,
+`Rs.` — and never as an ISO code, so do not treat the label as a currency code.
+
+Nothing here converts between currencies. A voucher denominated in a currency other
+than the company's base is currently labelled with the base currency; amounts are
+never wrong, but a multi-currency company would see such an entry mislabelled. See
+[docs/known-limitations.md](docs/known-limitations.md).
 
 ### Resources
 
@@ -281,7 +444,7 @@ puts boilerplate like `ABATEMENTPERCENTAGE` (present on all 330, always the
 same) at the top and buries the fields that carry information.
 
 `includeAllFields` defaults to **on** for single-record lookups
-(`tally_get_ledger`, `tally_get_voucher`) since those are usually
+(`tally_get_ledger`, `tally_get_vouchers`) since those are usually
 investigations, and **off** for list calls. On vouchers it costs nothing extra
 to retrieve — Tally already sends every field. On ledgers it is roughly 37x
 the payload, so it is opt-in.
@@ -299,8 +462,10 @@ only when the range covers the whole period.
 
 **`tally_get_day_book` is deliberately not exposed.** On a real install the
 `DayBook` report ignores the date range it is given and reports Tally's own
-current period instead. `tally_list_vouchers` covers the same ground correctly
-via `Voucher Register`. See [docs/known-limitations.md](docs/known-limitations.md).
+current period instead. Neither it nor the `Voucher Register` report returns the
+debit and credit lines of a voucher, so `tally_get_vouchers` reads a `Voucher`
+collection instead and applies the date range itself. See
+[docs/known-limitations.md](docs/known-limitations.md).
 
 ### Planned for v2
 
@@ -322,13 +487,13 @@ means from your data and your question, every time.
 
 ## How data is retrieved
 
-Confirmed against a live TallyPrime 7.x install on 2026-08-10.
+Confirmed against a live TallyPrime 7.x install on 2026-08-10, voucher path re-confirmed 2026-08-13.
 
 | Data | Path | Notes |
 |---|---|---|
 | Companies, ledgers | XML collection | Nested records under `<DATA>` |
 | Trial balance, balance sheet, P&L | XML report | Parallel sibling arrays, paired positionally |
-| Vouchers | XML `Voucher Register` | Date-scoped; the day book ignores its date range |
+| Vouchers | XML `Voucher` collection | The only shape that returns ledger entries; ignores the date range, so dates are applied here |
 | Everything | XML | JSON was requested and Tally returned XML anyway |
 
 **JSON does not work on this build.** Requesting `$$SysName:JSON` returned
@@ -380,6 +545,23 @@ The query would return more records than `TALLY_MAX_RECORDS`. Narrow the date
 range or add a filter. Raising the limit is possible but means holding more in
 memory — Tally cannot paginate, so the whole set is fetched either way.
 
+**`RESPONSE_TOO_LARGE`**
+The data was retrieved, but the page is too big to hand back in one response.
+This is a *transport* limit, not a memory one, and the two are easy to confuse:
+records can sit well inside `TALLY_MAX_RECORDS` while the serialised JSON
+breaches what the client accepts. One voucher with every field runs to about
+18 KB, so 100 of them is ~1.7MB against a 1MB ceiling in Claude Desktop.
+
+The error names a `pageSize` that fits, computed from the actual measured size,
+so one retry succeeds. Setting `includeAllFields` to `false` shrinks it far more
+than paging does. `TALLY_MAX_RESPONSE_BYTES` tunes the ceiling if your client
+allows more.
+
+**"Tool result is too large. Maximum size is 1MB." in Claude Desktop**
+That message comes from the client, not this server, and means a response got
+past the ceiling above — most likely because `TALLY_MAX_RESPONSE_BYTES` has been
+raised beyond what the client accepts. Lower it back to `900000`.
+
 **`TALLY_TIMEOUT`**
 Large reports can legitimately exceed the base timeout. Raise
 `TALLY_REPORT_TIMEOUT_MS`, or narrow the range.
@@ -414,15 +596,59 @@ through is a bug worth a sample.
 ## Development
 
 ```bash
-npm run dev        # watch mode
-npm test           # unit + integration tests
+npm run dev         # watch mode
+npm test            # unit + integration tests
 npm run typecheck
 npm run lint
-npm run mock-tally # standalone mock Tally server
+npm run verify      # typecheck + lint + test, the same four CI runs
+npm run check:build # is dist/ older than src/?
+npm run mock-tally  # standalone mock Tally server, port 9999
+npm run check:live  # acceptance run against a REAL TallyPrime — see below
 ```
+
+`npm run check:live` exercises `dist/` against whatever company TallyPrime
+currently has open, deriving the period from that company's own financial year
+rather than from today, and asserting the things a human skims past — that
+comparing a period with itself yields zero movement everywhere, that no voucher
+type reports the legacy numbering value, that reconciled status is null exactly
+when no bank date is reported. It runs at the shipped size and record limits by
+default; `-- --raised` lifts them for diagnosis only, and cannot be an acceptance
+run because it would hide a tool that works only with the ceilings raised.
+
+It is safe to run against live books: sequential calls only, no report or
+collection ID that is not already verified, and it aborts on the first
+connection-class failure rather than turning one wedged request into a cascade.
+Output goes to `.live-check/` (gitignored — real party names and amounts).
+
+Its last two lines are the point. Two paths cannot be exercised on any company
+available so far — `reconciled: true` needs books that reconcile the bank inside
+TallyPrime, and the ageing schedule needs bill-wise details — so every run states
+whether that gap is still open. When either finally reports EXERCISED, update
+[docs/known-limitations.md](docs/known-limitations.md).
 
 Integration tests need a build first — they spawn the real binary and speak
 MCP to it over stdio.
+
+**Rebuild after every source change.** Claude Desktop launches `dist/index.js`,
+never the TypeScript, so an unbuilt change is invisible to it — the tool list is
+simply the one from the last build, with nothing appearing to fail. This has
+already cost a day: a tool existed in `src/`, passed its tests, and was absent
+from every client. `npm run check:build` answers the question directly, and
+`Check-Tally` reports it too when run from a source checkout.
+
+### Releasing
+
+```bash
+npm version minor   # or patch / major
+git push --follow-tags
+powershell -ExecutionPolicy Bypass -File installer\package.ps1
+```
+
+`npm version` runs `verify` first, then stamps the `## <version> — unreleased`
+heading in [CHANGELOG.md](CHANGELOG.md) with the released version and today's
+date, and includes it in the version commit. The version an install reports
+comes from `package.json`, so this keeps the number a user reads back during
+support and the notes describing it in the same commit.
 
 ## Contributing samples
 

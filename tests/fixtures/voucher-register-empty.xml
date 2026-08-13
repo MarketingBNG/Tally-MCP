@@ -1,0 +1,33 @@
+<!-- A real TallyPrime Voucher Register response for a period the loaded company
+     holds no vouchers in — captured live 2026-08-12 from a company whose books
+     are FY 25-26, queried for FY 26-27. Names redacted.
+
+     Note the shape: there IS a <DATA> section, but it carries only a COMPANY
+     identity block and no <VOUCHER> elements at all. That is what an
+     out-of-period query looks like, and it is indistinguishable from a company
+     with genuinely no transactions — which is precisely why an empty result
+     for a DEFAULTED period gets annotated with the company's book start date. -->
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <STATICVARIABLES>
+    <SVCURRENTCOMPANY>EXAMPLE TRADING PRIVATE LIMITED</SVCURRENTCOMPANY>
+   </STATICVARIABLES>
+  </DESC>
+  <DATA>
+   <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <COMPANY>
+     <REMOTECMPINFO.LIST MERGE="Yes">
+      <NAME>29f83e08-28db-4490-ab00-6ab10302ee31</NAME>
+      <REMOTECMPNAME>EXAMPLE TRADING PRIVATE LIMITED</REMOTECMPNAME>
+      <REMOTECMPSTATE>Karnataka</REMOTECMPSTATE>
+     </REMOTECMPINFO.LIST>
+    </COMPANY>
+   </TALLYMESSAGE>
+  </DATA>
+ </BODY>
+</ENVELOPE>

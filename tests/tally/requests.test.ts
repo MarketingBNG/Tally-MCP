@@ -6,6 +6,7 @@ import {
   buildCollectionRequest,
   buildConnectionProbeRequest,
   buildLedgerListRequest,
+  buildGroupListRequest,
   buildTrialBalanceRequest,
   escapeXml,
   FORBIDDEN_WRITE_VERBS,
@@ -83,6 +84,14 @@ describe('request builders', () => {
     const request = buildLedgerListRequest({ company: 'Acme' });
     expect(request.startsWith('<ENVELOPE>')).toBe(true);
     expect(request.endsWith('</ENVELOPE>')).toBe(true);
+  });
+
+  it('builds a Group collection request with the classification fields', () => {
+    const request = buildGroupListRequest();
+    expect(request).toContain('<ID>Groups</ID>');
+    expect(request).toContain('<TYPE>Group</TYPE>');
+    expect(request).toContain('<NATIVEMETHOD>IsRevenue</NATIVEMETHOD>');
+    expect(request).toContain('<NATIVEMETHOD>IsDeemedPositive</NATIVEMETHOD>');
   });
 });
 

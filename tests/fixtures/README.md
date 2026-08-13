@@ -1,8 +1,9 @@
 # Test fixtures
 
 These are **redacted** copies of real TallyPrime 7.x responses captured from a
-live install on 2026-08-10. Names, amounts and identifiers are fake. Everything
-structural is not.
+live install on 2026-08-10 (`cash-flow.xml` and `funds-flow.xml` on
+2026-08-12). Names, amounts and identifiers are fake. Everything structural is
+not.
 
 > **These fixtures are committed. `samples/` is not.**
 >
@@ -45,6 +46,12 @@ quietly delete the test:
   voucher; the real content is a handful of fields. Trimmed here to a
   representative sample rather than the full ~50 KB per voucher.
 - **P&L reuses `BSMAINAMT`** inside `<PLAMT>` rather than a P&L-specific tag.
+- **The flow reports pair `DSPPERIOD` with `DSPACCINFO` positionally**, the
+  same sibling-alternation as the trial balance, with month names as the "name"
+  column. Cash flow satisfies net = debit + credit; funds flow satisfies
+  net = credit − debit with each month's debit equal to the previous month's
+  credit (opening/closing funds). The synthetic figures here preserve both
+  relationships, because tests assert on them.
 
 The unredacted originals live in `samples/`, which is gitignored — it contains
 real accounting data and must never be committed.

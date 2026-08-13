@@ -1,0 +1,52 @@
+<!--
+  A trial balance carrying stock at its OPENING value, the shape found live on
+  2026-08-13. Read together with stock-divergence-ledgers.xml and groups.xml:
+
+    Current Assets, from the ledger masters : -175000 + -25000 = -200000
+    Current Assets, on this trial balance   : -100000 + -25000 = -125000
+    Difference                              :             75000
+
+  75000 is exactly "Stock In Hand" opening (-100000) minus its closing
+  (-175000), because Tally's trial balance carries that account at opening
+  while its balance sheet and the ledger list carry closing.
+
+  Capital Account agrees with the masters, so a test can assert the warning
+  names Current Assets and ONLY Current Assets.
+
+  All values are invented. See tests/fixtures/README.md.
+-->
+<ENVELOPE>
+ <DSPACCNAME>
+  <DSPDISPNAME>Capital Account</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPACCINFO>
+  <DSPCLDRAMT>
+   <DSPCLDRAMTA>-1000.00</DSPCLDRAMTA>
+</DSPCLDRAMT>
+  <DSPCLCRAMT>
+   <DSPCLCRAMTA></DSPCLCRAMTA>
+</DSPCLCRAMT>
+</DSPACCINFO>
+ <DSPACCNAME>
+  <DSPDISPNAME>Current Assets</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPACCINFO>
+  <DSPCLDRAMT>
+   <DSPCLDRAMTA>-125000.00</DSPCLDRAMTA>
+</DSPCLDRAMT>
+  <DSPCLCRAMT>
+   <DSPCLCRAMTA></DSPCLCRAMTA>
+</DSPCLCRAMT>
+</DSPACCINFO>
+ <DSPACCNAME>
+  <DSPDISPNAME>Profit &amp; Loss A/c</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPACCINFO>
+  <DSPCLDRAMT>
+   <DSPCLDRAMTA></DSPCLDRAMTA>
+</DSPCLDRAMT>
+  <DSPCLCRAMT>
+   <DSPCLCRAMTA>4200.00</DSPCLCRAMTA>
+</DSPCLCRAMT>
+</DSPACCINFO>
+</ENVELOPE>

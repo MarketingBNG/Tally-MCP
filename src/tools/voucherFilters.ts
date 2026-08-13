@@ -1,13 +1,12 @@
+import { Decimal } from 'decimal.js';
 import type { NestedRecord } from '../tally/TallyResponseParser.js';
 import type { Voucher } from '../tally/normalize.js';
 
 /**
  * Client-side voucher filtering, shared by every tool that searches vouchers.
  *
- * Lives in one place so `tally_search_vouchers`, `tally_search_sales` and
- * `tally_search_purchases` cannot drift into behaving differently for the same
- * filter name — which would be invisible to a caller and produce quietly
- * inconsistent results between tools.
+ * Lives in one place so every caller of `tally_get_vouchers` (including its
+ * `family` mode) sees the same filter behaviour for the same filter name.
  *
  * All of this is client-side because TallyPrime cannot filter server-side. The
  * full period is fetched regardless; these predicates only decide what is
@@ -81,8 +80,16 @@ export function matchesVoucherFilters(voucher: Voucher, filters: VoucherFilters)
 
   if (filters.minAmount !== undefined || filters.maxAmount !== undefined) {
     const magnitude = largestEntryAmount(voucher);
-    if (filters.minAmount !== undefined && magnitude < filters.minAmount) return false;
-    if (filters.maxAmount !== undefined && magnitude > filters.maxAmount) return false;
+
+    // A voucher whose amounts are all unreadable is KEPT, not silently dropped.
+    // It used to score 0 and be excluded by any minAmount, so "every voucher
+    // over 100,000" quietly omitted the vouchers whose size is unknown — the
+    // caller got an audit population they believed was complete. Including it
+    // means the caller sees a record with null amounts and can judge it.
+    if (magnitude === null) return true;
+
+    if (filters.minAmount !== undefined && magnitude.lessThan(filters.minAmount)) return false;
+    if (filters.maxAmount !== undefined && magnitude.greaterThan(filters.maxAmount)) return false;
   }
 
   return true;
@@ -95,14 +102,26 @@ export function matchesVoucherFilters(voucher: Voucher, filters: VoucherFilters)
  * so the largest leg is used as a proxy. That choice is stated in every tool
  * description that exposes an amount filter, because a caller comparing
  * against a different basis would otherwise get results they cannot explain.
+ *
+ * Returns NULL when no entry carries a readable amount, which is different from
+ * zero: a voucher of unknown size must not be treated as a voucher of size nil.
+ * Decimal rather than Number because this repo does no float money arithmetic —
+ * at 17 significant digits a rupee comparison silently goes wrong.
  */
-export function largestEntryAmount(voucher: Voucher): number {
-  let largest = 0;
+export function largestEntryAmount(voucher: Voucher): Decimal | null {
+  let largest: Decimal | null = null;
+
   for (const entry of voucher.entries) {
     if (entry.amount === null) continue;
-    const value = Math.abs(Number(entry.amount.amount));
-    if (Number.isFinite(value) && value > largest) largest = value;
+    let value: Decimal;
+    try {
+      value = new Decimal(entry.amount.amount).abs();
+    } catch {
+      continue;
+    }
+    if (largest === null || value.greaterThan(largest)) largest = value;
   }
+
   return largest;
 }
 

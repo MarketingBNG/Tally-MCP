@@ -1,10 +1,11 @@
 import { tallyDateToIso } from '../utils/dates.js';
-import { toMoney, type Money } from '../utils/numbers.js';
+import { DEFAULT_CURRENCY, toMoney, type Money } from '../utils/numbers.js';
 import { TallyError } from './TallyError.js';
 import {
   attributesOf,
   childText,
   childrenNamed,
+  childrenOf,
   findAll,
   findFirst,
   isLivenessResponse,
@@ -12,6 +13,7 @@ import {
   pairReportRows,
   parseTallyXml,
   scalarFieldsOf,
+  tagNameOf,
   textOf,
   assertNoTallyError,
   type NestedRecord,
@@ -47,7 +49,7 @@ export interface Normalized<T> {
  */
 export interface SourceRef {
   system: 'tallyprime';
-  entityType: 'company' | 'ledger' | 'voucher' | 'stockItem' | 'reportRow';
+  entityType: 'company' | 'ledger' | 'group' | 'voucher' | 'stockItem' | 'reportRow';
   /** Best available identity: a GUID where Tally provides one, else a name. */
   identifier: string;
 }
@@ -105,15 +107,28 @@ function dataScope(nodes: TallyNode[]): TallyNode[] {
   return data === null ? nodes : [data];
 }
 
-/** Read an amount, recording a warning when a present value will not parse. */
+/**
+ * Read an amount, recording a warning when a present value will not parse.
+ *
+ * `currency` is REQUIRED rather than defaulted, and that is deliberate. It used
+ * to default to INR, which meant every figure this server returned was labelled
+ * INR whatever the company's books were actually in — verified live 2026-08-13
+ * against a US company whose base currency is `$`, whose dollar balances came
+ * back labelled `"currency": "INR"`. Nothing converted, so the numbers were
+ * right and only the label lied, which is the more dangerous failure: an
+ * accountant reading 494,397.50 INR against books stating $494,397.50 has been
+ * handed a plausible wrong fact. Making the parameter mandatory means the
+ * compiler, not a reviewer, guarantees every construction site supplies it.
+ */
 function readMoney(
   raw: string | null,
   label: string,
-  warnings: string[]
+  warnings: string[],
+  currency: string
 ): Money | null {
   if (raw === null || raw.trim() === '') return null;
 
-  const money = toMoney(raw);
+  const money = toMoney(raw, currency);
   if (money === null) {
     warnings.push(`Could not read the amount "${raw}" for ${label}; it is reported as null.`);
   }
@@ -128,6 +143,17 @@ export interface Company {
   name: string;
   /** ISO date the books start, or null if Tally did not report one. */
   startingFrom: string | null;
+  /**
+   * The company's base currency exactly as Tally labels it — a SYMBOL, not an
+   * ISO code: `"$"` on a US company, `"₹"` or `"Rs."` on an Indian one. Null
+   * when Tally did not report it.
+   *
+   * This is the label every monetary figure from this company carries. It is not
+   * a conversion rate and nothing here converts between currencies.
+   */
+  currency: string | null;
+  /** Country as Tally reports it, e.g. "United States of America". */
+  country: string | null;
   source: SourceRef;
 }
 
@@ -149,8 +175,43 @@ export function normalizeCompanies(xml: string): Normalized<Company[]> {
         warnings.push(`Company "${name}" reported an unreadable start date "${rawStart}".`);
       }
 
-      return { name, startingFrom, source: sourceRef('company', name) };
+      return {
+        name,
+        startingFrom,
+        currency: childText(node, 'CURRENCYNAME'),
+        country: childText(node, 'COUNTRYNAME'),
+        source: sourceRef('company', name),
+      };
     });
+
+  return { data, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// Currencies
+// ---------------------------------------------------------------------------
+
+export interface Currency {
+  /** The symbol Tally uses as the currency's identity, e.g. "$". */
+  name: string;
+  /** Tally's spelled-out name, e.g. "Dollar". Null when not reported. */
+  formalName: string | null;
+  /** Decimal places Tally records for it, as a string. Null when not reported. */
+  decimalPlaces: string | null;
+}
+
+export function normalizeCurrencies(xml: string): Normalized<Currency[]> {
+  const warnings: string[] = [];
+  const nodes = openDocument(xml);
+
+  const data = findAll(dataScope(nodes), 'CURRENCY')
+    // A real record carries a NAME attribute; the CMPINFO counter does not.
+    .filter((node) => attributesOf(node).NAME !== undefined)
+    .map((node) => ({
+      name: childText(node, 'NAME') ?? attributesOf(node).NAME ?? '',
+      formalName: childText(node, 'MAILINGNAME'),
+      decimalPlaces: childText(node, 'DECIMALPLACES'),
+    }));
 
   return { data, warnings };
 }
@@ -192,7 +253,11 @@ const LEDGER_PROMOTED_FIELDS = new Set([
   'NAME',
 ]);
 
-export function normalizeLedgers(xml: string, includeAllFields = false): Normalized<Ledger[]> {
+export function normalizeLedgers(
+  xml: string,
+  includeAllFields = false,
+  currency: string = DEFAULT_CURRENCY
+): Normalized<Ledger[]> {
   const warnings: string[] = [];
   const nodes = openDocument(xml);
 
@@ -208,17 +273,55 @@ export function normalizeLedgers(xml: string, includeAllFields = false): Normali
         openingBalance: readMoney(
           childText(node, 'OPENINGBALANCE'),
           `opening balance of "${name}"`,
-          warnings
+          warnings,
+          currency
         ),
         closingBalance: readMoney(
           childText(node, 'CLOSINGBALANCE'),
           `closing balance of "${name}"`,
-          warnings
+          warnings,
+          currency
         ),
         gstin: childText(node, 'PARTYGSTIN'),
         // GUID is only present on a full fetch; fall back to the name.
         source: sourceRef('ledger', childText(node, 'GUID') ?? name),
         ...(fields === undefined ? {} : { fields }),
+      };
+    });
+
+  return { data, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// Groups (chart of accounts)
+// ---------------------------------------------------------------------------
+
+export interface Group {
+  name: string;
+  /** Parent group this nests under, or null for a primary group. */
+  parent: string | null;
+  /** True for P&L groups (income/expenses), false for balance sheet groups. */
+  isRevenue: boolean;
+  /** Tally's own debit/credit classification, same convention as a ledger entry's side. */
+  isDeemedPositive: boolean;
+  source: SourceRef;
+}
+
+export function normalizeGroups(xml: string): Normalized<Group[]> {
+  const warnings: string[] = [];
+  const nodes = openDocument(xml);
+
+  const data = findAll(dataScope(nodes), 'GROUP')
+    .filter((node) => attributesOf(node).NAME !== undefined)
+    .map((node) => {
+      const name = attributesOf(node).NAME ?? '';
+
+      return {
+        name,
+        parent: childText(node, 'PARENT'),
+        isRevenue: isYes(childText(node, 'ISREVENUE')),
+        isDeemedPositive: isYes(childText(node, 'ISDEEMEDPOSITIVE')),
+        source: sourceRef('group', childText(node, 'GUID') ?? name),
       };
     });
 
@@ -240,6 +343,63 @@ export interface VoucherType {
    * family.
    */
   parent: string | null;
+  /**
+   * How Tally numbers vouchers of this type, one entry per numbering series.
+   *
+   * Read from the nested `VOUCHERNUMBERSERIES.LIST`, NOT from the type's
+   * top-level `NUMBERINGMETHOD` element. That scalar is a legacy field: verified
+   * live 2026-08-12, it read `None` on all 26 types of a company whose every
+   * series was actually `Automatic` with sub-method `Auto Retain`. A scalar
+   * `numberingMethod` field was built first and reported exactly that wrong
+   * answer, which is the reason this is a list read from the nested structure.
+   *
+   * Empty when the request did not ask for all fields — the curated fetch cannot
+   * carry a nested list. `tally_get_voucher_types` always asks for all fields;
+   * voucher-family resolution does not, and does not read this.
+   *
+   * Worth having because it changes what a repeated voucher number means: on a
+   * manually-numbered type a repeat is a data-entry question, on an automatic one
+   * it points at something stranger, and `preventsDuplicates` says whether Tally
+   * would have stopped it. That inference belongs to whoever is reading.
+   */
+  numberingSeries: VoucherNumberSeries[];
+  /**
+   * Tally's debit/credit classification for the type. Genuinely per-type: it
+   * varies across types on real data, unlike the numbering scalar above.
+   */
+  isDeemedPositive: boolean;
+}
+
+export interface VoucherNumberSeries {
+  /** Series name as Tally holds it, e.g. "Default". */
+  name: string | null;
+  /** e.g. "Automatic", "Manual", "None" — Tally's own label, uninterpreted. */
+  method: string | null;
+  /** e.g. "Auto Retain". Tally's finer distinction under `method`. */
+  subMethod: string | null;
+  /**
+   * Whether Tally itself refuses a duplicate number on this series. Directly
+   * relevant to a duplicate-invoice question: `false` means nothing in Tally
+   * prevented one.
+   */
+  preventsDuplicates: boolean;
+}
+
+/**
+ * Numbering series on one voucher type, from the nested list.
+ *
+ * Returns empty rather than guessing when the structure is absent, which is the
+ * normal case for the curated fetch. An empty list means "not asked for or not
+ * recorded" — never "unnumbered", which is what the legacy scalar would have
+ * implied. See the VoucherType.numberingSeries comment.
+ */
+function numberingSeriesOf(node: TallyNode): VoucherNumberSeries[] {
+  return childrenNamed(node, 'VOUCHERNUMBERSERIES.LIST').map((series) => ({
+    name: childText(series, 'NAME'),
+    method: childText(series, 'NUMBERINGMETHOD'),
+    subMethod: childText(series, 'NUMBERINGSUBMETHOD'),
+    preventsDuplicates: isYes(childText(series, 'PREVENTDUPLICATES')),
+  }));
 }
 
 export function normalizeVoucherTypes(xml: string): Normalized<VoucherType[]> {
@@ -252,6 +412,8 @@ export function normalizeVoucherTypes(xml: string): Normalized<VoucherType[]> {
     .map((node) => ({
       name: attributesOf(node).NAME ?? '',
       parent: childText(node, 'PARENT'),
+      numberingSeries: numberingSeriesOf(node),
+      isDeemedPositive: isYes(childText(node, 'ISDEEMEDPOSITIVE')),
     }));
 
   return { data, warnings };
@@ -264,21 +426,45 @@ export function normalizeVoucherTypes(xml: string): Normalized<VoucherType[]> {
 export interface StockItem {
   name: string;
   parent: string | null;
+  /** Base stock-keeping unit, e.g. "Kgs.". */
+  baseUnits: string | null;
+  /** Quantity strings exactly as Tally formats them, unit included (e.g. "1000.00 Kgs."). */
+  openingBalance: string | null;
+  closingBalance: string | null;
+  /**
+   * Value of the balance. Verified live: TallyPrime reports these negative
+   * for a stock-in-hand item, matching the trial balance sign convention
+   * elsewhere in this server. Sign is preserved, not corrected.
+   */
+  openingValue: Money | null;
+  closingValue: Money | null;
+  /** Rate string exactly as Tally formats it, e.g. "20.00/Kgs.". */
+  closingRate: string | null;
   source: SourceRef;
   /**
-   * Everything else Tally reported, verbatim.
-   *
-   * Deliberately not mapped into named properties. The test company has no
-   * inventory, so a populated stock item response has never been observed, and
-   * inventing a mapping would encode a guess as though it were verified. This
-   * way the tool returns exactly what Tally sent — correct whatever the shape
-   * turns out to be — and can be tightened once real inventory data exists.
+   * Every other populated field Tally holds for this item, verbatim — e.g.
+   * CATEGORY. Which fields exist depends on what this company has configured.
    */
   fields: Record<string, string>;
   nested?: Record<string, NestedRecord[]>;
 }
 
-export function normalizeStockItems(xml: string): Normalized<StockItem[]> {
+/** Stock item fields already surfaced as first-class properties. */
+const STOCK_ITEM_PROMOTED_FIELDS = new Set([
+  'NAME',
+  'PARENT',
+  'BASEUNITS',
+  'OPENINGBALANCE',
+  'CLOSINGBALANCE',
+  'OPENINGVALUE',
+  'CLOSINGVALUE',
+  'CLOSINGRATE',
+]);
+
+export function normalizeStockItems(
+  xml: string,
+  currency: string = DEFAULT_CURRENCY
+): Normalized<StockItem[]> {
   const warnings: string[] = [];
   const nodes = openDocument(xml);
 
@@ -291,8 +477,24 @@ export function normalizeStockItems(xml: string): Normalized<StockItem[]> {
       return {
         name,
         parent: childText(node, 'PARENT'),
+        baseUnits: childText(node, 'BASEUNITS'),
+        openingBalance: childText(node, 'OPENINGBALANCE'),
+        closingBalance: childText(node, 'CLOSINGBALANCE'),
+        openingValue: readMoney(
+          childText(node, 'OPENINGVALUE'),
+          `opening value of "${name}"`,
+          warnings,
+          currency
+        ),
+        closingValue: readMoney(
+          childText(node, 'CLOSINGVALUE'),
+          `closing value of "${name}"`,
+          warnings,
+          currency
+        ),
+        closingRate: childText(node, 'CLOSINGRATE'),
         source: sourceRef('stockItem', childText(node, 'GUID') ?? name),
-        fields: scalarFieldsOf(node, new Set(['NAME', 'PARENT'])),
+        fields: scalarFieldsOf(node, STOCK_ITEM_PROMOTED_FIELDS),
         ...(Object.keys(nested).length === 0 ? {} : { nested }),
       };
     });
@@ -314,7 +516,10 @@ export interface TrialBalanceRow {
   credit: Money | null;
 }
 
-export function normalizeTrialBalance(xml: string): Normalized<TrialBalanceRow[]> {
+export function normalizeTrialBalance(
+  xml: string,
+  currency: string = DEFAULT_CURRENCY
+): Normalized<TrialBalanceRow[]> {
   const warnings: string[] = [];
   const container = reportContainer(openDocument(xml));
   const rows = pairReportRows(container, 'DSPACCNAME', 'DSPACCINFO');
@@ -327,11 +532,17 @@ export function normalizeTrialBalance(xml: string): Normalized<TrialBalanceRow[]
 
     return {
       name: row.name,
-      debit: readMoney(debitNode === null ? null : textOf(debitNode), `debit of "${row.name}"`, warnings),
+      debit: readMoney(
+        debitNode === null ? null : textOf(debitNode),
+        `debit of "${row.name}"`,
+        warnings,
+        currency
+      ),
       credit: readMoney(
         creditNode === null ? null : textOf(creditNode),
         `credit of "${row.name}"`,
-        warnings
+        warnings,
+        currency
       ),
     };
   });
@@ -349,6 +560,72 @@ function noteMissingValue(row: PairedRow, reportName: string, warnings: string[]
 }
 
 // ---------------------------------------------------------------------------
+// Cash flow and funds flow (monthly movement)
+// ---------------------------------------------------------------------------
+
+export interface MonthlyFlowRow {
+  /** Month name exactly as Tally labels it, e.g. "April". No year is sent. */
+  period: string;
+  /** Tally's debit column. Sign preserved: debits arrive negative. */
+  debit: Money | null;
+  credit: Money | null;
+  /**
+   * Tally's own net column, passed through rather than recomputed. Observed
+   * live: debit + credit on the cash flow report; credit − debit on the funds
+   * flow report, where debit and credit are the month's opening and closing
+   * funds.
+   */
+  net: Money | null;
+}
+
+/**
+ * Both flow reports share one wire shape: DSPPERIOD (a month name) and
+ * DSPACCINFO alternate as siblings, the same positional pairing the trial
+ * balance uses, with three amounts nested inside each info block.
+ */
+export function normalizeMonthlyFlow(
+  xml: string,
+  reportName: string,
+  currency: string = DEFAULT_CURRENCY
+): Normalized<MonthlyFlowRow[]> {
+  const warnings: string[] = [];
+  const container = reportContainer(openDocument(xml));
+  const rows = pairReportRows(container, 'DSPPERIOD', 'DSPACCINFO');
+
+  const data = rows.map((row) => {
+    const debitNode = row.value === null ? null : findFirst([row.value], 'DSPDRAMTA');
+    const creditNode = row.value === null ? null : findFirst([row.value], 'DSPCRAMTA');
+    const netNode = row.value === null ? null : findFirst([row.value], 'DSPCLAMTA');
+
+    noteMissingValue(row, reportName, warnings);
+
+    return {
+      period: row.name,
+      debit: readMoney(
+        debitNode === null ? null : textOf(debitNode),
+        `debit of "${row.name}"`,
+        warnings,
+        currency
+      ),
+      credit: readMoney(
+        creditNode === null ? null : textOf(creditNode),
+        `credit of "${row.name}"`,
+        warnings,
+        currency
+      ),
+      net: readMoney(
+        netNode === null ? null : textOf(netNode),
+        `net of "${row.name}"`,
+        warnings,
+        currency
+      ),
+    };
+  });
+
+  return { data, warnings };
+}
+
+// ---------------------------------------------------------------------------
 // Balance sheet and profit & loss
 // ---------------------------------------------------------------------------
 
@@ -363,8 +640,19 @@ export interface StatementRow {
   subAmount: Money | null;
 }
 
-export function normalizeBalanceSheet(xml: string): Normalized<StatementRow[]> {
-  return normalizeStatement(xml, 'BSNAME', 'BSAMT', 'BSSUBAMT', 'BSMAINAMT', 'balance sheet');
+export function normalizeBalanceSheet(
+  xml: string,
+  currency: string = DEFAULT_CURRENCY
+): Normalized<StatementRow[]> {
+  return normalizeStatement(
+    xml,
+    'BSNAME',
+    'BSAMT',
+    'BSSUBAMT',
+    'BSMAINAMT',
+    'balance sheet',
+    currency
+  );
 }
 
 /**
@@ -374,8 +662,19 @@ export function normalizeBalanceSheet(xml: string): Normalized<StatementRow[]> {
  * is `BSMAINAMT` — Tally reuses the balance sheet tag rather than defining a
  * P&L-specific one. Verified against a live export; not a copy-paste slip.
  */
-export function normalizeProfitLoss(xml: string): Normalized<StatementRow[]> {
-  return normalizeStatement(xml, 'DSPACCNAME', 'PLAMT', 'PLSUBAMT', 'BSMAINAMT', 'profit and loss');
+export function normalizeProfitLoss(
+  xml: string,
+  currency: string = DEFAULT_CURRENCY
+): Normalized<StatementRow[]> {
+  return normalizeStatement(
+    xml,
+    'DSPACCNAME',
+    'PLAMT',
+    'PLSUBAMT',
+    'BSMAINAMT',
+    'profit and loss',
+    currency
+  );
 }
 
 function normalizeStatement(
@@ -384,7 +683,8 @@ function normalizeStatement(
   valueTag: string,
   subAmountTag: string,
   mainAmountTag: string,
-  reportName: string
+  reportName: string,
+  currency: string
 ): Normalized<StatementRow[]> {
   const warnings: string[] = [];
   const container = reportContainer(openDocument(xml));
@@ -398,11 +698,17 @@ function normalizeStatement(
 
     return {
       name: row.name,
-      amount: readMoney(mainNode === null ? null : textOf(mainNode), `"${row.name}"`, warnings),
+      amount: readMoney(
+        mainNode === null ? null : textOf(mainNode),
+        `"${row.name}"`,
+        warnings,
+        currency
+      ),
       subAmount: readMoney(
         subNode === null ? null : textOf(subNode),
         `sub-total of "${row.name}"`,
-        warnings
+        warnings,
+        currency
       ),
     };
   });
@@ -514,43 +820,91 @@ const ENTRY_PROMOTED_FIELDS = new Set(['LEDGERNAME', 'AMOUNT', 'ISDEEMEDPOSITIVE
  * carries roughly 200 empty date and tax elements plus legacy cash
  * denomination counters, none of which mean anything here.
  */
-export function normalizeVouchers(xml: string, includeAllFields = false): Normalized<Voucher[]> {
+export function normalizeVouchers(
+  xml: string,
+  includeAllFields = false,
+  currency: string = DEFAULT_CURRENCY,
+  /**
+   * Keep the nested structures (bank allocations, bill allocations, inventory
+   * lines, tax breakdowns) WITHOUT keeping every scalar field.
+   *
+   * Separate from `includeAllFields` because the two have completely different
+   * costs, which stayed hidden while one flag controlled both. The nested
+   * structures ride along in the ordinary curated request for free — verified
+   * live 2026-08-13, the lean 8.6MB response and the 18.3MB `FETCH *` response
+   * contain IDENTICAL numbers of them (948 bank allocations, 977 bill
+   * allocations, 466 inventory lines, 1,032 rate details). Only the scalar
+   * fields cost the extra 10MB.
+   *
+   * So a tool that wants bank instruments no longer has to ask for 204 scalar
+   * fields it never reads. Defaults to following `includeAllFields`, leaving
+   * existing callers unaffected.
+   */
+  includeNested = includeAllFields
+): Normalized<Voucher[]> {
   const warnings: string[] = [];
   const nodes = openDocument(xml);
 
-  const data = findAll(dataScope(nodes), 'VOUCHER').map((node) => {
-    const attrs = attributesOf(node);
-    const rawDate = childText(node, 'DATE');
-    const number = childText(node, 'VOUCHERNUMBER');
+  const data = findAll(dataScope(nodes), 'VOUCHER')
+    /**
+     * Drop the `<VOUCHER>0</VOUCHER>` counter from the CMPINFO preamble.
+     *
+     * Every other normaliser here filters on the NAME attribute for this, but a
+     * voucher has no NAME, so it needed its own test — and without one this was
+     * the single record type that could return a phantom. It only bites when the
+     * response has no `<DATA>` wrapper, because `dataScope` then falls back to
+     * the whole document and the counter comes into range; `stock-items-empty.xml`
+     * proves Tally really does emit that wrapper-less shape on an empty result.
+     * The phantom arrived with a null date, null number and no entries, so it
+     * inflated the voucher count by one AND presented an unbalanced voucher to
+     * the tie-out control.
+     *
+     * A real voucher always carries at least one child element. The counter's
+     * only child is the text "0".
+     */
+    .filter((node) => childrenOf(node).some((child) => tagNameOf(child) !== null))
+    .map((node) => {
+      const attrs = attributesOf(node);
+      const rawDate = childText(node, 'DATE');
+      const number = childText(node, 'VOUCHERNUMBER');
 
-    const date = rawDate === null ? null : tallyDateToIso(rawDate);
-    if (rawDate !== null && date === null) {
-      warnings.push(`Voucher ${number ?? '(no number)'} reported an unreadable date "${rawDate}".`);
-    }
+      const date = rawDate === null ? null : tallyDateToIso(rawDate);
+      if (rawDate !== null && date === null) {
+        warnings.push(
+          `Voucher ${number ?? '(no number)'} reported an unreadable date "${rawDate}".`
+        );
+      }
 
-    const guid = childText(node, 'GUID') ?? attrs.REMOTEID ?? null;
-    const fields = includeAllFields ? scalarFieldsOf(node, VOUCHER_PROMOTED_FIELDS) : undefined;
-    const nested = includeAllFields
-      ? nestedRecordsOf(node, NON_ACCOUNTING_STRUCTURES)
-      : undefined;
+      const guid = childText(node, 'GUID') ?? attrs.REMOTEID ?? null;
+      const fields = includeAllFields ? scalarFieldsOf(node, VOUCHER_PROMOTED_FIELDS) : undefined;
+      const nested = includeNested
+        ? nestedRecordsOf(node, NON_ACCOUNTING_STRUCTURES)
+        : undefined;
 
-    return {
-      guid,
-      source: sourceRef('voucher', guid ?? number ?? '(unidentified)'),
-      ...(fields === undefined ? {} : { fields }),
-      ...(nested === undefined || Object.keys(nested).length === 0 ? {} : { nested }),
-      date,
-      // VCHTYPE is an attribute and VOUCHERTYPENAME an element; they agree in
-      // observed data, but only the element survives some report variants.
-      voucherType: childText(node, 'VOUCHERTYPENAME') ?? attrs.VCHTYPE ?? null,
-      voucherNumber: number,
-      partyLedgerName: childText(node, 'PARTYLEDGERNAME'),
-      narration: childText(node, 'NARRATION'),
-      isCancelled: isYes(childText(node, 'ISCANCELLED')),
-      isOptional: isYes(childText(node, 'ISOPTIONAL')),
-      entries: normalizeEntries(node, number, warnings, includeAllFields),
-    };
-  });
+      return {
+        guid,
+        source: sourceRef('voucher', guid ?? number ?? '(unidentified)'),
+        ...(fields === undefined ? {} : { fields }),
+        ...(nested === undefined || Object.keys(nested).length === 0 ? {} : { nested }),
+        date,
+        // VCHTYPE is an attribute and VOUCHERTYPENAME an element; they agree in
+        // observed data, but only the element survives some report variants.
+        voucherType: childText(node, 'VOUCHERTYPENAME') ?? attrs.VCHTYPE ?? null,
+        voucherNumber: number,
+        partyLedgerName: childText(node, 'PARTYLEDGERNAME'),
+        narration: childText(node, 'NARRATION'),
+        isCancelled: isYes(childText(node, 'ISCANCELLED')),
+        isOptional: isYes(childText(node, 'ISOPTIONAL')),
+        entries: normalizeEntries(
+          node,
+          number,
+          warnings,
+          includeAllFields,
+          currency,
+          includeNested
+        ),
+      };
+    });
 
   return { data, warnings };
 }
@@ -559,32 +913,38 @@ function normalizeEntries(
   voucher: TallyNode,
   voucherNumber: string | null,
   warnings: string[],
-  includeAllFields: boolean
+  includeAllFields: boolean,
+  currency: string,
+  includeNested: boolean
 ): LedgerEntry[] {
   const label = voucherNumber ?? '(no number)';
 
-  // Tally uses several entry element names depending on voucher type:
-  // ALLLEDGERENTRIES.LIST for accounting vouchers, LEDGERENTRIES.LIST on some
-  // invoice views. Reading only the first would silently return a voucher
-  // with no entries at all for the other kind.
-  const entryNodes = [
-    ...childrenNamed(voucher, 'ALLLEDGERENTRIES.LIST'),
-    ...childrenNamed(voucher, 'LEDGERENTRIES.LIST'),
-  ];
+  // Tally uses two entry element names: ALLLEDGERENTRIES.LIST on accounting
+  // vouchers, LEDGERENTRIES.LIST on some invoice views. They are ALTERNATIVES,
+  // not halves — an invoice carries BOTH, with LEDGERENTRIES.LIST repeating the
+  // party entry that ALLLEDGERENTRIES.LIST already holds. Concatenating them
+  // counted the party twice and left 29 of 453 vouchers reported as failing
+  // double entry on books that balance (verified live 2026-08-13: invoice
+  // ACME/INV/01 has 2 ALLLEDGERENTRIES and 1 LEDGERENTRIES, all three parsed).
+  //
+  // So ALLLEDGERENTRIES.LIST wins where present and LEDGERENTRIES.LIST is only
+  // a fallback, which keeps voucher types that carry solely the latter readable.
+  const allEntries = childrenNamed(voucher, 'ALLLEDGERENTRIES.LIST');
+  const entryNodes =
+    allEntries.length > 0 ? allEntries : childrenNamed(voucher, 'LEDGERENTRIES.LIST');
 
   return entryNodes.map((entry) => {
     const ledgerName = childText(entry, 'LEDGERNAME') ?? '';
     const fields = includeAllFields ? scalarFieldsOf(entry, ENTRY_PROMOTED_FIELDS) : undefined;
-    const nested = includeAllFields
-      ? nestedRecordsOf(entry, NON_ACCOUNTING_STRUCTURES)
-      : undefined;
+    const nested = includeNested ? nestedRecordsOf(entry, NON_ACCOUNTING_STRUCTURES) : undefined;
 
     return {
       ledgerName,
       amount: readMoney(
         childText(entry, 'AMOUNT'),
         `entry "${ledgerName}" on voucher ${label}`,
-        warnings
+        warnings,
+        currency
       ),
       side: isYes(childText(entry, 'ISDEEMEDPOSITIVE')) ? 'debit' : 'credit',
       ...(fields === undefined ? {} : { fields }),

@@ -99,6 +99,24 @@ export function financialYearFor(isoDate: string): DateRange {
   };
 }
 
+/**
+ * Whole days from `fromIso` to `toIso`. Negative when `toIso` is earlier.
+ *
+ * Built on `Date.UTC` from the date parts rather than by parsing the strings.
+ * Parsing would attach the host's timezone and can shift a day boundary — and a
+ * day boundary here is the difference between a bill ageing into the next
+ * bucket or not. Fixing both ends to UTC midnight makes the subtraction exact
+ * for calendar days, including across DST changes, without either date
+ * acquiring a timezone it does not have.
+ */
+export function daysBetween(fromIso: string, toIso: string): number {
+  const utc = (iso: string): number =>
+    Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
+
+  const MS_PER_DAY = 86_400_000;
+  return Math.round((utc(toIso) - utc(fromIso)) / MS_PER_DAY);
+}
+
 /** Today as a naive local ISO date, using the host's local calendar. */
 export function todayIso(now: Date = new Date()): string {
   const year = now.getFullYear();

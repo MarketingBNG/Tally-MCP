@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  daysBetween,
   isValidIsoDate,
   isoToTallyDate,
   tallyDateToIso,
@@ -104,5 +105,35 @@ describe('todayIso', () => {
 
   it('zero-pads month and day', () => {
     expect(todayIso(new Date(2026, 0, 5))).toBe('2026-01-05');
+  });
+});
+
+describe('daysBetween', () => {
+  it('counts whole calendar days', () => {
+    expect(daysBetween('2026-07-01', '2026-07-31')).toBe(30);
+    expect(daysBetween('2026-07-10', '2026-07-31')).toBe(21);
+    expect(daysBetween('2026-07-31', '2026-07-31')).toBe(0);
+  });
+
+  it('spans months and years', () => {
+    // 30 + 31 + 30 + 30 days: Apr 1 to Jul 31.
+    expect(daysBetween('2026-04-01', '2026-07-31')).toBe(121);
+    expect(daysBetween('2025-04-01', '2026-03-31')).toBe(364);
+    expect(daysBetween('2024-02-28', '2024-03-01')).toBe(2); // leap year
+    expect(daysBetween('2025-02-28', '2025-03-01')).toBe(1);
+  });
+
+  it('goes negative when the second date is earlier', () => {
+    expect(daysBetween('2026-07-31', '2026-07-01')).toBe(-30);
+  });
+
+  /**
+   * The reason this is built on Date.UTC from the parts rather than by parsing
+   * the strings: a DST transition inside the range must not add or drop a day,
+   * and an ageing bucket boundary is exactly where that would surface.
+   */
+  it('is unaffected by daylight saving transitions in the range', () => {
+    expect(daysBetween('2026-03-01', '2026-04-01')).toBe(31);
+    expect(daysBetween('2026-10-01', '2026-11-01')).toBe(31);
   });
 });

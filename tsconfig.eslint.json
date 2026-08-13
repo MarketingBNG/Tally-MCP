@@ -4,6 +4,13 @@
     "allowJs": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "mock-tally/**/*.ts", "*.ts", "*.js"],
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "mock-tally/**/*.ts",
+    "scripts/**/*.ts",
+    "*.ts",
+    "*.js"
+  ],
   "exclude": ["node_modules", "dist"]
 }

@@ -1,0 +1,57 @@
+name: CI
+
+# Runs the same four checks the project claims are clean in
+# docs/project-status.md, so that claim maintains itself instead of being a
+# manually re-dated note. Nothing here talks to a real TallyPrime: the tests
+# use the mock server in mock-tally/, and the one test that compares fixtures
+# against real exports skips when samples/ is absent (which it always is in CI,
+# since samples/ is gitignored).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes an in-flight run redundant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't hide a Windows-only failure behind a Linux one, or vice versa.
+      fail-fast: false
+      matrix:
+        # Windows is the platform accountants actually run this on, and it has
+        # already produced a bug Linux could not (a path guard that split on
+        # forward slashes). Linux is kept because it is faster and catches
+        # case-sensitivity mistakes in import paths that Windows forgives.
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the "node": ">=20" engines floor in package.json — CI should
+          # fail if the code stops running on the oldest version claimed.
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      - run: npm test
+
+      # Last, because it writes dist/ and the checks above should fail on their
+      # own merits rather than on a build artefact.
+      - run: npm run build

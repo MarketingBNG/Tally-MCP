@@ -1,0 +1,53 @@
+<!--
+  The chart-of-accounts hierarchy.
+
+  Note PARENT is "Primary" on a top-level group. That is Tally's sentinel for
+  "no parent", NOT a real group: code that walks the tree without stopping at
+  it files every ledger under one key, which makes a group-level comparison
+  compare nothing while appearing to pass. Kept here deliberately so a
+  regression fails a test.
+
+  "Stock-in-Hand" and "Bank Accounts" both nest under "Current Assets", so a
+  ledger has to be rolled up two levels to reach the group a trial balance row
+  names.
+
+  All values are invented. See tests/fixtures/README.md.
+-->
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <CMPINFO>
+    <COMPANY>0</COMPANY>
+    <GROUP>0</GROUP>
+   </CMPINFO>
+  </DESC>
+  <DATA>
+   <COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="7">
+    <GROUP NAME="Current Assets" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Stock-in-Hand" RESERVEDNAME="">
+     <PARENT TYPE="String">Current Assets</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Bank Accounts" RESERVEDNAME="">
+     <PARENT TYPE="String">Current Assets</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Capital Account" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">No</ISDEEMEDPOSITIVE>
+    </GROUP>
+   </COLLECTION>
+  </DATA>
+ </BODY>
+</ENVELOPE>

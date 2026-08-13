@@ -4,11 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { Decimal } from 'decimal.js';
 import {
   normalizeCompanies,
+  normalizeCurrencies,
   normalizeLedgers,
   normalizeTrialBalance,
   normalizeBalanceSheet,
   normalizeProfitLoss,
+  normalizeMonthlyFlow,
   normalizeVouchers,
+  normalizeGroups,
 } from '../../src/tally/normalize.js';
 import { sanitizeTallyXml } from '../../src/tally/sanitizeXml.js';
 import { TallyError } from '../../src/tally/TallyError.js';
@@ -32,6 +35,10 @@ describe('normalizeCompanies', () => {
     expect(data[0]).toEqual({
       name: 'EXAMPLE TRADING PRIVATE LIMITED',
       startingFrom: '2021-04-01',
+      // This fixture predates CurrencyName being requested, so both are null —
+      // which is the fallback path: callers then label figures DEFAULT_CURRENCY.
+      currency: null,
+      country: null,
       source: {
         system: 'tallyprime',
         entityType: 'company',
@@ -47,6 +54,44 @@ describe('normalizeCompanies', () => {
   it('ignores the CMPINFO counter element', () => {
     const { data } = normalizeCompanies(fixture('company-list.xml'));
     expect(data.map((c) => c.name)).not.toContain('');
+  });
+});
+
+describe('normalizeCurrencies', () => {
+  const TWO =
+    '<ENVELOPE><BODY><DATA>' +
+    // The CMPINFO counter shares the record tag name, as everywhere else.
+    '<CURRENCY>0</CURRENCY>' +
+    '<CURRENCY NAME="$"><NAME>$</NAME><MAILINGNAME>Dollar</MAILINGNAME>' +
+    '<DECIMALPLACES> 2</DECIMALPLACES></CURRENCY>' +
+    '<CURRENCY NAME="Rs."><NAME>Rs.</NAME><MAILINGNAME>Rupees</MAILINGNAME>' +
+    '<DECIMALPLACES> 2</DECIMALPLACES></CURRENCY>' +
+    '</DATA></BODY></ENVELOPE>';
+
+  it('reads each currency with its spelled-out name', () => {
+    const { data } = normalizeCurrencies(TWO);
+
+    expect(data).toHaveLength(2);
+    expect(data[0]).toEqual({ name: '$', formalName: 'Dollar', decimalPlaces: '2' });
+  });
+
+  /**
+   * The count is the whole point: it decides whether the multi-currency caveat is
+   * disclosed, so a phantom counter would raise it on every single-currency company
+   * and train the reader to ignore the warning.
+   */
+  it('ignores the CMPINFO counter so the count is trustworthy', () => {
+    const { data } = normalizeCurrencies(TWO);
+    expect(data.map((entry) => entry.name)).not.toContain('0');
+  });
+
+  it('reports one currency for a single-currency company', () => {
+    const { data } = normalizeCurrencies(
+      '<ENVELOPE><BODY><DATA><CURRENCY>0</CURRENCY>' +
+        '<CURRENCY NAME="$"><NAME>$</NAME></CURRENCY></DATA></BODY></ENVELOPE>'
+    );
+    expect(data).toHaveLength(1);
+    expect(data[0]?.formalName).toBeNull();
   });
 });
 
@@ -87,6 +132,46 @@ describe('normalizeLedgers', () => {
 
   it('reports no warnings for a clean export', () => {
     expect(normalizeLedgers(fixture('ledger-list.xml')).warnings).toEqual([]);
+  });
+});
+
+/**
+ * No live-Tally group-list export has been captured yet (unlike the other
+ * masters here), so this exercises the parser against a hand-built payload
+ * shaped like Tally's documented Group collection response rather than a
+ * redacted real one.
+ */
+describe('normalizeGroups', () => {
+  const xml =
+    '<ENVELOPE><BODY><DATA>' +
+    '<GROUP>0</GROUP>' +
+    '<GROUP NAME="Sundry Debtors"><PARENT>Current Assets</PARENT>' +
+    '<ISREVENUE>No</ISREVENUE><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE></GROUP>' +
+    '<GROUP NAME="Direct Expenses"><PARENT></PARENT>' +
+    '<ISREVENUE>Yes</ISREVENUE><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE></GROUP>' +
+    '</DATA></BODY></ENVELOPE>';
+
+  it('reads name, parent and the revenue/debit classification', () => {
+    const { data } = normalizeGroups(xml);
+
+    expect(data).toHaveLength(2);
+    expect(data.find((g) => g.name === 'Sundry Debtors')).toEqual({
+      name: 'Sundry Debtors',
+      parent: 'Current Assets',
+      isRevenue: false,
+      isDeemedPositive: true,
+      source: { system: 'tallyprime', entityType: 'group', identifier: 'Sundry Debtors' },
+    });
+  });
+
+  it('reports an empty parent as null for a primary group', () => {
+    const { data } = normalizeGroups(xml);
+    expect(data.find((g) => g.name === 'Direct Expenses')?.parent).toBeNull();
+  });
+
+  it('ignores the CMPINFO counter element', () => {
+    const { data } = normalizeGroups(xml);
+    expect(data.map((g) => g.name)).not.toContain('');
   });
 });
 
@@ -188,6 +273,39 @@ describe('normalizeProfitLoss', () => {
   });
 });
 
+describe('normalizeMonthlyFlow', () => {
+  it('pairs each month with its own three columns positionally', () => {
+    const { data } = normalizeMonthlyFlow(fixture('cash-flow.xml'), 'cash flow');
+
+    expect(data.map((row) => row.period)).toEqual(['April', 'May', 'June', 'July']);
+    expect(data[0]).toEqual({
+      period: 'April',
+      // Debits arrive negative; the sign is passed through untouched.
+      debit: { amount: '-1111111.11', currency: 'INR' },
+      credit: { amount: '1000000', currency: 'INR' },
+      net: { amount: '-111111.11', currency: 'INR' },
+    });
+  });
+
+  it('reads the funds flow shape with the same pairing', () => {
+    const { data } = normalizeMonthlyFlow(fixture('funds-flow.xml'), 'funds flow');
+
+    expect(data).toHaveLength(4);
+    // Each month's debit equals the previous month's credit in Tally's own
+    // export: opening and closing funds. Columns must not get mixed up.
+    expect(data[1]?.debit).toEqual(data[0]?.credit);
+    expect(data[2]?.debit).toEqual(data[1]?.credit);
+  });
+
+  it('reports a month with no amount block as nulls plus a warning, never zeros', () => {
+    const xml = '<ENVELOPE><DSPPERIOD>April</DSPPERIOD></ENVELOPE>';
+    const { data, warnings } = normalizeMonthlyFlow(xml, 'cash flow');
+
+    expect(data).toEqual([{ period: 'April', debit: null, credit: null, net: null }]);
+    expect(warnings.some((w) => w.includes('April'))).toBe(true);
+  });
+});
+
 describe('normalizeVouchers', () => {
   it('reads the header fields of each voucher', () => {
     const { data } = normalizeVouchers(fixture('day-book.xml'));
@@ -201,6 +319,71 @@ describe('normalizeVouchers', () => {
       isCancelled: false,
       isOptional: false,
     });
+  });
+
+  /**
+   * `<VOUCHER>0</VOUCHER>` from the CMPINFO preamble must never become a record.
+   *
+   * Every other normaliser filters these out by requiring a NAME attribute, but a
+   * voucher has none, so this was the one record type that could return a
+   * phantom — null date, null number, no entries. It inflated the voucher count
+   * AND handed the tie-out control an unbalanced voucher. Only reachable when the
+   * response omits the `<DATA>` wrapper, which Tally really does on empty results
+   * (see stock-items-empty.xml).
+   */
+  it('ignores the CMPINFO counter when the response has no DATA wrapper', () => {
+    const { data } = normalizeVouchers(
+      '<ENVELOPE><BODY><DESC><CMPINFO><COMPANY>0</COMPANY><VOUCHER>0</VOUCHER></CMPINFO></DESC>' +
+        '<TALLYMESSAGE><VOUCHER VCHTYPE="Payment"><DATE>20260728</DATE>' +
+        '<VOUCHERNUMBER>111</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></BODY></ENVELOPE>'
+    );
+
+    expect(data).toHaveLength(1);
+    expect(data[0]?.voucherNumber).toBe('111');
+  });
+
+  /**
+   * Tally emits numeric character references, and fast-xml-parser decodes named
+   * entities but not numeric ones. A real bank narration arrived as
+   * "...530943&#13;&#10;RECURRING..." — six literal escape characters where the
+   * statement has a line break, which also broke narration search across it.
+   */
+  it('decodes numeric character references in text', () => {
+    const { data } = normalizeVouchers(
+      '<ENVELOPE><BODY><DATA><VOUCHER VCHTYPE="Payment">' +
+        '<NARRATION>Ref 123&#13;&#10;Bank: HDFC</NARRATION></VOUCHER></DATA></BODY></ENVELOPE>'
+    );
+
+    expect(data[0]?.narration).toBe('Ref 123\r\nBank: HDFC');
+  });
+
+  /**
+   * An invoice carries BOTH entry lists, with LEDGERENTRIES.LIST repeating the
+   * party that ALLLEDGERENTRIES.LIST already holds. Reading both counted the
+   * party twice and failed 29 of 453 real vouchers on double entry.
+   */
+  it('prefers ALLLEDGERENTRIES and does not also read the duplicate LEDGERENTRIES', () => {
+    const { data } = normalizeVouchers(
+      '<ENVELOPE><BODY><DATA><VOUCHER VCHTYPE="Sales">' +
+        '<ALLLEDGERENTRIES.LIST><LEDGERNAME>Party</LEDGERNAME>' +
+        '<AMOUNT>-100</AMOUNT><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE></ALLLEDGERENTRIES.LIST>' +
+        '<ALLLEDGERENTRIES.LIST><LEDGERNAME>Sales</LEDGERNAME>' +
+        '<AMOUNT>100</AMOUNT><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE></ALLLEDGERENTRIES.LIST>' +
+        '<LEDGERENTRIES.LIST><LEDGERNAME>Party</LEDGERNAME>' +
+        '<AMOUNT>-100</AMOUNT><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE></LEDGERENTRIES.LIST>' +
+        '</VOUCHER></DATA></BODY></ENVELOPE>'
+    );
+
+    const entries = data[0]?.entries ?? [];
+    expect(entries.map((entry) => entry.ledgerName)).toEqual(['Party', 'Sales']);
+    // The whole point: the voucher balances only if the party is counted once.
+    const total = entries.reduce((sum, entry) => sum + Number(entry.amount?.amount ?? 0), 0);
+    expect(total).toBe(0);
+  });
+
+  it('labels amounts with the currency it is given, not a hard-coded INR', () => {
+    const { data } = normalizeVouchers(fixture('day-book.xml'), false, '$');
+    expect(data[0]?.entries[0]?.amount?.currency).toBe('$');
   });
 
   it('handles a non-numeric voucher number', () => {

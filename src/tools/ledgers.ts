@@ -4,38 +4,49 @@ import { buildLedgerListRequest } from '../tally/requests.js';
 import { normalizeLedgers, type Ledger } from '../tally/normalize.js';
 import { TallyError } from '../tally/TallyError.js';
 import {
+  allFieldsSchema,
   companySchema,
+  conditionsSchema,
+  nameSchema,
   paginationSchema,
+  querySchema,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
 } from '../schemas/common.js';
-import { paginate, resolvePagination } from '../utils/pagination.js';
 import {
-  assertCompanyIsLoaded,
+  DEFAULT_PAGE_SIZE,
+  FIELD_HEAVY_PAGE_SIZE,
+  paginate,
+  resolvePagination,
+} from '../utils/pagination.js';
+import { matchesText } from '../utils/text.js';
+import { foldUniformFields, uniformFieldsNote } from '../utils/uniformFields.js';
+import {
+  applyConditions,
   assertResultSetFits,
+  fetchCollection,
+  findByName,
+  fromPage,
   runTool,
+  whole,
+  type DatasetSpec,
   type ToolDeps,
 } from './toolResult.js';
 
-/** Opt-in switch for the expensive everything-Tally-holds fetch. */
-const allFieldsSchema = z
-  .boolean()
-  .optional()
-  .describe(
-    'Return every field TallyPrime holds for each ledger, not just the common ones, under a ' +
-      '"fields" map. Which fields exist depends on what this company has configured. Roughly ' +
-      '37x the payload, so use it when investigating a specific ledger or auditing a company, ' +
-      'not for browsing. Defaults to false.'
-  );
-
 /**
- * Ledger tools.
- *
- * Tally has no server-side filter or search for masters: the collection comes
- * back whole, every time. Searching and fetching a single ledger are therefore
- * client-side operations over one full fetch, and the tool descriptions say so
- * rather than implying a cheap targeted query exists.
+ * `tally_get_ledgers`: list, search, exact-fetch and multi-condition filter
+ * over ledger accounts — one tool, because Tally has no server-side filter or
+ * search for masters, so all four are the same full fetch with a different
+ * client-side selection on top of it.
  */
+
+const LEDGER_FIELDS: DatasetSpec<Ledger> = {
+  name: { type: 'string', get: (l) => l.name },
+  parent: { type: 'string', get: (l) => l.parent },
+  gstin: { type: 'string', get: (l) => l.gstin },
+  openingBalance: { type: 'money', get: (l) => l.openingBalance },
+  closingBalance: { type: 'money', get: (l) => l.closingBalance },
+};
 
 const BALANCE_NOTE =
   'BALANCES: signed exactly as TallyPrime reports them, where a negative closing balance ' +
@@ -43,198 +54,142 @@ const BALANCE_NOTE =
   'empty value, which is NOT the same as a balance of zero — a real zero is reported as 0.';
 
 const NARROW_HINT =
-  'This company has more ledgers than the configured limit. Raise TALLY_MAX_RECORDS, or use ' +
-  'tally_search_ledgers to narrow by name or group instead of listing everything.';
+  'This company has more ledgers than the configured limit. Raise TALLY_MAX_RECORDS, or add a ' +
+  'name/query/conditions filter to narrow instead of listing everything.';
 
-const LIST_DESCRIPTION = [
-  'List ledger accounts with their parent group and opening/closing balances.',
+const DESCRIPTION = [
+  'Ledger accounts: list, search, fetch one by exact name, or filter by combining conditions ' +
+    'on name/parent/GSTIN/balance — one call, one mode, picked by which parameters are given.',
   '',
-  'WHEN TO USE: to survey the chart of accounts, or to find the exact ledger name needed by ' +
-    'another tool. For a known name or a name fragment, tally_search_ledgers is more direct.',
+  'MODES:',
+  '- name given: fetch that one ledger exactly. Fails with TALLY_COMPANY_NOT_FOUND naming the ' +
+    'ledger, rather than returning null, so a typo is distinguishable from a ledger with genuinely ' +
+    'no data.',
+  '- query given (no name): case-insensitive substring against the ledger name and its parent ' +
+    'group — e.g. "Gupta" finds "Gupta Traders"; "Gupt" does too; "Gupat" does not.',
+  '- conditions given: combine more than one field at once — e.g. ledgers under a given group ' +
+    'with a closing balance above an amount. Fields: name (string), parent (string), gstin ' +
+    '(string), openingBalance (money), closingBalance (money). All conditions AND together. An ' +
+    "unknown field or an op invalid for that field's type fails with INVALID_PARAMETERS.",
+  '- none given: list every ledger.',
+  'name, query and conditions may be combined; each narrows the result further.',
   '',
   'RETURNS: ledger name, parent group, opening and closing balance, and party GSTIN where set.',
   '',
-  'DOES NOT RETURN: transactions. This is master data only — use tally_list_vouchers for entries.',
+  'DOES NOT RETURN: transactions. This is master data only — use tally_get_vouchers for entries.',
   '',
   BALANCE_NOTE,
-  '',
-  'PAGINATION: client-side. TallyPrime does not paginate, so the entire ledger list is fetched ' +
-    'on every call regardless of pageSize. A small pageSize does NOT make the call cheap.',
-  '',
-  UNTRUSTED_CONTENT_NOTICE,
-  '',
-  READ_ONLY_NOTICE,
-].join('\n');
-
-const SEARCH_DESCRIPTION = [
-  'Find ledger accounts whose name or parent group matches a search term.',
-  '',
-  'WHEN TO USE: to locate a party or account without knowing its exact spelling in Tally, ' +
-    'or to list every ledger under a group such as "Sundry Creditors".',
-  '',
-  'RETURNS: the same fields as tally_list_ledgers, filtered to matches.',
-  '',
-  'MATCHING: case-insensitive substring, applied to the ledger name and its parent group. ' +
-    'Not a fuzzy match — "Gupta" finds "Gupta Traders", "Gupt" does too, "Gupat" does not.',
   '',
   'COST: TallyPrime cannot filter server-side, so the full ledger list is fetched and filtered ' +
-    'here. Searching is no cheaper than listing; it is only easier to read.',
+    'here regardless of mode. A narrower filter is not a cheaper request; it is only a smaller ' +
+    'response.',
+  '',
+  'PAGINATION: client-side, for the same reason. A small pageSize does NOT make the call cheap.',
   '',
   UNTRUSTED_CONTENT_NOTICE,
   '',
   READ_ONLY_NOTICE,
 ].join('\n');
 
-const GET_DESCRIPTION = [
-  'Fetch a single ledger account by its exact name.',
-  '',
-  'WHEN TO USE: when the ledger name is already known exactly — typically from ' +
-    'tally_search_ledgers or from a voucher entry.',
-  '',
-  'RETURNS: name, parent group, opening and closing balance, and party GSTIN where set.',
-  '',
-  'NOT FOUND: fails with TALLY_COMPANY_NOT_FOUND naming the ledger, rather than returning null, ' +
-    'so a typo is distinguishable from a ledger that genuinely has no data.',
-  '',
-  BALANCE_NOTE,
-  '',
-  UNTRUSTED_CONTENT_NOTICE,
-  '',
-  READ_ONLY_NOTICE,
-].join('\n');
-
-/**
- * One full fetch of the ledger collection, shared by all three tools.
- * Nothing is cached between calls: data is read at the moment it is asked for.
- */
-async function fetchLedgers(
+/** One full fetch of the ledger collection, shared across modes. */
+export async function fetchLedgers(
   deps: ToolDeps,
   company: string | undefined,
   allFields = false
 ): Promise<{ ledgers: Ledger[]; warnings: string[] }> {
-  await assertCompanyIsLoaded(deps, company);
+  const { data, warnings } = await fetchCollection<Ledger>(deps, company, {
+    build: (options) => buildLedgerListRequest(options, allFields),
+    normalize: (xml, currency) => normalizeLedgers(xml, allFields, currency),
+    timeoutClass: allFields ? 'report' : 'standard',
+  });
 
-  const request = buildLedgerListRequest(
-    {
-      ...(company === undefined ? {} : { company }),
-      format: deps.config.tallyPreferredFormat,
-    },
-    allFields
-  );
-
-  // A full-field fetch is large enough to deserve the report timeout.
-  const response = await deps.client.send(request, allFields ? 'report' : 'standard');
-  const { data, warnings } = normalizeLedgers(response.body, allFields);
-
-  return { ledgers: data, warnings: [...response.repairs, ...warnings] };
+  return { ledgers: data, warnings };
 }
 
 export function registerLedgerTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
-    'tally_list_ledgers',
+    'tally_get_ledgers',
     {
-      description: LIST_DESCRIPTION,
+      description: DESCRIPTION,
       inputSchema: z.object({
+        name: nameSchema,
+        query: querySchema,
+        conditions: conditionsSchema,
         company: companySchema,
         includeAllFields: allFieldsSchema,
         ...paginationSchema,
       }),
     },
     async (args) =>
-      runTool('tally_list_ledgers', deps.logger, async () => {
-        const pagination = resolvePagination(args.page, args.pageSize);
-        const { ledgers, warnings } = await fetchLedgers(
-          deps,
-          args.company,
-          args.includeAllFields ?? false
-        );
-        assertResultSetFits(ledgers.length, deps.config, NARROW_HINT);
+      runTool('tally_get_ledgers', deps, async () => {
+        // A named lookup defaults to the full record — asking for one specific
+        // ledger is normally an investigation, and the whole record is what
+        // makes that answerable.
+        const allFields = args.includeAllFields ?? args.name !== undefined;
+        const { ledgers, warnings } = await fetchLedgers(deps, args.company, allFields);
 
-        return paginate(ledgers, pagination, warnings);
-      })
-  );
-
-  server.registerTool(
-    'tally_search_ledgers',
-    {
-      description: SEARCH_DESCRIPTION,
-      inputSchema: z.object({
-        query: z
-          .string()
-          .min(1)
-          .describe(
-            'Case-insensitive substring matched against the ledger name and its parent group.'
-          ),
-        company: companySchema,
-        includeAllFields: allFieldsSchema,
-        ...paginationSchema,
-      }),
-    },
-    async (args) =>
-      runTool('tally_search_ledgers', deps.logger, async () => {
-        const pagination = resolvePagination(args.page, args.pageSize);
-        const { ledgers, warnings } = await fetchLedgers(
-          deps,
-          args.company,
-          args.includeAllFields ?? false
-        );
-
-        const needle = args.query.toLowerCase();
-        const matches = ledgers.filter(
-          (ledger) =>
-            ledger.name.toLowerCase().includes(needle) ||
-            (ledger.parent ?? '').toLowerCase().includes(needle)
-        );
-
-        // Matching on an empty result is a finding, not a failure — the caller
-        // learns the term matches nothing in this chart of accounts.
-        return { query: args.query, ...paginate(matches, pagination, warnings) };
-      })
-  );
-
-  server.registerTool(
-    'tally_get_ledger',
-    {
-      description: GET_DESCRIPTION,
-      inputSchema: z.object({
-        name: z.string().min(1).describe('Exact ledger name as it appears in TallyPrime.'),
-        company: companySchema,
-        includeAllFields: z
-          .boolean()
-          .optional()
-          .describe(
-            'Return every field TallyPrime holds for this ledger. Defaults to TRUE here — ' +
-              'asking for one specific ledger is normally an investigation, and the whole record ' +
-              'is what makes that answerable. Set false for just the common fields.'
-          ),
-      }),
-    },
-    async (args) =>
-      runTool('tally_get_ledger', deps.logger, async () => {
-        const { ledgers, warnings } = await fetchLedgers(
-          deps,
-          args.company,
-          args.includeAllFields ?? true
-        );
-
-        // Exact match first; fall back to case-insensitive so a difference in
-        // capitalisation is not reported as a missing ledger.
-        const ledger =
-          ledgers.find((candidate) => candidate.name === args.name) ??
-          ledgers.find((candidate) => candidate.name.toLowerCase() === args.name.toLowerCase());
-
-        if (ledger === undefined) {
-          throw new TallyError(
-            'TALLY_COMPANY_NOT_FOUND',
-            `No ledger named "${args.name}" exists in the loaded company.`,
-            {
-              suggestion:
-                'Check the spelling, or use tally_search_ledgers to find the ledger by a fragment of its name.',
-            }
-          );
+        if (args.name !== undefined) {
+          const ledger = findByName(ledgers, args.name, (candidate) => candidate.name);
+          if (ledger === undefined) {
+            throw new TallyError(
+              'TALLY_COMPANY_NOT_FOUND',
+              `No ledger named "${args.name}" exists in the loaded company.`,
+              {
+                suggestion:
+                  'Check the spelling, or call this tool with a `query` fragment to find the ledger by name.',
+              }
+            );
+          }
+          return whole({ ledger, ...(warnings.length > 0 ? { warnings } : {}) }, 1);
         }
 
-        return { ledger, ...(warnings.length > 0 ? { warnings } : {}) };
+        let matches = ledgers;
+        if (args.query !== undefined) {
+          matches = matches.filter((ledger) =>
+            matchesText(args.query as string, ledger.name, ledger.parent)
+          );
+        }
+        if (args.conditions !== undefined && args.conditions.length > 0) {
+          matches = applyConditions(matches, LEDGER_FIELDS, args.conditions);
+        }
+
+        const pagination = resolvePagination(
+          args.page,
+          args.pageSize,
+          allFields ? FIELD_HEAVY_PAGE_SIZE : DEFAULT_PAGE_SIZE
+        );
+        assertResultSetFits(matches.length, deps.config, NARROW_HINT);
+
+        const page = paginate(matches, pagination, warnings);
+        // Same "populated but constant" pattern as vouchers: this is exactly the
+        // case docs/known-limitations.md already found ("115 fields populated,
+        // only 36 varied") — folded here so a full-detail ledger listing pays
+        // for it only once per response instead of once per ledger.
+        const folded = foldUniformFields(
+          page.items,
+          (ledger) => ledger.fields,
+          (ledger, fields) => ({ ...ledger, fields })
+        );
+        if (Object.keys(folded.uniformFields).length > 0) {
+          page.warnings = [
+            ...(page.warnings ?? []),
+            uniformFieldsNote(
+              Object.keys(folded.uniformFields).length,
+              folded.foldedOccurrences,
+              'ledger'
+            ),
+          ];
+        }
+
+        return fromPage(
+          { ...page, items: folded.records },
+          {
+            ...(args.query === undefined ? {} : { query: args.query }),
+            ...(Object.keys(folded.uniformFields).length > 0
+              ? { uniformFields: folded.uniformFields }
+              : {}),
+          }
+        );
       })
   );
 }

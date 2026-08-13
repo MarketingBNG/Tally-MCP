@@ -19,6 +19,7 @@ export const TALLY_ERROR_CODES = [
   'INVALID_DATE_RANGE',
   'INVALID_PARAMETERS',
   'RESULT_LIMIT_EXCEEDED',
+  'RESPONSE_TOO_LARGE',
 ] as const;
 
 export type TallyErrorCode = (typeof TALLY_ERROR_CODES)[number];
@@ -45,6 +46,12 @@ const DEFAULT_SUGGESTIONS: Record<TallyErrorCode, string> = {
   INVALID_PARAMETERS: 'Check the tool parameters against the tool schema and try again.',
   RESULT_LIMIT_EXCEEDED:
     'Narrow the query — use a smaller date range, add a filter, or request a specific record.',
+  // Distinct from RESULT_LIMIT_EXCEEDED: the records fitted this server's
+  // ceiling, but the serialised response is too big for the MCP client to
+  // accept. The remedy is a smaller page or fewer fields, not a shorter period.
+  RESPONSE_TOO_LARGE:
+    'Request a smaller page with pageSize, or set includeAllFields to false — the data was ' +
+    'retrieved successfully but is too large to return in one response.',
 };
 
 /** The shape handed back to Claude. Deliberately contains no stack trace. */

@@ -42,6 +42,33 @@ describe('parseTallyAmount', () => {
     expect(parseTallyAmount('-')).toBeNull();
   });
 
+  /**
+   * The regression that matters most in this file.
+   *
+   * The parser used to delete every non-digit and then treat the LAST dot as the
+   * decimal point, which salvaged a number out of anything containing digits.
+   * On Tally's own stock strings that produced a figure wrong by 100x, with no
+   * warning, because the unit's trailing dot became the decimal point:
+   *
+   *   "1000.00 Kgs." -> "100000"
+   *
+   * Those strings are what `StockItem.closingRate` and the quantity fields hold,
+   * so this was one call away from reporting a rate 100x too high. Refusing is
+   * the only safe answer: a null makes the caller warn, a salvaged number does
+   * not. Same rule for anything ambiguous — two dots, or European grouping.
+   */
+  it('refuses to salvage a number out of a value it cannot read', () => {
+    // Tally's real stock quantity and rate formats, observed live.
+    expect(parseTallyAmount('1000.00 Kgs.')).toBeNull();
+    expect(parseTallyAmount('20.00/Kgs.')).toBeNull();
+    // Ambiguous or malformed rather than merely noisy.
+    expect(parseTallyAmount('1.2.3')).toBeNull();
+    expect(parseTallyAmount('1.234,50')).toBeNull(); // European grouping
+    expect(parseTallyAmount('1e3')).toBeNull();
+    // An illegal-character reference that escaped sanitisation must not read as 4.
+    expect(parseTallyAmount('&#4; Not Applicable')).toBeNull();
+  });
+
   it('handles numeric input without floating-point drift', () => {
     expect(parseTallyAmount(0.1 + 0.2)).toBe('0.30000000000000004');
     expect(parseTallyAmount(1234.5)).toBe('1234.5');

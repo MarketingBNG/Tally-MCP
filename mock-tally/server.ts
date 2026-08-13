@@ -1,5 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { pathToFileURL } from 'node:url';
 
 /**
  * Mock TallyPrime HTTP server — TEST SUPPORT ONLY.
@@ -180,10 +181,23 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-/** Run standalone for manual poking: `npm run mock-tally`. */
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '')) {
+/**
+ * Run standalone for manual poking: `npm run mock-tally`.
+ *
+ * The entry check compares file URLs rather than basenames. Matching on
+ * `argv[1].split('/')` silently never fired on Windows, where argv[1] is a
+ * backslash path — so the script exited 0 having started nothing, which looks
+ * exactly like success. `pathToFileURL` normalises both sides on every
+ * platform.
+ *
+ * Standalone mode serves 404s until fixtures are registered, by design: this
+ * file ships no built-in fixtures (see the note at the top). It is useful for
+ * pointing a client at a port and watching what it sends, not for serving data.
+ */
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const server = new MockTallyServer();
   const port = await server.start(9999);
   console.log(`Mock Tally listening on http://127.0.0.1:${String(port)}`);
-  console.log('No fixtures are registered — see the note at the top of this file.');
+  console.log('No fixtures are registered, so every request gets a 501 telling you what it sent.');
+  console.log('See the note at the top of mock-tally/server.ts.');
 }
