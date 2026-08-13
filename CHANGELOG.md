@@ -12,6 +12,32 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.3.0 — 2026-08-13
+
+**Setup now works with Codex as well as Claude Desktop.**
+
+Setup asks which app you use — Claude Desktop, Codex, or both — and writes the
+right settings for it. Previously it only knew about Claude Desktop, so putting
+this on a machine running Codex meant editing a configuration file by hand on
+every laptop.
+
+- Setup lists the apps and marks the ones it can see on that computer. Pressing
+  Enter alone picks the sensible option, so nobody has to decide what to type.
+- Your other connections are left alone, on both apps. Codex ships one of its
+  own, and losing it would show up days later as an unrelated feature quietly
+  going missing — so that case is covered by a test rather than by care.
+- Re-running Setup updates the existing entry instead of adding a second one.
+  That keeps "I moved the folder and it stopped working" fixable by running
+  Setup again, which is the only repair that can reasonably be asked of anyone.
+- A backup of the previous settings is saved before either file is written.
+
+Both apps must be **fully closed and reopened** afterwards. Codex only reads its
+settings when it starts, the same as Claude Desktop.
+
+One limit worth knowing: this connects to TallyPrime on the same computer, so it
+works with apps that run on that machine. A browser-based assistant cannot reach
+TallyPrime at all, whichever app it is.
+
 ## 0.2.0 — 2026-08-13
 
 Every answer now says where it came from and whether it is complete.

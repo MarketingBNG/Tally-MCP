@@ -5,10 +5,16 @@ import { mergeServerIntoConfig, isPlainObject } from './lib/configMerge.mjs';
 import { probeTally } from './lib/probe.mjs';
 import { explainProbe } from './lib/explain.mjs';
 import { packageRootFor, isTemporaryLocation } from './lib/paths.mjs';
+import {
+  codexConfigPath,
+  isClaudeInstalled,
+  isCodexInstalled,
+  mergeServerIntoToml,
+} from './lib/codexConfig.mjs';
 
 /**
- * One-time (and re-runnable) setup: point Claude Desktop at this copy of the
- * server.
+ * One-time (and re-runnable) setup: point Claude Desktop and/or Codex at this
+ * copy of the server.
  *
  * Run through Setup.bat, never directly — the .bat is what supplies the bundled
  * Node runtime and keeps the window open at the end.
@@ -94,74 +100,23 @@ async function main() {
     ]);
   }
 
-  const configPath = claudeConfigPath();
-  if (!configPath) {
-    return fail([
-      'Could not work out where Claude Desktop keeps its settings.',
-      '',
-      'What to do:  check that Claude Desktop is installed on this computer,',
-      'then run Setup again.',
-    ]);
+  const targets = await chooseTargets();
+
+  const results = [];
+  for (const target of targets) {
+    const result = target === 'claude' ? configureClaude() : configureCodex();
+    results.push(result);
   }
 
-  // Step 1 — read whatever is there, and refuse rather than clobber.
-  let existing = null;
-  if (existsSync(configPath)) {
-    const raw = readFileSync(configPath, 'utf8');
-    if (raw.trim().length > 0) {
-      try {
-        existing = JSON.parse(raw);
-      } catch {
-        return fail([
-          'Claude Desktop\'s settings file could not be read.',
-          '',
-          `File:  ${configPath}`,
-          '',
-          'It contains something that is not valid settings, so Setup has stopped',
-          'rather than overwrite it and risk losing other connections you have',
-          'set up.',
-          '',
-          'What to do:  send that file to whoever set this up for you.',
-        ]);
-      }
-
-      if (!isPlainObject(existing)) {
-        return fail([
-          'Claude Desktop\'s settings file is not in the expected form.',
-          '',
-          `File:  ${configPath}`,
-          '',
-          'Setup has stopped rather than overwrite it.',
-          '',
-          'What to do:  send that file to whoever set this up for you.',
-        ]);
-      }
-    }
+  // A run that could configure NOTHING is a failed install, and must not go on
+  // to print "last step" as though it worked.
+  if (results.every((result) => !result.ok)) {
+    return fail(results.flatMap((result) => [`${result.app}:`, ...result.lines, '']));
   }
 
-  const { config, replacedExisting, preservedServers } = mergeServerIntoConfig(existing, {
-    nodePath: process.execPath,
-    serverPath: SERVER_ENTRY,
-    env: DEFAULT_ENV,
-  });
-
-  // Step 2 — back up before writing. Cheap, and the only thing standing
-  // between a bug here and someone else's connectors.
-  let backupPath = null;
-  if (existsSync(configPath)) {
-    backupPath = `${configPath}.backup-${timestamp()}`;
-    copyFileSync(configPath, backupPath);
-  }
-
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-
-  line(replacedExisting ? 'Updated the Claude Desktop connection.' : 'Connected to Claude Desktop.');
-  if (preservedServers.length > 0) {
-    line(`Left your other connections untouched: ${preservedServers.join(', ')}`);
-  }
-  if (backupPath) {
-    line('A backup of the previous settings was saved alongside them.');
+  blank();
+  for (const result of results) {
+    result.lines.forEach(line);
   }
   blank();
 
@@ -179,12 +134,23 @@ async function main() {
   blank();
 
   heading('Last step');
-  line('Close Claude Desktop completely, then open it again.');
-  blank();
-  line('Closing the window is not enough — it keeps running in the notification');
-  line('area, by the clock. Right-click its icon there and choose Quit, then');
-  line('start Claude Desktop again.');
-  blank();
+  const configured = results.filter((result) => result.ok).map((result) => result.app);
+
+  if (configured.includes('Claude Desktop')) {
+    line('Close Claude Desktop completely, then open it again.');
+    blank();
+    line('Closing the window is not enough — it keeps running in the notification');
+    line('area, by the clock. Right-click its icon there and choose Quit, then');
+    line('start Claude Desktop again.');
+    blank();
+  }
+
+  if (configured.includes('Codex')) {
+    line('Close Codex completely, then open it again — it only reads its settings');
+    line('at startup, so it will not see this until you do.');
+    blank();
+  }
+
   line('Then ask it something like:  "What is my cash balance in Tally?"');
   blank();
 
@@ -195,6 +161,211 @@ async function main() {
   }
 
   await pause();
+}
+
+/**
+ * Which app is this being set up for?
+ *
+ * Asked rather than inferred. A machine can have both installed while the user
+ * only ever opens one, and writing a config for an app nobody uses is at best
+ * clutter — at worst it is a second place to go wrong later.
+ *
+ * Detection LABELS the options; it never removes them. Someone setting up
+ * before they have launched the app for the first time must still be able to
+ * choose it, and a wrong guess here would be unfixable by a non-technical user.
+ *
+ * `--target=` / TALLY_SETUP_TARGET skip the prompt, which is what lets this be
+ * exercised by a test and by an unattended install.
+ */
+async function chooseTargets() {
+  const forced = (targetFromArgs() ?? process.env.TALLY_SETUP_TARGET ?? '').trim().toLowerCase();
+  if (forced === 'claude' || forced === 'codex' || forced === 'both') return expandChoice(forced);
+
+  const claude = isClaudeInstalled();
+  const codex = isCodexInstalled();
+  const found = '<- found on this computer';
+  const label = (text) => text.padEnd(16);
+
+  heading('Which app will you ask your questions in?');
+  line(`1.  ${label('Claude Desktop')}${claude ? found : ''}`);
+  line(`2.  ${label('Codex')}${codex ? found : ''}`);
+  line(`3.  ${label('Both')}`);
+  blank();
+
+  // Enter alone must do the right thing: for this audience, a prompt with no
+  // default is a place to get stuck.
+  const fallback = claude && codex ? '3' : codex && !claude ? '2' : '1';
+
+  // No keyboard attached (an unattended or scripted run). Choosing silently
+  // would leave no record of WHICH app was set up, so it says so.
+  if (!process.stdin.isTTY) {
+    line(`No keyboard input available, so Setup used option ${fallback}.`);
+    blank();
+    return expandChoice(fallback);
+  }
+
+  for (;;) {
+    const answer = (
+      await ask(`  Type 1, 2 or 3 and press Enter  (just Enter = ${fallback}):  `)
+    ).trim();
+    if (answer === '') return expandChoice(fallback);
+    if (answer === '1' || answer === '2' || answer === '3') return expandChoice(answer);
+    line('Please type 1, 2 or 3.');
+  }
+}
+
+function expandChoice(choice) {
+  if (choice === '1' || choice === 'claude') return ['claude'];
+  if (choice === '2' || choice === 'codex') return ['codex'];
+  return ['claude', 'codex'];
+}
+
+function targetFromArgs() {
+  const arg = process.argv.slice(2).find((value) => value.startsWith('--target='));
+  return arg ? arg.slice('--target='.length) : null;
+}
+
+function ask(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolveAnswer) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolveAnswer(answer);
+    });
+  });
+}
+
+/**
+ * Write the server into Claude Desktop's JSON config.
+ *
+ * Returns rather than throws, because with two apps in play one failing must
+ * not abandon the other: a user with both installed should still end up with a
+ * working Claude connection when Codex's config turns out to be unreadable.
+ */
+function configureClaude() {
+  const app = 'Claude Desktop';
+  const configPath = claudeConfigPath();
+  if (!configPath) {
+    return {
+      app,
+      ok: false,
+      lines: [
+        'Could not work out where Claude Desktop keeps its settings.',
+        'Check that Claude Desktop is installed, then run Setup again.',
+      ],
+    };
+  }
+
+  let existing = null;
+  if (existsSync(configPath)) {
+    const raw = readFileSync(configPath, 'utf8');
+    if (raw.trim().length > 0) {
+      try {
+        existing = JSON.parse(raw);
+      } catch {
+        return {
+          app,
+          ok: false,
+          lines: [
+            "Claude Desktop's settings file could not be read, so nothing was changed.",
+            `File:  ${configPath}`,
+            'Send that file to whoever set this up for you.',
+          ],
+        };
+      }
+      if (!isPlainObject(existing)) {
+        return {
+          app,
+          ok: false,
+          lines: [
+            "Claude Desktop's settings file is not in the expected form, so nothing was changed.",
+            `File:  ${configPath}`,
+            'Send that file to whoever set this up for you.',
+          ],
+        };
+      }
+    }
+  }
+
+  const { config, replacedExisting, preservedServers } = mergeServerIntoConfig(existing, {
+    nodePath: process.execPath,
+    serverPath: SERVER_ENTRY,
+    env: DEFAULT_ENV,
+  });
+
+  const backupPath = backup(configPath);
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+  return { app, ok: true, lines: describe(app, replacedExisting, preservedServers, backupPath) };
+}
+
+/**
+ * Write the server into Codex's `~/.codex/config.toml`.
+ *
+ * See lib/codexConfig.mjs for why this edits the file rather than calling
+ * `codex mcp add`: the executable hides behind a per-version hash and is
+ * routinely absent from PATH, so shelling out fails on exactly the machines
+ * this has to work on.
+ */
+function configureCodex() {
+  const app = 'Codex';
+  const configPath = codexConfigPath();
+  if (!configPath) {
+    return {
+      app,
+      ok: false,
+      lines: [
+        'Could not work out where Codex keeps its settings.',
+        'Check that Codex is installed, then run Setup again.',
+      ],
+    };
+  }
+
+  let existing = '';
+  if (existsSync(configPath)) {
+    try {
+      existing = readFileSync(configPath, 'utf8');
+    } catch {
+      return {
+        app,
+        ok: false,
+        lines: [
+          "Codex's settings file could not be read, so nothing was changed.",
+          `File:  ${configPath}`,
+        ],
+      };
+    }
+  }
+
+  const { text, replacedExisting, preservedServers } = mergeServerIntoToml(existing, {
+    nodePath: process.execPath,
+    serverPath: SERVER_ENTRY,
+    env: DEFAULT_ENV,
+  });
+
+  const backupPath = backup(configPath);
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, text, 'utf8');
+
+  return { app, ok: true, lines: describe(app, replacedExisting, preservedServers, backupPath) };
+}
+
+function describe(app, replacedExisting, preservedServers, backupPath) {
+  const lines = [replacedExisting ? `Updated the ${app} connection.` : `Connected to ${app}.`];
+  if (preservedServers.length > 0) {
+    lines.push(`  Left your other ${app} connections untouched: ${preservedServers.join(', ')}`);
+  }
+  if (backupPath) lines.push(`  A backup of the previous ${app} settings was saved alongside them.`);
+  return lines;
+}
+
+/** Copy before writing. The only thing between a bug here and someone's other connectors. */
+function backup(configPath) {
+  if (!existsSync(configPath)) return null;
+  const backupPath = `${configPath}.backup-${timestamp()}`;
+  copyFileSync(configPath, backupPath);
+  return backupPath;
 }
 
 /**

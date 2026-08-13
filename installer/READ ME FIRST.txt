@@ -20,7 +20,9 @@
 
   Three things need to be true. All of them are one-time, except the last.
 
-  1. Claude Desktop is installed on this computer.
+  1. Claude Desktop OR Codex is installed on this computer.
+
+     Either one works. Setup will ask which you use, and you can pick both.
 
   2. TallyPrime's connection setting is switched on. It is OFF by default.
 
@@ -35,7 +37,7 @@
      You only do this once on this computer.
 
   3. TallyPrime is OPEN, with your company loaded, whenever you want to ask
-     Claude something.
+     a question.
 
      This one is not optional and cannot be worked around. Tally only answers
      while it is running, and it serves one company at a time -- whichever one
@@ -52,15 +54,19 @@
 
   2. Double-click  Setup
 
-     It will tell you what it did, and whether it could see your Tally.
+     It asks which app you use -- Claude Desktop, Codex, or both. Type the
+     number and press Enter. If you are not sure, just press Enter.
 
-  3. Close Claude Desktop completely, then open it again.
+     It then tells you what it did, and whether it could see your Tally.
 
-     Closing the window is NOT enough. Claude keeps running in the
-     notification area, next to the clock. Right-click its icon there and
-     choose Quit, then start Claude Desktop again.
+  3. Close that app completely, then open it again.
 
-  4. Ask Claude:  "What is my cash balance in Tally?"
+     Closing the window is NOT enough. Claude Desktop keeps running in the
+     notification area, next to the clock -- right-click its icon there and
+     choose Quit, then start it again. Codex must also be fully closed and
+     reopened, because it only reads its settings when it starts.
+
+  4. Ask it:  "What is my cash balance in Tally?"
 
   That is it.
 
