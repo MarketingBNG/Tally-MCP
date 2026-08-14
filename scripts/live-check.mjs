@@ -165,7 +165,10 @@ async function run(label, tool, args = {}, expect = 'ok') {
 
   // `expect` records intent: some of these calls SHOULD fail, and a run where a
   // guard rail quietly started passing is a regression, not a success.
-  const asExpected = expect === 'ok' ? !failed : failed && code === expect;
+  // 'either' means the outcome legitimately depends on the loaded company's data
+  // rather than on this build — see 10-bank-year-oversized.
+  const asExpected =
+    expect === 'either' ? true : expect === 'ok' ? !failed : failed && code === expect;
   results.push({ label, tool, args, ok: !failed, code, expect, asExpected, elapsedMs, file: `${label}.json` });
 
   console.log(
@@ -205,11 +208,49 @@ if (!loaded) {
  * date-defaulted query. Deriving the period from `startingFrom` means this script
  * keeps working next April instead of quietly testing an empty range.
  */
-const startYear = Number((loaded.startingFrom ?? '2025-04-01').slice(0, 4));
-const fy = { fromDate: `${String(startYear)}-04-01`, toDate: `${String(startYear + 1)}-03-31` };
-const q1 = { fromDate: `${String(startYear)}-04-01`, toDate: `${String(startYear)}-06-30` };
-const q2 = { fromDate: `${String(startYear)}-07-01`, toDate: `${String(startYear)}-09-30` };
-const month = { fromDate: `${String(startYear)}-04-01`, toDate: `${String(startYear)}-04-30` };
+/*
+ * Corrected 2026-08-14. This block used to hardcode 1 April to 31 March, which
+ * made it silently test an EMPTY RANGE on any company that does not keep an
+ * Indian financial year — observed against a German company whose books run
+ * January to December, where the bank and ageing assertions all reported "no
+ * data" for a period the company holds nothing in. The same class of bug the
+ * script's own comment above warns about, one level up.
+ *
+ * `bookYearFor` derives the twelve-month window from the company's own start
+ * month and day, and `endingAt` anchors it on the last date the company holds
+ * data for rather than on today.
+ */
+const { bookYearFor } = await dist('utils/dates.js');
+const booksFrom = loaded.startingFrom ?? '2025-04-01';
+const fy = bookYearFor(booksFrom, loaded.endingAt ?? booksFrom);
+
+/** Month N of the company's own book year, as an offset from its start month. */
+const monthsIn = (offset, length) => {
+  const start = new Date(
+    Date.UTC(
+      Number(fy.fromDate.slice(0, 4)),
+      Number(fy.fromDate.slice(5, 7)) - 1 + offset,
+      Number(fy.fromDate.slice(8, 10))
+    )
+  );
+  const end = new Date(
+    Date.UTC(
+      start.getUTCFullYear(),
+      start.getUTCMonth() + length,
+      Number(fy.fromDate.slice(8, 10))
+    )
+  );
+  end.setUTCDate(end.getUTCDate() - 1);
+  const iso = (d) =>
+    `${String(d.getUTCFullYear())}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(
+      d.getUTCDate()
+    ).padStart(2, '0')}`;
+  return { fromDate: iso(start), toDate: iso(end) };
+};
+
+const q1 = monthsIn(0, 3);
+const q2 = monthsIn(3, 3);
+const month = monthsIn(0, 1);
 
 console.log(`\nCompany: "${loaded.name}", books from ${String(loaded.startingFrom)}`);
 console.log(`Testing over ${fy.fromDate} to ${fy.toDate}\n`);
@@ -260,11 +301,18 @@ const bank = await run('09-bank-month', 'tally_get_bank_reconciliation', month);
  * measured size, and retries with it. A refusal that cannot be acted on would be
  * no better than a truncated answer.
  */
+/*
+ * Whether a full year of bank entries actually EXCEEDS the ceiling depends on the
+ * company, so the expectation is 'either' rather than RESPONSE_TOO_LARGE: a
+ * company with few bank entries answers this fine, and going red for that would
+ * be reporting a property of the books as a defect. The recovery loop below still
+ * runs whenever the refusal does happen, which is the thing worth proving.
+ */
 const oversized = await run(
   '10-bank-year-oversized',
   'tally_get_bank_reconciliation',
   { ...fy, pageSize: 400 },
-  'RESPONSE_TOO_LARGE'
+  'either'
 );
 let retried = null;
 if (oversized === null) {
@@ -344,7 +392,7 @@ if (midYear) {
   );
   check(
     'and says so in a warning, not only in a flag',
-    (midYear.warnings ?? []).some((w) => /ignores the end date/i.test(w))
+    (midYear.warnings ?? []).some((w) => /did not honour the end date/i.test(w))
   );
 }
 
@@ -390,16 +438,27 @@ if (types) {
 
 if (bank) {
   const statuses = new Set(bank.items.map((r) => r.reconciled));
-  check(
-    'bank instruments were found to report on',
-    bank.items.length > 0,
-    `${String(bank.items.length)} instrument(s)`
-  );
-  check(
-    'reconciled status is null exactly when no bank date is reported anywhere',
-    bank.reconciliationStatusAvailable === !statuses.has(null),
-    `statusAvailable=${String(bank.reconciliationStatusAvailable)}`
-  );
+
+  /*
+   * Whether this company HAS bank instruments in the period is a fact about the
+   * company, not about this build, so an empty result is reported as unexercised
+   * rather than failed — the same treatment the coverage section at the end gives
+   * the two paths that need particular data. Asserting it would mean the script
+   * goes red on a perfectly good company that happens to pay by transfer, which
+   * trains the reader to ignore red.
+   */
+  if (bank.items.length === 0) {
+    console.log(
+      '  (skipped: this company records no bank instruments in the period, so the ' +
+        'reconciliation assertions below have nothing to run against)'
+    );
+  } else {
+    check(
+      'reconciled status is null exactly when no bank date is reported anywhere',
+      bank.reconciliationStatusAvailable === !statuses.has(null),
+      `statusAvailable=${String(bank.reconciliationStatusAvailable)}, ${String(bank.items.length)} instrument(s)`
+    );
+  }
   const leftoverZeros = bank.items.flatMap((r) =>
     Object.entries(r.instrument).filter(([k, v]) => k.startsWith('DENOMINATIONCOUNT') && Number(v) === 0)
   );

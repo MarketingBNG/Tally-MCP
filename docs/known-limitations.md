@@ -7,7 +7,53 @@ says it cannot help.
 > For **how much is done** rather than why it behaves as it does, see
 > [project-status.md](project-status.md). For **what each tool costs** in tokens
 > and time, measured against a live install, see
-> [performance.md](performance.md).
+> [performance.md](performance.md). For **what of Tally is reachable at all**, see
+> [coverage.md](coverage.md).
+
+## Read first: findings of 14 Aug 2026 supersede parts of this document
+
+Two live sessions that day — the first against a single Indian company, the second
+against **three companies loaded at once** (Germany, USA, India) — established seven
+things that contradict or sharpen what is written below. Full evidence in
+[probe-findings-2026-08-14.md](probe-findings-2026-08-14.md).
+
+The second session is the one that matters most for reading the rest of this
+document: **several of the limitations recorded here were measured on a
+single-company install, and three of them do not survive contact with three.**
+
+1. **An invalid collection `<TYPE>` parks TallyPrime behind a modal "incorrect
+   object type" dialog**, blocking the HTTP interface until a human dismisses it.
+   This document previously identified only *a bare collection name with no
+   definition* as dangerous. That is too narrow: a collection with a complete
+   inline definition is equally dangerous if the TYPE is unrecognised. Two
+   TallyPrime restarts during that session. **Never send an unobserved collection
+   TYPE.** Report IDs remain the safe class and still reject harmlessly.
+2. **The voucher collection returns only the CURRENT financial year**, not "the
+   whole book" as recorded below. Five years of history are unreachable, and every
+   completeness signal reports the four-month answer as whole.
+3. **A non-binding statement end date accumulates to a FIXED endpoint** — the end
+   of the financial year containing the company's `EndingAt` — not "to the end of
+   the company's financial year". On the company tested that turned an FY 2023-24
+   request into four years of accumulation, and the reported span was arithmetically
+   impossible (an end date before the start date).
+4. **The date wire format is not the cause of the 31st-only end-date rule.** Four
+   encodings were tested; three behave identically. The rule is real. ISO
+   `YYYY-MM-DD` is silently mis-parsed and must never be sent.
+5. **"One company at a time" is wrong — see the corrected section below.**
+   TallyPrime holds several companies open simultaneously, and `SVCURRENTCOMPANY`
+   selects between them successfully on a per-request basis. Verified across three
+   companies returning three genuinely different trial balances. The claim below
+   that "no amount of work on this server would change that" is withdrawn.
+6. **`SVCURRENTCOMPANY` matching is case-INSENSITIVE and whitespace-tolerant, and
+   an unmatched name returns an EMPTY report** rather than another company's
+   figures. This refutes the wrong-attribution hazard this project spent effort
+   defending against. The defence is retained, but for the smaller reason that an
+   empty report reads as "this company has nothing to report".
+7. **A company's currency symbol being untransportable is not a single-company
+   problem.** A German and an Indian company BOTH report their symbol as a literal
+   `?`, because `€` and `₹` are equally absent from Tally's export codepage. Any
+   mechanism that supplies a replacement label therefore has to be per company; a
+   global one labels rupees EUR.
 
 ## Status: v1 and v2 built
 
@@ -193,14 +239,80 @@ counters are dropped from `instrument`; a non-zero one is always kept, because o
 a cash transaction it is real data. Disclosed in the tool description rather than
 trimmed silently.
 
-### The statements ignore the requested END date and accumulate to the year end
+### The statements honour the requested END date only when it falls on a 31st
 
-**The most consequential finding about this server's figures so far, and it
-affects a v1 tool that was believed verified.** Found 2026-08-12 by an adversarial
-review of a live run, not by the live run itself.
+> **Corrected 2026-08-14.** This section previously said the end date was ignored
+> ALWAYS. That was an over-generalisation from correct observations, and the
+> correction is below under "The rule, established 2026-08-14". The observations
+> in the original account all still reproduce; only the rule drawn from them
+> changed. The original text is kept because the reasoning is what made the
+> under-sampling visible.
+
+**The rule, established 2026-08-14.** `SVTODATE` binds **if and only if its day of
+the month is the 31st.** On any other day TallyPrime ignores it and the figures
+accumulate from `fromDate` to the end of the company's own book year.
+
+Established by sweeping the end date against a live install with the cache off —
+[scripts/probe-todate-binding.ts](../scripts/probe-todate-binding.ts), also
+`npm run probe:todate`. `Cash Flow` was used because it returns one row per month,
+so the row count is a direct readout of the span Tally chose. Nineteen
+observations, no exceptions, `fromDate` held at 2024-01-01 on a company whose book
+year runs January to December:
+
+| `toDate` | Day | Rows returned | Verdict |
+|---|---|---|---|
+| 2024-01-31 | 31 | 1 (January) | honoured |
+| 2024-03-31 | 31 | 3 (Jan–Mar) | honoured |
+| 2024-05-31 | 31 | 5 | honoured |
+| 2024-07-31 | 31 | 7 | honoured |
+| 2024-08-31 | 31 | 8 | honoured |
+| 2024-12-31 | 31 | 12 | honoured |
+| 2024-02-29 | 29 | **36** | ignored |
+| 2024-03-15 | 15 | **36** | ignored |
+| 2024-03-30 | 30 | **36** | ignored |
+| 2024-04-30 | 30 | **36** | ignored |
+| 2024-06-30 | 30 | **36** | ignored |
+| 2024-09-30 | 30 | **36** | ignored |
+| **2024-11-30** | 30 | **36** | ignored |
+
+**2024-11-30 is the decisive row.** It is a genuine month end, and it is still
+ignored — which rules out "the last day of the month" as the explanation and
+leaves only the literal 31st. A second sweep from 2024-06-01 agreed: 30 June gave
+31 rows (June 2024 through December 2026, the whole remaining book span), while
+31 August gave 3 and 31 December gave 7.
+
+**Why the original conclusion was wrong, and it is instructive.** Every span
+tested in 2026-08-12 ended on a calendar quarter end, and three of the four
+quarter ends fall on the 30th. The nine-month Cash Flow result was
+1-Jul-2025 → 31-Mar-2026 for an April-year company: exactly what "ignored, ran to
+the book year end" predicts. The rule explains the old evidence perfectly; the old
+evidence simply could not distinguish "always ignored" from "ignored unless the
+31st", because it never once asked for a 31st. Not a bad inference — an
+under-sampled one. The mechanism inside TallyPrime remains unknown and is not
+guessed at; what is documented is the behaviour.
+
+**What changed in the server.**
+
+- `coversPeriodRequested` is now decided by the DATE, locally, at no request cost
+  (`endDateBinds` in [../src/utils/dates.ts](../src/utils/dates.ts)). It is `true`
+  for any period ending on a 31st, not only for one ending at the year end.
+- **Period comparison is now refused only when an end date genuinely does not
+  bind**, and **both** sides are checked — the asymmetric case (a bound period
+  minus an unbound one) is the same fabrication, half the time.
+- Refusals name the nearest 31st that would work (`nearestBindingEndDate`) instead
+  of only saying no. So "compare Q1 to Q2" is answerable by moving the ends.
+- The old rule cost real capability: month-end and quarter-end questions ending on
+  a 31st were refused although Tally answers them exactly.
+
+**Still true, and still the trap:** 30 June and 30 September — the two calendar
+quarter ends an accountant reaches for most — do NOT bind.
+
+#### The original account, from 2026-08-12
+
+Found by an adversarial review of a live run, not by the live run itself.
 
 TallyPrime honours `SVFROMDATE` on `Trial Balance`, `Profit and Loss` and
-`Cash Flow` and **ignores `SVTODATE`**. The figures accumulate from the start date
+`Cash Flow` and ignores `SVTODATE`. The figures accumulate from the start date
 to the end of the company's financial year, whatever end date was asked for. Two
 independent proofs from the same captured run:
 
@@ -224,15 +336,17 @@ the end date" are the same figures. The check that existed precisely to catch th
 class of error was blind to it for want of a later transaction. It took a second
 company, with a full year of data and a mid-year query, to expose it.
 
-**Consequences.**
+**Consequences** (as understood on 2026-08-12 — the guard is narrower now, see the
+corrected rule above; the reasoning about WHY it must be guarded is unchanged and
+is why the guard still exists).
 
-- Any `tally_get_statement` call whose `toDate` is not the company's financial
-  year end returns a **cumulative position from `fromDate`**, not the period
+- Any `tally_get_statement` call whose `toDate` is not honoured returns a
+  **cumulative position from `fromDate`**, not the period
   requested. Every response now carries `coversPeriodRequested`, plus
   `figuresActuallyCover` when it is false, and a warning saying so. The figures
   are real and are still returned — withholding correct data would be worse — but
   they must be quoted as a cumulative position.
-- **Period comparison is refused** unless the main period ends at the year end.
+- **Period comparison is refused** when an end date is not honoured.
   This is the dangerous case: if both sides accumulate to the same year end, the
   subtraction collapses algebraically to *minus the whole of the earlier period*.
   On the company probed, a Q2-vs-Q1 trial balance comparison would have reported
@@ -274,6 +388,92 @@ definition for these three IDs, not in what this server sends. The mitigation
 stands as the answer rather than a placeholder. Re-running this experiment
 without a new, specific, documented candidate would not learn anything the run
 above didn't already establish.
+
+**Footnote, 2026-08-14.** That conclusion holds — no static variable makes an
+arbitrary end date bind — but it is worth recording what the probe missed and why.
+Every candidate was tested against a single baseline period, and that period ended
+on a **30th**. Since the day of the month turned out to be the whole rule, no
+candidate could ever have appeared to work, and a variable that changed nothing
+was indistinguishable from a period that was never going to bind. Varying the
+input as well as the setting is what found it. The general lesson, for the next
+probe of this kind: **sweep the input, not only the knob.**
+
+### TallyPrime declares UTF-8 and sends Windows-1252 — party names were being corrupted
+
+**Found 2026-08-14 while investigating something smaller, and it was the most
+serious defect found that day.** The trigger was a cosmetic-looking complaint: a
+German company's base currency was reported as `?`. Reading the raw response bytes
+to find out why exposed a much larger problem underneath.
+
+TallyPrime answered `Content-Type: text/xml; charset=utf-8` with a body containing
+**single-byte ISO-8859-1 / Windows-1252 text**:
+
+```
+<LEDGER NAME="Allg\xE4uer \xD6lm\xFChle GmbH">     -> Allgäuer Ölmühle GmbH
+<LEDGER NAME="AOK Baden-W\xFCrttemberg">           -> AOK Baden-Württemberg
+<LEDGER NAME="B\xE4ttre H\xE4lsa AB">              -> Bättre Hälsa AB
+<LEDGER NAME="Verk\xE4ufe">                        -> Verkäufe
+```
+
+Every one of those bytes is **invalid UTF-8**. The decoder was a non-fatal
+`TextDecoder('utf-8')` — the default — so each became U+FFFD silently. **Twenty
+real party and ledger names in that company were arriving corrupted**, with
+nothing anywhere reporting a problem: `Allg�uer �lm�hle GmbH`.
+
+**Why this was worse than a display glitch.** A name is an *identity* in this
+server, not a label. `tally_get_ledgers({ name })` matches on it, `tally_search`
+searches it, `tally_get_party_statement` is keyed by it, and ageing groups by it.
+A corrupted name silently fails to match the party it names — so the failure mode
+was "this supplier does not exist" against a supplier that plainly does.
+
+**The fix.** Attempt UTF-8 **strictly** (`{ fatal: true }`). A clean decode proves
+the payload really was UTF-8 and nothing is assumed. A throw proves it was not, and
+the bytes are then read as Windows-1252, which is **lossless**: every byte 0x00–0xFF
+maps to a character, so there is no replacement character and no silent loss.
+cp1252 rather than ISO-8859-1 because Tally is a Windows application and the two
+agree on every accented byte, differing only in 0x80–0x9F where Latin-1 has
+unusable C1 controls.
+
+Verified live after the fix: 472 ledgers, 20 with non-ASCII names, **0 mangled**,
+and the client reports `encoding: 'windows-1252'` rather than the declared UTF-8.
+
+**What cannot be fixed, and it is a real boundary.** TallyPrime substitutes
+characters that are absent from its export codepage with a literal `?` (byte 0x3F)
+*before the data leaves TallyPrime*. Two examples from the same company:
+
+- The base currency, a euro sign, arrives as `?`. The euro is not in ISO-8859-1.
+- A Polish supplier "SPÓŁKA" arrives as `SPÓ?KA`: `Ó` is in the codepage and
+  survives, `Ł` is not and does not.
+
+Ten candidate encoding settings were probed live
+([scripts/probe-encoding.ts](../scripts/probe-encoding.ts)) — `SVENCODINGFORMAT`,
+`SVEXPORTENCODING`, `ENCODINGTYPE`, `SVUNICODE`, `SVISUNICODE`, `SVCHARSET` in
+UNICODE and UTF-8 variants, plus `$$SysName:UnicodeXML` as the export format. **All
+ten responses were byte-identical to the baseline**, so no request-side setting
+reaches this. If it is settable at all it is a TallyPrime-side option, not
+something this server can ask for.
+
+So substitution is disclosed rather than worked around:
+
+- A currency symbol that is entirely substituted is reported as `"unknown"` — a
+  word, chosen because it cannot be mistaken for a symbol or an ISO code — with a
+  warning naming the country and stating that the amounts are exact and unconverted.
+  See `currencyIsUnavailable` in [../src/utils/numbers.ts](../src/utils/numbers.ts).
+- It is deliberately **not** defaulted to INR. That would label euro balances INR,
+  which is the bug fixed on 2026-08-13 in a new costume, and the more dangerous
+  shape: right numbers under a confidently wrong label.
+- The warning explicitly tells the reader **not to infer the currency from the
+  country** — this company is German and also defines `$`, so Germany does not
+  imply euros.
+- A substituted character inside a NAME is not detectable and is not guessed at.
+  `SPÓ?KA` is reported as Tally sent it.
+
+**The lesson worth carrying.** The investigation was opened on a currency label and
+found a data-integrity bug in every name in the company. The reason it had gone
+unnoticed for so long is that both prior verification companies were
+ASCII-only — an Indian company and a US one — so nothing in the fixtures or the
+live checks had ever contained a byte above 0x7F. A regression test now carries the
+exact Latin-1 bytes from the live response.
 
 ### The trial balance carries stock at its OPENING value; the balance sheet and ledger masters carry CLOSING
 
@@ -367,6 +567,47 @@ mean silently answering about a period nobody asked for, which is the failure
 mode this codebase avoids everywhere else. The extra company lookup happens only
 on the empty-and-defaulted path, and a failure in it is swallowed — a diagnostic
 must never turn a valid empty answer into an error.
+
+#### And the financial year is not always April to March — fixed 2026-08-14
+
+The default above is one thing; **deriving a company's year by assuming April was
+another, and it was a bug.** Found by loading a German GmbH whose books run
+January to December.
+
+`financialYearFor('2023-01-01')` returns 1-Apr-2022 to 31-Mar-2023 — a window that
+does not even contain the company's own start date. Three places consumed it:
+
+| Consumer | What the April assumption did |
+|---|---|
+| The statement end-date guard | Computed the wrong accumulation end, so `figuresActuallyCover` reported **`{fromDate: 2024-01-01, toDate: 2023-03-31}`** — an inverted range, in a user-facing warning, telling the reader the figures covered a date eight months BEFORE the period they asked about |
+| `noteEmptyDefaultedPeriod` | Suggested a retry range containing none of the company's data |
+| `tally_check_tie_out` | Defaulted to a period the company never closed against, so its roll-forward would report differences that are not errors |
+
+Fixed with `bookYearFor(startIso, onIso)`: twelve months anchored on the month and
+day the company's OWN books begin. An April company still gets April to March,
+which is why nothing regressed; a January company gets January to December.
+
+Two details that matter:
+
+- **`ENDINGAT` is what anchors it, not today's date.** Tally reports it on the
+  company collection (verified: `20260731` on a company whose year runs to
+  31 December — so it is the last date data exists for, NOT the year end). A
+  company holding 2019 books should not become a 2026 company because someone
+  opened it today. `todayIso()` is the fallback when Tally reports no end date.
+- **A 29 February start does not produce an impossible end date.** The year is
+  computed by adding a year and stepping back a day through `Date.UTC`, so a
+  2024-02-29 start ends 2025-02-28 rather than rolling into March.
+
+Verified live: on the German company, `bookYearFor` gives 2026-01-01 to
+2026-12-31, and a Cash Flow request whose end date Tally ignored returned exactly
+the twelve months to December 2026 — the computed end matching the observed one.
+
+**The same bug was in `scripts/live-check.mjs`**, which hardcoded an April year
+and had therefore been testing a **period the company holds nothing in**. Fixing
+it turned three "no data" results into real coverage: 43 bank instruments in a
+month where it previously found 0, and the oversized-response recovery loop
+actually exercising for the first time on this company. Worth remembering that a
+check script silently testing an empty range reports as a pass.
 
 ### Receivables and payables compute no OVERDUE figure — ageing is by bill age
 
@@ -768,24 +1009,47 @@ Responses are also serialised compactly rather than pretty-printed. Indentation
 cost 15% on dense records and over 50% on field-heavy ones, spent entirely on
 whitespace a model does not read.
 
-### One company at a time
+### One company per REQUEST — corrected 14 Aug 2026
 
-Tally's interface is built around "the currently loaded company", not clean
-per-request scoping. It serves exactly one company, so this server cannot
-switch between them or answer a question spanning several.
+**This section previously said Tally serves exactly one company and that
+cross-company comparison was impossible "and no amount of work on this server
+would change that". That is wrong, and it was wrong because it was measured on an
+install with one company open.**
+
+What is actually true: TallyPrime holds **several companies open at once**, and
+`SVCURRENTCOMPANY` selects which one a request reads from. Verified against three
+loaded companies — a German, a US and an Indian one — each returning a genuinely
+different trial balance for the same period (different rows, different byte counts,
+different account groups). So one company per *request*, and as many companies per
+*conversation* as are open.
+
+**Cross-company comparison is therefore possible**, as N sequential requests rather
+than one batched call. It is not built yet; the blocker was never Tally.
 
 `company` is optional on every tool. When supplied, it is checked against the
 loaded company list **before** any data request, and a mismatch fails with
 `TALLY_COMPANY_NOT_LOADED` naming what is actually loaded.
 
-The check is deliberately local rather than delegated to Tally. Sending
-unverified names into Tally's request path is adjacent to the behaviour that
-has already been observed to terminate the application, and a local check also
-produces a better error — it can say what *is* open, which Tally cannot.
+That check is still worth having, but the reason has changed. It was justified here
+as a defence against Tally silently answering from the wrong company. Measured,
+Tally does no such thing: name matching is case-insensitive and tolerates stray
+whitespace, and a name it does not recognise returns an **empty** report. The real
+hazard is that emptiness — an empty answer reads as "this company has nothing to
+report" — so catching an unknown name up front turns a misleading blank into a
+named error that can say what *is* open.
 
-**Consequence:** analysing a different company requires opening it in
-TallyPrime. Cross-company comparison is not possible in a single call, and no
-amount of work on this server would change that.
+**Consequence:** analysing a different company requires it to be OPEN in TallyPrime,
+not to be the only thing open.
+
+#### What multi-company changes about correctness
+
+Worth stating separately, because it caught this project out within minutes of a
+third company being loaded: **several assumptions that are harmless on one company
+are wrong on three.** A global setting that supplies a currency label is the
+concrete example — a German and an Indian company both report their symbol as `?`,
+so one global label mislabels one of them. Anything configured per *server* rather
+than per *company* should be re-read with three companies open before it is
+trusted.
 
 ### Companies do not share a field set
 

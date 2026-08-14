@@ -118,6 +118,8 @@ same period is already loaded, which is every subsequent question about it withi
 | `tally_get_statement` `profit_loss` | profit and loss | ~492 | 74ms | 1ms |
 | `tally_get_statement` `cash_flow` | monthly cash movement | ~754 | 78ms | 1ms |
 | `tally_get_stock_items` | inventory masters | ~964 | 46ms | 2ms |
+| `tally_get_closing_stock` `by:'item'` | closing stock per item | ~1,326 | 121ms | 1ms |
+| `tally_get_closing_stock` `by:'godown'` | stock per location | ~765 | 80ms | 1ms |
 | `tally_get_gst` `summary` | GST setup | ~409 | 257ms | 44ms |
 | `tally_calculate_materiality` | thresholds | ~207 | 13ms | 1ms |
 | **↓ these read vouchers — lean fetch, 8.6MB, shared cache entry ↓** | | | | |
@@ -138,6 +140,20 @@ same period is already loaded, which is every subsequent question about it withi
 | `tally_get_gst` `transactions` | GST transactions | ~1,193 | 6.2s | 37ms |
 | `tally_get_ledgers` `includeAllFields`, all 54 | full-detail ledger listing | ~4,760 | 242ms | 49ms |
 | `tally_get_stock_items` `includeAllFields`, all 3 | full-detail stock listing | ~1,390 | 62ms | 1ms |
+
+**`tally_get_closing_stock` (added 2026-08-14) is a masters-speed call** — it reads
+a report rather than the vouchers, so it never touches the 8.6MB fetch. Measured
+2026-08-14 on a company with 10 stock items in 1 godown.
+
+**A caveat on those two rows, because it generalises.** 10 item rows cost ~1,326
+tokens and 1 godown row costs ~765, which is about 62 tokens per row on roughly
+**700 tokens of fixed envelope** — and most of that fixed part is *warnings*. This
+company's currency symbol cannot be transported by TallyPrime, so every response
+carries the explanation of that plus the multi-currency caveat. That is the
+deliberate cost of not passing `"currency": "?"` off as a currency, but it means
+**warning text, not row data, dominates a small response**. Worth knowing before
+reading a low row count as a low cost, and worth revisiting if a company ever
+accumulates enough simultaneous caveats to crowd out the answer.
 
 **`tally_summarise_movements` is the cheapest way to answer a "how much" question.**
 Totals by month cost ~1,061 tokens against ~16,939 for the voucher list that would

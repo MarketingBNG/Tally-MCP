@@ -20,10 +20,19 @@
  * report list was established without taking Tally down:
  *
  *   - Named reports only (TYPE=Data). Verified harmless: an unknown report ID
- *     returns <LINEERROR>, it does not wedge Tally. A bare COLLECTION name with
- *     no definition is what closes the application, and this script never
- *     sends one — it goes through `buildReportRequest`, the same builder
- *     production uses.
+ *     returns <LINEERROR>, it does not wedge Tally. Re-confirmed on 2026-08-14
+ *     across 25 candidates with controls at both ends.
+ *
+ *     CORRECTION, 2026-08-14: this note used to say that "a bare COLLECTION name
+ *     with no definition" is what closes the application. That is too narrow and
+ *     reading it as the full rule cost two TallyPrime restarts in one session.
+ *     The dangerous ingredient is an unrecognised collection **TYPE**, whether or
+ *     not a definition is supplied — both `Voucher.AllLedgerEntries` (a dotted
+ *     sub-collection name) and `NoSuchTypeXyz` were sent WITH complete inline
+ *     definitions and each parked Tally behind a modal "incorrect object type"
+ *     dialog, blocking all HTTP until dismissed. Collection TYPEs are therefore
+ *     allowlist-only and must not be probed at all. This script sends none: it
+ *     goes through `buildReportRequest`, the same builder production uses.
  *   - One request at a time.
  *   - A health probe between every candidate, aborting the whole run the
  *     moment Tally stops answering, so a wedged install is caught before more
@@ -78,6 +87,35 @@ const CANDIDATES: { id: string; expect: 'data' | 'rejected' | 'unknown'; why: st
   { id: 'Edit Log Summary', expect: 'unknown', why: 'The summary view of the same feature.' },
   { id: 'Audit Trail', expect: 'unknown', why: 'Statutory name for it.' },
   { id: 'Alteration Report', expect: 'unknown', why: 'Legacy name for altered-voucher reporting.' },
+
+  // Exception reports. Both are named in the practitioner XML-tag libraries as
+  // working exports, and both are audit-grade on their own: a negative cash
+  // balance or negative stock is a finding, not a preference. If these exist,
+  // they are the cheapest audit capability available anywhere in the plan.
+  { id: 'Negative Stock', expect: 'unknown', why: 'Built-in exception report per RTS Link tag library.' },
+  { id: 'Negative Ledgers', expect: 'unknown', why: 'Same source; negative cash is the classic red flag.' },
+
+  // Budgets. Gates tool #2, for which no XML path could be found in any
+  // documentation — so these are genuine guesses and a rejection is the answer.
+  { id: 'Budget Variance', expect: 'unknown', why: 'Gates tool #2; no documented XML path exists.' },
+  { id: 'Budgets', expect: 'unknown', why: 'Plural master-list form.' },
+
+  // Registers and analysis. Named in the practitioner libraries; each would
+  // become one view of the single allowlisted tally_get_report tool rather than
+  // a tool of its own, so confirming them is cheap and consolidating.
+  { id: 'Ratio Analysis', expect: 'unknown', why: 'Would partly serve tool #8 trend/ratio work.' },
+  { id: 'Sales Register', expect: 'unknown', why: 'Register view; also a population source for sampling.' },
+  { id: 'Purchase Register', expect: 'unknown', why: 'Register view.' },
+  { id: 'Journal Register', expect: 'unknown', why: 'The highest-risk population for tool #4.' },
+  { id: 'Cost Centre Break-up', expect: 'unknown', why: 'A report route to cost centres, cheaper than the sub-collection in Part 3.' },
+  { id: 'Cost Category Summary', expect: 'unknown', why: 'Companion to the above; this company has 37 cost-centre ledgers.' },
+
+  // Officially documented in Tally's own sample-XML page but never used by this
+  // server. Confirming them turns documentation into verified fact, which is
+  // what the accuracy contract requires before anything relies on them.
+  { id: 'Bills Receivable', expect: 'unknown', why: 'Officially documented ID; EXPLODEFLAG defect status unknown in Prime 3+.' },
+  { id: 'Bills Payable', expect: 'unknown', why: 'Officially documented ID.' },
+  { id: 'List of Accounts', expect: 'unknown', why: 'Officially documented ID; a chart-of-accounts route.' },
 ];
 
 /** Strings worth reporting if they appear anywhere in a response. */
@@ -144,7 +182,7 @@ async function main(): Promise<void> {
 
   const healthy = async (): Promise<boolean> => {
     try {
-      await client.send(buildConnectionProbeRequest(), 'standard');
+      await client.send(buildConnectionProbeRequest(), 'standard', { bypassCache: true });
       return true;
     } catch {
       return false;

@@ -1,0 +1,199 @@
+# Coverage register
+
+What of TallyPrime's data this server can reach, what it cannot, and why.
+
+The point of counting it: "100% coverage" is only meaningful if it is measured.
+A release states its Layer 1 coverage as a number, and every gap is listed with a
+reason. A gap that is not listed here is not "assumed closed" — it is unknown,
+which is a different and worse state.
+
+**Layers.** Layer 1 is everything TallyPrime holds, which must become reachable.
+Layer 2 is everything Tally does *not* hold, covered by accepting it as caller
+input (GSTR-2B, 26AS, bank statements, credit terms). Layer 3 is the irreducible
+residue after both.
+
+> First established 14 Aug 2026 from live measurement against
+> **MUDALS TECHNOLOGIES PRIVATE LIMITED**, then re-measured the same day against
+> **three companies loaded simultaneously**. Evidence:
+> [probe-findings-2026-08-14.md](probe-findings-2026-08-14.md).
+
+### The companies this register has actually been measured against
+
+| Company | Country | Currency as Tally sends it | Books | Features in use |
+|---|---|---|---|---|
+| AGBV Nutrition GmbH - (from 1-Jan-24) | Germany | `?` (euro, destroyed in transport) | 2023-01-01 → 2026-07-31 | — |
+| AgEx Pharma LLC (25-26) | USA | `$` | 2025-04-01 → 2026-03-31 | inventory (3 items), cost centres enabled on 25 of 54 ledgers |
+| MUDALS TECHNOLOGIES PRIVATE LIMITED | India | `?` (rupee, same) | 2021-04-01 → 2026-07-28 | GST, 330 ledgers |
+
+Three currencies and three different year-ends, which is what makes this a usable
+test bed rather than one company generalised from.
+
+**What three companies resolved.** Multi-company reading works: `SVCURRENTCOMPANY`
+selects per request and the three return genuinely different figures, so the
+"one company at a time" limitation is withdrawn. Name matching was measured as
+case-insensitive and whitespace-tolerant, with an unmatched name returning empty
+rather than another company's data.
+
+**What three companies did NOT resolve, and this is the important part.** None of
+the three uses **bill-wise tracking**, so bill references, ageing and the whole
+Schedule III note remain unverified against real bills — the single largest
+remaining gap. None has **Edit Log** on, a **budget** defined, **fixed assets with
+depreciation entries**, or a **bank reconciliation done inside Tally**. And
+`Cost Category Summary` returned empty even on the company with cost centres
+enabled on 25 ledgers, so cost-centre reachability is still unproven.
+
+So the rows below that say `unknown` mostly still say it. Three companies was a
+large improvement in confidence about what *works*, and almost no improvement in
+coverage of the features nobody here uses.
+
+---
+
+## Layer 1 status summary
+
+| Status | Meaning | Count |
+|---|---|---|
+| `reachable` | Verified working against live data | 19 |
+| `reachable-shape-unverified` | Route works; this company has no such data, so the response shape is unproven | 5 |
+| `blocked` | Verified route does NOT exist, or is unsafe to use | 6 |
+| `unknown` | Not measured. Not a claim either way | 7 |
+
+**Layer 1 coverage is not stated as a percentage yet, deliberately.** With rows
+still unknown and four report shapes still unverified, any percentage would be a
+guess dressed as a measurement. It becomes statable once the rows below are resolved
+against companies that use the relevant features — and going from one company to
+three did not resolve them, because all three lack the same features.
+
+---
+
+## Masters
+
+| Data | Status | Route | Evidence / reason |
+|---|---|---|---|
+| Companies (name, start date) | reachable | `Company` collection | production |
+| Company `EndingAt` | **blocked (ours)** | `Company` collection | Tally returns `20260728`; **no tool surfaces it.** Needed for the fiscal-year fix |
+| Ledgers | reachable | `Ledger` collection | 331 records live |
+| Groups | reachable | `Group` collection | production |
+| Voucher types | reachable | `VoucherType` collection | production |
+| Currencies | reachable | `Currency` collection | production |
+| Stock items | reachable-shape-unverified | `StockItem` collection | 0 items on this company |
+| Chart of accounts | reachable | `List of Accounts` report | 7.5 MB live |
+| `ISRELATEDPARTY` flag | reachable | ledger field | 330/330 populated. Corrects an earlier plan assumption |
+| `ALTERID` / `UPDATEDDATETIME` | reachable | ledger fields | 367/367 populated |
+| Cost centres (masters) | unknown | `CostCentre` collection | **not sent** — collection probing stopped after two hangs |
+| Cost categories (masters) | unknown | `CostCategory` collection | not sent |
+| Godowns (masters) | unknown | `Godown` collection | not sent |
+| Budgets | **blocked** | — | `Budget Variance` and `Budgets` reports both rejected; collection type unknown and now unprobeable under the TYPE safety rule |
+
+## Transactions
+
+| Data | Status | Route | Evidence / reason |
+|---|---|---|---|
+| Vouchers, **current** financial year | reachable | `Voucher` collection | 285 vouchers live |
+| Vouchers, **any prior** year | **blocked** | — | Collection returns current FY only. `Day Book` ignores its date range. `<FILTER>` on `$Date` did not work. Custom-TDL-report route **untried** — the remaining candidate |
+| Ledger entries (debit/credit lines) | reachable | `AllLedgerEntries` in FETCH | 985 live |
+| Bill allocations | reachable-shape-unverified | arrives free in shipped FETCH | 985 containers; company has bill-wise tracking off, so contents unproven |
+| Bank allocations | reachable | arrives free in shipped FETCH | 985; production tool reads it |
+| Cost centre allocations | reachable-shape-unverified | `AllLedgerEntries.CategoryAllocations.CostCentreAllocations` | Path accepted and safe; 0 allocations on this company. Hierarchy is one level deeper than assumed |
+| Inventory entries | reachable-shape-unverified | `AllInventoryEntries` | no inventory on this company |
+| Batch / godown allocations | unknown | nested path, untried | no inventory to test against |
+| Edit log / voucher versions | **blocked** | — | All four report IDs rejected; every masters audit container empty scaffolding |
+| Voucher-level audit fields | unknown | — | untestable while only the current year is reachable |
+
+## Statements and reports
+
+| Data | Status | Route | Evidence / reason |
+|---|---|---|---|
+| Trial balance | reachable | `Trial Balance` | production; carries stock at opening |
+| Balance sheet | reachable | `Balance Sheet` | production |
+| Profit and loss | reachable | `Profit and Loss` | production |
+| Cash flow (monthly) | reachable | `Cash Flow` | production |
+| Funds flow (monthly) | reachable | `Funds Flow` | production |
+| Statement for a **mid-year** period | **blocked** | — | End date binds only on a 31st; otherwise accumulates to a fixed endpoint. Format-independent — four wire encodings tested |
+| Negative ledgers (exception) | reachable | `Negative Ledgers` | 20,909 B live. **New capability** |
+| Negative stock (exception) | reachable-shape-unverified | `Negative Stock` | valid but empty; no inventory |
+| Ratio analysis | reachable | `Ratio Analysis` | 1,676 B live |
+| Sales / purchase / journal registers | reachable | three report IDs | live |
+| Stock summary / godown summary | reachable-shape-unverified | production builders | no inventory |
+| Bills receivable / payable | reachable-shape-unverified | both IDs valid | empty; no bill-wise tracking |
+| Cost centre break-up | **blocked** | — | report ID rejected; use the nested fetch path instead |
+| Day book | **blocked (useless)** | `Day Book` | Valid, but ignores its date range entirely — byte-identical output for two different years |
+| Licence / edition (Educational check) | **blocked** | — | six candidate report IDs all rejected |
+
+## Layer 2 — caller-supplied
+
+| Data | Status | Note |
+|---|---|---|
+| GSTR-2B | not built | Tally holds one side only; highest-value Layer 2 item still outstanding |
+| Form 26AS / TDS | not built | one side only |
+| Bank statement | not built | would turn the item list into a real reconciliation |
+| Credit terms | **built** | `tally_get_outstanding` → `creditTerms`; per party or per group, party wins. Bills past their credit period are reported as `overdue`, and `overdue` is **absent** rather than zero when no terms were supplied |
+| Related-party list | **built** | `tally_test_vouchers` → `test: "related_party"`, `relatedParties`. **Extends** `ISRELATEDPARTY` rather than replacing it |
+| Currency, where Tally sent `?` | **built** | `TALLY_CURRENCY_LABEL`. Used ONLY where Tally's symbol was untransportable, and the response says the label came from configuration |
+
+## Layer 3 — irreducible
+
+| Item | Why |
+|---|---|
+| Currency symbol | Tally converts `₹`, `€` and curly quotes to a literal `?` **before the bytes leave**. A label, never a number — every amount is exact. **Now covered at Layer 2** by `TALLY_CURRENCY_LABEL`, so Layer 3 is empty of anything that affects a figure |
+
+---
+
+## What changed on 14 Aug 2026, after the register was first written
+
+Recorded here rather than only in the CHANGELOG, because this file is the one
+that is supposed to say what is reachable.
+
+**Newly reachable (Layer 1).** Nine built-in report views behind the allowlisted
+`tally_get_report`: `Negative Ledgers`, `Ratio Analysis`, `Sales Register`,
+`Purchase Register`, `Journal Register` (row shape read from live content), plus
+`Negative Stock`, `Bills Receivable`, `Bills Payable`, `Cost Category Summary`
+(ID accepted live, **row shape still unproven** — each returned empty on the probe
+company, and the tool says so on every call). `ISRELATEDPARTY` is now fetched and
+surfaced on every ledger.
+
+**Newly computed, not newly fetched.** Eight audit procedures over the voucher
+population that was already reachable — journal screening, Benford, reproducible
+sampling, duplicates, round numbers, cut-off, weekend dating, related-party
+screening — plus Schedule III ageing buckets computed as real calendar months.
+None of these needed a new Tally route, which is the cheapest coverage there is.
+
+**Re-probed against all three companies, still unverified.** `Negative Stock`,
+`Bills Receivable`, `Bills Payable` and `Cost Category Summary` returned the
+identical 21-byte empty envelope on all three — twelve combinations, no rows.
+`Negative Ledgers` by contrast returns real content on all three (4 rows on AgEx,
+67 on MUDALS, 34 on AGBV), which is what makes the empty results credible as
+"nothing to show" rather than "route broken".
+
+**A limitation this register itself had.** Everything above was first written from
+one company. Three companies then refuted two of its entries within minutes, and
+exposed a bug introduced the same day — a global currency label that would have
+labelled rupees EUR. Treat any row measured against a single company as provisional.
+
+**Still blocked, and honestly so.** Prior-year vouchers (the collection returns
+only the current FY); cost-centre allocations (`Cost Centre Break-up` is rejected
+as a report, and the dotted collection TYPE is unsafe to send); Edit Log; Budgets.
+The untried candidate for prior-year vouchers is a custom-TDL **report** — which
+is a report, so the collection-TYPE hazard does not apply — and it needs live
+verification.
+
+**The coverage percentage is still not stated,** for the reason given above: rows
+remain `unknown`, and resolving them needs companies that use the relevant
+features (see Part 7 of the plan). A number published over unknowns would be the
+exact failure this register exists to prevent.
+
+---
+
+## Blocking prerequisite — RESOLVED
+
+**The health probe reported false green.** With TallyPrime parked behind its
+"incorrect object type" dialog, `tally_connection_status` returned
+`connected: true, responseTimeMs: 0` while a real request timed out at 30 s.
+
+Every probe script's safety guard depends on that probe to decide whether to keep
+sending. It cannot be trusted to fire. **Fix this before any further live
+probing**, or the `unknown` rows above stay unknown — they are not safely
+resolvable until the guard works.
+
+**Fixed.** `tally_connection_status` now sends with the cache bypassed, so a green
+means TallyPrime answered just now rather than five minutes ago. The probe scripts'
+safety guard can be relied on again.

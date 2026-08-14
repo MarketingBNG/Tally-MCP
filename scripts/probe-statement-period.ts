@@ -163,7 +163,7 @@ async function main(): Promise<void> {
 
   const healthy = async (): Promise<boolean> => {
     try {
-      await client.send(buildConnectionProbeRequest(), 'standard');
+      await client.send(buildConnectionProbeRequest(), 'standard', { bypassCache: true });
       return true;
     } catch {
       return false;

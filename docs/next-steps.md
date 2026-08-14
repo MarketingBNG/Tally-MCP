@@ -18,6 +18,13 @@ bill-wise details. Six report IDs are confirmed valid but return nothing on the
 company probed so far, so there is no way to know what their data looks like.
 This is the only real blocker, and no amount of code fixes it.
 
+**Still true after 2026-08-14**, on the point that matters. A third company —
+AGBV Nutrition GmbH, German, calendar-year — was probed (item 2 below) and it
+too records **no cost centres and no bill-wise details**. It does maintain
+inventory across a godown, which is what finally made `Stock Summary` and
+`Godown Summary` return data. So the remaining ask is narrower than it was:
+books that use **cost centres**, **bill-wise billing**, and a **reconciled bank**.
+
 **Still true after 2026-08-12.** A second company was probed live — a US LLC on
 a 25-26 financial year, 453 vouchers — and it does not close the gap. Counted directly in its
 raw voucher register for the full year: **zero** cost centre allocations, **zero**
@@ -32,13 +39,53 @@ billing and reconciles its bank — one company would close all three.
 
 ---
 
-## 1. Build `tally_get_report` — the escape hatch — PARKED
+## 1. Build `tally_get_report` — the escape hatch — DELIVERED 2026-08-14
 
-**Parked 2026-08-12: revisit only when the richer company in "Waiting on" is
-available.** The design below stands, but the six highest-value report IDs all
-return empty on the company available today, so building it now would ship a
-tool that cannot be verified end-to-end. Until that data exists, this is not
-planned work.
+**Delivered as `tally_get_closing_stock`**, covering the two report IDs the
+2026-08-14 probe unblocked: `Stock Summary` and `Godown Summary`. See
+[../src/tools/closingStock.ts](../src/tools/closingStock.ts).
+
+**Why a narrow tool rather than the generic escape hatch below.** With exactly two
+verified IDs, both returning the SAME wire shape, a generic `tally_get_report`
+would be a two-entry enum wearing a general-purpose name: it would advertise
+coverage that does not exist, and it would invite a caller to guess an ID, which
+is the habit the allowlist exists to prevent. The report ID is still never
+model-supplied — `by: 'item' | 'godown'` maps to a builder in code. Revisit the
+generic shape when a THIRD report with a genuinely different shape is verified;
+until then a named tool is the honest packaging of what was learned.
+
+**What it returns, and the two traps in it:**
+- `closingQuantity` is Tally's own string WITH its unit ("9500.00 Kg"), not a
+  number. `toMoney` deliberately refuses these — the old salvage path returned
+  figures 100x too large.
+- `closingRate` is ROUNDED. Verified live: 9500.00 Kg at rate 4.85 carries a Tally
+  value of 46,084.41, where 9500 × 4.85 = 46,075.00. On the live company **5 of 10
+  item rows** had quantity × rate ≠ value. Never recompute the value from the rate.
+
+**No longer parked — the generic tool now exists.** Later the same day the
+argument above stopped holding: the probe run found six MORE working report IDs,
+which is well past the "third report with a genuinely different shape" threshold
+this section set for itself. `tally_get_report` is built, with a closed enum of
+nine live-verified IDs, in
+[../src/tools/genericReport.ts](../src/tools/genericReport.ts).
+
+`Ratio Analysis`, `Sales Register`, `Purchase Register` and `Journal Register` are
+in it and return real content. `Negative Ledgers` — the audit-grade one, and the
+reason the tool was worth building — returns content on all three companies (4 rows
+on AgEx, 67 on MUDALS, 34 on AGBV).
+
+Four IDs are in the enum with their **row shape still unverified**: `Negative Stock`,
+`Bills Receivable`, `Bills Payable` and `Cost Category Summary`. TallyPrime accepts
+all four, but re-probed against all three loaded companies they returned the same
+21-byte empty envelope every time — twelve combinations, no rows. The tool says so
+on every call rather than presenting an unproven layout as established.
+
+`Statistics` is still not in the enum: it is a verified ID but was never fetched.
+
+The design notes below are kept because they are the reasoning the built tool
+follows, not because anything here is outstanding.
+
+### The original design, for reference
 
 **The problem it solves:** the server answers ~30 fixed questions. Ask about
 cost centres, ratios or registers and there is no path at all.
@@ -80,7 +127,31 @@ What is still blocked on the probe trip below, and deliberately not attempted:
 voucher), **ratio analysis**, and the **audit trail** of altered and deleted
 vouchers. All four need a report ID, and a wrong ID closes TallyPrime.
 
-## 1b. Establish whether the statement END date can be made to bind — TRIED, CLOSED 2026-08-13
+**Inventory has since come off that list.** `Stock Summary` and `Godown Summary`
+were unblocked by the 2026-08-14 probe and ship as `tally_get_closing_stock`,
+including the only location-wise stock path in the server. The other four remain.
+
+## 1b. Establish whether the statement END date can be made to bind — SOLVED 2026-08-14
+
+**It binds when the day of the month is the 31st.** Not a static variable, not a
+request setting — a property of the date itself. Nineteen observations, no
+exceptions, including a 30 November that proves it is the literal 31st rather than
+a month end. Full account and the evidence table in
+[known-limitations.md](known-limitations.md#the-statements-honour-the-requested-end-date-only-when-it-falls-on-a-31st);
+probe at [scripts/probe-todate-binding.ts](../scripts/probe-todate-binding.ts)
+(`npm run probe:todate`).
+
+The guard shipped in 2026-08-12 was therefore too strict — it refused every period
+that was not the year end, including ones Tally answers exactly. It now refuses
+only when an end date genuinely does not bind, checks BOTH sides of a comparison,
+and names the nearest 31st that would work.
+
+**Why the 2026-08-13 probe below missed it:** every candidate was tested against a
+single baseline period, and that period ended on a 30th. With the day of the month
+being the entire rule, no candidate could ever have appeared to work. The lesson
+for the next probe of this kind: **sweep the input, not only the knob.**
+
+### The earlier attempt, for reference — TRIED, CLOSED 2026-08-13
 
 Found 2026-08-12: `Trial Balance`, `Profit and Loss` and `Cash Flow` honour
 `SVFROMDATE` and **ignore `SVTODATE`**, accumulating to the financial year end.
@@ -104,17 +175,45 @@ statements as a cumulative position) is the answer, not a placeholder. Closed �
 do not re-run without a new, specific, documented candidate to try, since this
 run already covers the space of reasonable guesses.
 
-## 2. Re-probe the six empty report IDs
+## 2. Re-probe the six empty report IDs — RUN 2026-08-14, two of six opened up
 
-Once the richer company is available: `Cost Centre Summary`, `Godown Summary`,
-`Bills Receivable`, `Bills Payable`, `Stock Summary`, `Ledger Vouchers`.
+Probed against **AGBV Nutrition GmbH** (German, calendar-year books from
+2023-01-01) with [scripts/probe-empty-reports.ts](../scripts/probe-empty-reports.ts).
+Both controls passed and TallyPrime answered every health probe, so the verdicts
+below are trustworthy.
 
-Follow the method in the reproducing section of
-[report-id-verification.md](report-id-verification.md) — health probe between
-every candidate, hash every response, nothing unsaved in Tally first.
+| Report ID | Verdict | Size |
+| --- | --- | --- |
+| `Stock Summary` | **data** — 10 stock items | 2,512B |
+| `Godown Summary` | **data** — 1 godown | 264B |
+| `Cost Centre Summary` | empty | 23B |
+| `Bills Receivable` | empty | 23B |
+| `Bills Payable` | empty | 23B |
+| `Ledger Vouchers` | empty | 23B |
 
-Same trip closes the two long-standing unverified areas — inventory and
-sales — recorded in [project-status.md](project-status.md).
+The four empty ones returned **byte-identical** bodies (hash `2240a70758a0`) —
+bare `<ENVELOPE></ENVELOPE>`. That is Tally saying "valid report, this company
+records nothing for it", not a failure. So this company does not use cost
+centres or bill-wise billing either, and the "Waiting on" blocker above is
+**still open for those**, now across three companies.
+
+`Ledger Vouchers` returning empty is a different case from the other three: it
+is a per-ledger register and nothing scoped it to a ledger, so its emptiness is
+probably about the request rather than the company. Do not read it as "this
+company has no ledger vouchers" — it plainly does.
+
+**What did open up** is inventory. Both working reports return the same shape:
+
+```
+DSPACCNAME  DSPDISPNAME  DSPSTKINFO { DSPSTKCL { DSPCLQTY DSPCLRATE DSPCLAMTA } }
+```
+
+Name, display name, then closing quantity, rate and amount — one record per item
+(or per godown). That is enough to parse, so `tally_get_report` (item 1) is
+**unparked for `Stock Summary` and `Godown Summary`** and stays parked for the
+rest. Note the shape is a display report, so `DSPCLRATE` will arrive as a
+formatted string with a unit attached rather than a bare number, and the
+`Ratio Analysis` caution in item 1 applies here too.
 
 ## 3. Ship it so an accountant can install it — BUILT and self-piloted 2026-08-12
 

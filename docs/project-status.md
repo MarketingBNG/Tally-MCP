@@ -18,9 +18,9 @@ original 330-ledger/~30-vouchers-per-month company, and the second live company 
 |---|---|
 | **Built** | ~95% |
 | **Verified against real data** | ~90% |
-| Tools | 19 registered — the newest is `tally_summarise_movements` (see [Efficiency pass](#efficiency-pass-2026-08-13)) |
+| Tools | 20 registered — the newest is `tally_get_closing_stock` (see [Inventory reports unblocked](#inventory-reports-unblocked-2026-08-14)) |
 | Prompts / resources | 4 / 2 |
-| Tests | 530 passing, 2 skipped, across 29 files. One skip is the fixture-vs-`samples/` guard, which runs only where `samples/` exists — i.e. precisely on a machine that has pulled real exports |
+| Tests | 569 passing, 2 skipped, across 31 files. One skip is the fixture-vs-`samples/` guard, which runs only where `samples/` exists — i.e. precisely on a machine that has pulled real exports |
 | `typecheck` / `lint` / `test` / `build` | Enforced by CI on every push (Windows + Linux) |
 | Definition of done | **8 of 8** |
 
@@ -431,18 +431,65 @@ arithmetically faithful.
 - Company scoping guard, refusing a company Tally does not have open
 - All tools listed and callable over real MCP stdio
 
+## Inventory reports unblocked, 2026-08-14
+
+A third company — **AGBV Nutrition GmbH**, German, calendar-year books from
+2023-01-01 — was loaded specifically to re-probe the six report IDs that were
+confirmed valid but returned nothing (next-steps item 2). **Two of six opened
+up.**
+
+| Report ID | Verdict | Size |
+|---|---|---|
+| `Stock Summary` | **data** — 10 stock items | 2,512B |
+| `Godown Summary` | **data** — 1 godown | 264B |
+| `Cost Centre Summary` | empty | 23B |
+| `Bills Receivable` | empty | 23B |
+| `Bills Payable` | empty | 23B |
+| `Ledger Vouchers` | empty | 23B |
+
+The four empty ones returned **byte-identical** bodies (hash `2240a70758a0`),
+which is Tally saying "valid report, this company records nothing for it". So
+cost centres and bill-wise billing are unused on three companies running.
+`Ledger Vouchers` is a different case: nothing scoped it to a ledger, so its
+emptiness is probably about the request rather than the company.
+
+**Shipped from it: `tally_get_closing_stock`** (`by: 'item' | 'godown'`), the
+20th tool and the only location-wise stock path in the server. Two traps found
+and disclosed rather than smoothed over:
+
+- `closingQuantity` is Tally's own string with its unit ("9500.00 Kg"). `toMoney`
+  refuses these deliberately — the old salvage path returned figures 100x too large.
+- `closingRate` is **rounded**, so quantity × rate ≠ value. On the live company
+  **5 of 10 item rows** disagreed. The tool description forbids recomputing the
+  value, and the live check asserts the disagreement is real rather than assumed.
+
+**Also fixed on the same company: the April-only financial year.** See
+[known-limitations.md](known-limitations.md#and-the-financial-year-is-not-always-april-to-march--fixed-2026-08-14).
+Deriving a calendar-year company's year by assuming April produced an inverted
+range in a user-facing warning (`figuresActuallyCover: {from: 2024-01-01, to:
+2023-03-31}`). Now derived from the company's own `STARTINGFROM` and `ENDINGAT`
+via `bookYearFor`.
+
+**And the end-date rule was corrected.** `SVTODATE` is not always ignored — it
+binds when its day of the month is the 31st. Nineteen live observations. The guard
+shipped on 2026-08-12 was refusing periods Tally answers exactly.
+
 ## Unproven: built but not observed
 
-Both are complete, tested against fixtures, and designed to degrade honestly —
-but neither has met real data, and that is a difference worth stating.
+Complete, tested against fixtures, and designed to degrade honestly — but not yet
+met with real data, which is a difference worth stating.
 
 | Area | Why unproven | Risk |
 |---|---|---|
-| **Inventory tools** | The verification company holds **zero stock items** — the response is CMPINFO counters with no `<DATA>` section | Response shape for a populated inventory has never been seen. Mitigated by promoting only `name`/`parent` and returning everything else through generic field extraction, so the output is whatever Tally sends rather than a guessed mapping |
+| **Cost centre / bill-wise areas** | Three companies running record neither. Bill ageing has never run against real bill references, and the bank tool's `reconciled: true` branch has never been reached | Both degrade honestly today: ageing states its basis and coverage bound, and the bank tool refuses a status filter rather than guessing when no bank date exists anywhere |
 | **Sales / purchase tools** | The sampled month contained only Payment, Journal and Receipt vouchers | Family resolution is tested against fixtures including a custom "Tax Invoice" type; retrieval against real sales vouchers is not |
 
-Both resolve the first time the server is pointed at a company that keeps stock
-or records sales. Neither is a code gap.
+Both resolve the first time the server is pointed at a company that uses bill-wise
+billing, reconciles its bank, or records sales. Neither is a code gap.
+
+**Inventory came off this list on 2026-08-14** — stock items, stock movements and
+both closing-stock reports have now been read from a company that maintains
+inventory across a godown.
 
 ---
 
@@ -466,9 +513,11 @@ absent, so it runs precisely where the mistake is possible.
 
 Nothing on this list is a code gap. In rough order of value:
 
-1. **Point the server at a company with inventory and sales** — the only way to
-   convert the two unproven areas into verified ones. Needs access to a
-   different Tally company, not a change to the server.
+1. **Point the server at a company that uses bill-wise billing, reconciles its
+   bank, and records sales** — the only way to convert the remaining unproven
+   areas into verified ones. Needs access to a different Tally company, not a
+   change to the server. Inventory was closed this way on 2026-08-14; the same
+   move closes the rest.
 2. **Decide what happens to `samples/`** — it holds real accounting data on
    disk. Gitignored, but still there.
 3. **Publish decisions** — the package is `0.1.0` with a `bin` entry and a

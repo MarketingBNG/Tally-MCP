@@ -12,7 +12,7 @@ counts as suspicious — that judgement depends on your business and your
 question, and it stays with you.
 
 > **Status: v1 and v2 feature-complete — all 8 done-criteria met.**
-> 19 tools, four prompts and two resources, exercised against two live TallyPrime
+> 20 tools, four prompts and two resources, exercised against three live TallyPrime
 > installs and from inside real Claude Desktop. `tally_get_statement` has been
 > **reconciled row by row against TallyPrime's own on-screen trial balance** —
 > all 9 rows, both columns, and a grand total matching on each side. Inventory
@@ -20,9 +20,15 @@ question, and it stays with you.
 > sales, and a second live pass on 2026-08-12 verified voucher types, bank
 > reconciliation, statement comparison and bill ageing, finding and fixing two
 > defects fixtures alone could not have caught (see
-> [known-limitations.md](docs/known-limitations.md)). Two paths remain
-> unproven for want of a company that reconciles its bank or tracks bills —
-> `reconciled: true` and ageing against real bills.
+> [known-limitations.md](docs/known-limitations.md)).
+>
+> A third company on 2026-08-14 — German, calendar-year — unblocked the two
+> closing-stock reports and exposed two date bugs that only show up outside an
+> Indian April–March year: a financial year derived by *assuming* April, and an
+> end-date rule that turned out to be **honoured on the 31st of a month and
+> ignored on every other day** (nineteen live observations). Both fixed. Two
+> paths remain unproven for want of a company that reconciles its bank or tracks
+> bills — `reconciled: true` and ageing against real bills.
 >
 > Full breakdown in [docs/project-status.md](docs/project-status.md), including
 > what is built but not yet proven against real data. See
@@ -180,6 +186,7 @@ fix.
 | `TALLY_PREFERRED_FORMAT` | `json` | `json` or `xml`; JSON needs Tally 7.0+ |
 | `TALLY_MAX_RECORDS` | `5000` | Refuse queries returning more records than this |
 | `TALLY_MAX_RESPONSE_BYTES` | `150000` | Refuse responses larger than this. Sized by **context** budget (~37,500 tokens), not by the client's 1MB message cap — see below |
+| `TALLY_CURRENCY_LABEL` | *(unset)* | Currency label to use **only** where TallyPrime could not transport its own symbol (it substitutes `?` for `₹`, `€` and others before the data leaves). Two forms: a bare `EUR`, which applies only when exactly ONE company is loaded, or `Company Name=EUR;Other Company=INR` per company. The bare form is restricted because a German and an Indian company both report `?`, so a global `EUR` would label rupees EUR. Never overrides a symbol that arrived intact, and the response always says the label came from configuration rather than from Tally |
 | `TALLY_CACHE_TTL_MS` | `300000` | Reuse an identical Tally response, and the records parsed from it, for this long. **The biggest lever on audit speed** — see below. `0` disables caching |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, `debug` |
 
@@ -188,8 +195,10 @@ at once, rather than failing mysteriously on first use.
 
 ### Speed and size: the two settings that matter
 
-> Per-tool token and timing figures for all 19 tools, measured against a live
-> install, are in **[docs/performance.md](docs/performance.md)**.
+> Per-tool token and timing figures, measured against a live install, are in
+> **[docs/performance.md](docs/performance.md)**. They cover the 19 tools that
+> existed on 2026-08-13; `tally_get_closing_stock` is not yet measured, though its
+> live responses were 2.5KB and 264B, so it is among the cheapest calls here.
 
 Both defaults were changed on 2026-08-13 after measuring a real audit, and both
 are worth understanding before tuning.
@@ -227,7 +236,7 @@ call to dominate the conversation.
 
 ### Available now
 
-19 tools, registered in [src/server/mcpServer.ts](src/server/mcpServer.ts). Modes
+20 tools, registered in [src/server/mcpServer.ts](src/server/mcpServer.ts). Modes
 of the same tool (e.g. list vs. get-by-name) are noted in one row rather than
 repeated.
 
@@ -236,22 +245,22 @@ repeated.
 | `tally_connection_status` | Check reachability; returns a specific fix on failure |
 | `tally_list_companies` | The company TallyPrime currently has loaded |
 | `tally_get_company` | Company profile — size, groups, fields in use; `includeFeatures` infers which TallyPrime features the data shows in use |
-| `tally_get_ledgers` | Chart of accounts: list, search, fetch one by exact `name`, or filter with `conditions` — balances, GSTIN |
-| `tally_get_groups` | The chart-of-accounts group hierarchy: list, search, or filter |
-| `tally_get_voucher_types` | Transaction types this company defines, with the built-in each derives from and its numbering series |
+| `tally_get_masters` | Master data behind one `type`: `ledger` (chart of accounts, balances, GSTIN, related-party flag), `group` (the hierarchy, and whether a group is P&L or balance sheet), `voucherType` (the transaction types this company defines, with the built-in each derives from and its numbering series), `stockItem` (inventory masters). Each supports list, search, filter with `conditions`, and — for ledgers and stock items — fetch one by exact `name` |
 | `tally_get_ledger_transactions` | Statement of movements on one ledger, with a running balance |
 | `tally_get_party_statement` | Every matching ledger for a party name, plus other mentions, in one call |
 | `tally_get_statement` | `trial_balance` / `balance_sheet` / `profit_loss` / `cash_flow` / `fund_flow`, optionally compared across two periods — see below |
 | `tally_get_vouchers` | Transactions in a period: list, filter by ledger/party/narration/type/amount/field, fetch one by number, or restrict to a trading `family` |
 | `tally_summarise_movements` | Totals per ledger, group, month, voucher type or party, summed in exact decimal on the server. Use it whenever the answer is a figure rather than a list — about 16x smaller than reading the transactions |
-| `tally_get_stock_items` | Inventory masters: list, search, fetch one by name, or filter |
 | `tally_get_inventory_movements` | Stock movements, derived from voucher inventory lines |
+| `tally_get_closing_stock` | Closing quantity, rate and value `by: 'item'` or `by: 'godown'`, from TallyPrime's own summary reports. The only location-wise stock path. The rate is rounded — see below |
 | `tally_get_outstanding` | Receivables or payables with bill references; `includeAgeing` buckets by bill AGE, not overdue — see below |
 | `tally_get_gst` | `summary` (tax ledgers/registration in use) or `transactions` (GST-bearing vouchers), as recorded, never calculated |
 | `tally_search` | Cross-entity search over ledgers, vouchers and stock items |
 | `tally_get_bank_reconciliation` | Bank instruments with cheque/UTR detail and reconciled status — see below |
 | `tally_check_tie_out` | Does the arithmetic hold? Every voucher balances, every ledger rolls forward |
 | `tally_calculate_materiality` | Overall / performance / clearly-trivial thresholds, with the basis recorded |
+| `tally_test_vouchers` | One audit procedure over a voucher population: `journal_screen`, `benford`, `sample` (reproducible, returns its seed), `duplicates`, `round_numbers`, `cutoff`, `weekend`, `related_party`. Returns **candidates for review, never findings** — see below |
+| `tally_get_report` | TallyPrime's own built-in views from a closed, live-verified allowlist: `negative_ledgers`, `negative_stock`, `ratio_analysis`, `sales_register`, `purchase_register`, `journal_register`, `bills_receivable`, `bills_payable`, `cost_category_summary`. Columns keep Tally's own tag names — see below |
 
 All are exposed over MCP and exercised against a live TallyPrime install. The
 four newest — voucher types, bank reconciliation, statement comparison, and
@@ -277,21 +286,60 @@ rather than only in this README:
   on status fails outright, because "nothing has been reconciled" and "this
   company doesn't use the feature" are different answers. It lists instruments;
   it does not draw up a reconciliation statement.
-- **The statements ignore the requested END date.** Verified live: TallyPrime
-  honours `fromDate` on the trial balance, P&L and cash flow and discards
-  `toDate`, accumulating to the financial year end — a three-month cash flow
-  request returned nine months. Every response now carries
-  `coversPeriodRequested`, and where it is false the figures are a cumulative
-  position, not the period asked for. **Period comparison is refused** unless the
-  period ends at the year end, because otherwise both sides accumulate to the same
-  end and the subtraction yields minus the whole of the earlier period — a wrong
-  figure of exactly plausible size. Beyond that, comparison pairs rows by name
-  only where unambiguous, and computes no change against a null.
+- **The statements honour the requested END date only when it falls on a 31st.**
+  Established live by sweeping nineteen end dates with the cache off: `fromDate`
+  always binds; `toDate` binds when its day of the month is the 31st and is
+  ignored on any other day, including a real month end like 30 November — the
+  observation that rules out "last day of the month" as the rule. When ignored, the
+  figures accumulate to the end of the company's own book year. Every response
+  carries `coversPeriodRequested`, and where it is false the figures are a
+  cumulative position, not the period asked for, with the nearest workable end date
+  named. **Period comparison is refused when either side's end date is not
+  honoured** — including the asymmetric case, since a bound period minus an
+  unbound one yields minus the whole of the earlier period, a wrong figure of
+  exactly plausible size. The trap to remember: **30 June and 30 September do not
+  bind**, so the two quarter ends most people reach for are the two that silently
+  widen. Beyond that, comparison pairs rows by name only where unambiguous, and
+  computes no change against a null.
+- **The financial year is read from the company, not assumed to be April.** A
+  company's year is twelve months from the month and day its own books begin, taken
+  from Tally's `STARTINGFROM` and `ENDINGAT`. Assuming April produced a period that
+  did not contain a calendar-year company's data at all — and an inverted range in
+  a user-facing warning.
+- **`tally_get_closing_stock`'s rate is rounded.** Quantity × rate does not equal
+  the value Tally reports; on the live company half the item rows disagreed. The
+  value is Tally's own figure and is never recomputed. Quantities keep their unit
+  as a string ("9500.00 Kg") because a bare stock number is meaningless. It reads
+  the summary REPORT while `tally_get_masters` with `type: 'stockItem'` reads the
+  MASTERS — two bases for one question, and neither is adjusted to match the other.
 - **`includeAgeing`** buckets bills by how long ago they were **raised**, not by
   how overdue they are — Tally does not reliably record credit terms, and this
   server will not assume them. Bill references are netted first, and the schedule
   covers only bills raised inside the requested period, which it says on every
-  call.
+  call. Supply `creditTerms` (per party or per group) and it will additionally
+  report what is **genuinely overdue**; without terms for a party there is no
+  overdue figure at all, rather than a zero that would read as "nothing overdue".
+  `ageingPreset: 'schedule_iii'` switches the buckets to the Schedule III
+  disclosure periods, computed as real calendar months back from the as-at date.
+  That is the ageing half of the note only: the disputed/undisputed and
+  good/doubtful splits are a legal fact and a judgement respectively, neither is
+  in TallyPrime, and the tool refuses to invent them.
+- **`tally_test_vouchers` returns candidates for review, not findings.** A round
+  amount is usually rent and a weekend date is usually nothing; none of the eight
+  tests can establish that anything is wrong. Every result carries that sentence,
+  plus the size of the population it tested and what was excluded — orders and
+  cancelled vouchers never belong in these tests, and a test run over a
+  contaminated population still returns a confident-looking answer. Two limits
+  worth knowing: the weekend test reads the date **on** the voucher rather than the
+  date it was entered (the real out-of-hours test needs the Edit Log, which is not
+  reachable), and journals are identified by their type **name** containing
+  "journal", because TallyPrime has no manual-journal flag.
+- **`tally_get_report` keeps TallyPrime's column names.** Rows come back as a name
+  plus an `amounts` map keyed by Tally's own tags (`DSPCLDRAMTA` and so on) rather
+  than relabelled debit/credit — asserting a column meaning that has not been
+  verified produces a figure that is right in value and wrong in meaning. Four of
+  the nine IDs were accepted by a live TallyPrime but returned nothing on the
+  company tested, so their row shape is unproven and every call says so.
 
 Full reasoning for each: [docs/known-limitations.md](docs/known-limitations.md).
 
