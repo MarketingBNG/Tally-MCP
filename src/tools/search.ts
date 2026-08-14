@@ -7,7 +7,7 @@ import {
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
 } from '../schemas/common.js';
-import { resolvePeriod, runTool, type ToolDeps } from './toolResult.js';
+import { resolvePeriodForCompany, runTool, type ToolDeps } from './toolResult.js';
 import { voucherMatchesAnyField } from './voucherFilters.js';
 import { matchesText } from '../utils/text.js';
 import { fetchLedgers } from './ledgers.js';
@@ -44,8 +44,8 @@ const DESCRIPTION = [
     'proper filters.',
   '',
   'RETURNS: matches grouped by entity type (ledgers, vouchers, stockItems), each with a small ' +
-    'identifying summary rather than the full record. Follow up with tally_get_ledgers, ' +
-    'tally_get_vouchers or tally_get_stock_items (by name) for detail.',
+    'identifying summary rather than the full record. Follow up with tally_get_masters type "ledger", ' +
+    'tally_get_vouchers or tally_get_masters type "stockItem" (by name) for detail.',
   '',
   'SCOPE AND LIMITS — read these, they affect whether an empty result means anything:',
   '  - Vouchers are searched WITHIN THE DATE RANGE ONLY. A voucher outside it will not be found ' +
@@ -91,7 +91,7 @@ export function registerSearchTools(server: McpServer, deps: ToolDeps): void {
     },
     async (args) =>
       runTool('tally_search', deps, async () => {
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
 
         const types = new Set(args.entityTypes ?? ['ledger', 'voucher', 'stockItem']);
         const limit = args.limit ?? DEFAULT_LIMIT;

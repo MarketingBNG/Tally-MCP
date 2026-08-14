@@ -61,6 +61,74 @@ import { DEFAULT_CURRENCY, toMoney, type Money } from '../utils/numbers.js';
 /** Default bucket boundaries in days. The conventional 30/60/90 split. */
 export const DEFAULT_AGEING_BUCKETS: readonly number[] = [30, 60, 90];
 
+/**
+ * Schedule III bucket boundaries, counted back from the date being aged as at.
+ *
+ * Schedule III to the Companies Act requires trade receivables and payables to
+ * be disclosed as **less than 6 months / 6 months to 1 year / 1 to 2 years /
+ * 2 to 3 years / more than 3 years**. Those are calendar periods, not day
+ * counts, and 6 months is 181 days from 1 October and 184 days from 1 April.
+ * Hard-coding 182 would put a bill within a few days of the boundary in the
+ * wrong disclosure bucket — small, but wrong in a statutory disclosure — so the
+ * boundaries are computed from the actual as-at date instead.
+ *
+ * ## What Schedule III asks for that is NOT here
+ *
+ * Each bucket has to be split **undisputed / disputed** and, within undisputed,
+ * **considered good / considered doubtful**. TallyPrime holds none of those:
+ * whether a debt is disputed is a legal fact and whether it is doubtful is a
+ * judgement, and neither is a field on a bill. So this produces the AGEING half
+ * of the disclosure and says plainly that the splits have to come from
+ * elsewhere. Filling them in with "all undisputed, all considered good" would
+ * be inventing the part of the disclosure that carries the actual opinion.
+ */
+export function scheduleIiiBoundaries(asOn: string): number[] {
+  const anchor = Date.parse(`${asOn}T00:00:00Z`);
+  if (Number.isNaN(anchor)) {
+    throw new TallyError(
+      'INVALID_PARAMETERS',
+      `Cannot work out Schedule III buckets from the date "${asOn}".`
+    );
+  }
+
+  const asAt = new Date(anchor);
+  const monthsBack = [6, 12, 24, 36];
+
+  return monthsBack.map((months) => {
+    const boundary = new Date(
+      Date.UTC(asAt.getUTCFullYear(), asAt.getUTCMonth() - months, asAt.getUTCDate())
+    );
+    // Days from that calendar boundary to the as-at date. A bill raised exactly
+    // 6 months ago falls in the "6 months to 1 year" bucket, matching how the
+    // disclosure reads: the first bucket is "LESS than 6 months".
+    return Math.round((anchor - boundary.getTime()) / 86_400_000) - 1;
+  });
+}
+
+/** The Schedule III labels, so a caller can map buckets to the disclosure. */
+export const SCHEDULE_III_LABELS: readonly string[] = [
+  'Less than 6 months',
+  '6 months to 1 year',
+  '1 to 2 years',
+  '2 to 3 years',
+  'More than 3 years',
+];
+
+/**
+ * The disclosure splits Schedule III requires that TallyPrime cannot supply.
+ *
+ * Returned as a warning rather than as empty fields on the result. An
+ * `undisputed: null` alongside a real amount reads as "nil disputed", which is
+ * a positive assertion nobody made.
+ */
+export const SCHEDULE_III_INCOMPLETE_NOTE =
+  'SCHEDULE III IS ONLY HALF DONE BY THIS OUTPUT. The ageing buckets match the Schedule III ' +
+  'periods, but the disclosure also requires each bucket to be split undisputed/disputed and, ' +
+  'within undisputed, considered good/considered doubtful. TallyPrime holds none of that — ' +
+  'whether a debt is disputed is a legal fact and whether it is doubtful is a judgement, and ' +
+  'neither is a field on a bill. Those splits have to come from the client. Do not present these ' +
+  'buckets as a completed Schedule III note.';
+
 export interface AgeingBucket {
   /** Human-readable range, e.g. "0-30 days", "90+ days". */
   label: string;
@@ -108,6 +176,15 @@ export interface PartyAgeing {
    * Counted, not bucketed, since nothing is outstanding.
    */
   settledInPeriod: number;
+  /**
+   * Genuinely overdue bills, present ONLY when the caller supplied credit terms.
+   *
+   * Absent rather than zero when no terms were given: a zero here would read as
+   * "nothing is overdue", which is a positive claim that cannot be made without
+   * knowing when each bill was due. `basis` is carried so the figure cannot be
+   * quoted without saying where the due dates came from.
+   */
+  overdue?: AgeingAside & { creditDays: number; basis: string };
 }
 
 /** One bill allocation, with the voucher context needed to age it. */
@@ -316,7 +393,17 @@ export function ageBills(
   allocations: readonly DatedBillAllocation[],
   asOn: string,
   boundaries: readonly number[],
-  warnings: string[]
+  warnings: string[],
+  /**
+   * Credit days for this party, supplied by the caller.
+   *
+   * This is what turns bill AGE into genuinely OVERDUE, and it has to come from
+   * outside: a company may record credit terms per party, per bill, or not at
+   * all, so deriving a due date from an invoice date plus an assumed credit
+   * period would produce an authoritative-looking figure that nobody chose.
+   * Omitted means overdue is simply not computed — never estimated.
+   */
+  creditDays: number | null = null
 ): PartyAgeing | null {
   if (allocations.length === 0) return null;
 
@@ -328,6 +415,7 @@ export function ageBills(
   const unreferenced = zeroAside(currency);
   const earlier = zeroAside(currency);
   const overSettled = zeroAside(currency);
+  const overdue = zeroAside(currency);
   let settled = 0;
 
   for (const bill of netted) {
@@ -384,6 +472,9 @@ export function ageBills(
       amount: new Decimal(bucket.amount.amount).plus(bill.net).toFixed(),
       currency: bucket.amount.currency,
     };
+
+    // Strictly greater than: a bill on its due date is due, not yet overdue.
+    if (creditDays !== null && age > creditDays) addTo(overdue, bill.net);
   }
 
   return {
@@ -393,6 +484,9 @@ export function ageBills(
     settlementsAgainstEarlierBills: asideOf(earlier),
     overSettled: asideOf(overSettled),
     settledInPeriod: settled,
+    ...(creditDays === null
+      ? {}
+      : { overdue: { ...asideOf(overdue), creditDays, basis: 'caller-supplied credit terms' } }),
   };
 }
 

@@ -9,7 +9,7 @@ import {
   UNTRUSTED_CONTENT_NOTICE,
 } from '../schemas/common.js';
 import { DEFAULT_CURRENCY, type Money } from '../utils/numbers.js';
-import { financialYearFor } from '../utils/dates.js';
+import { bookYearFor } from '../utils/dates.js';
 import { adaptAccounts, adaptVouchers } from '../model/fromTally.js';
 import type { Account, SignedAmount, Voucher } from '../model/ledger.js';
 import { buildCompanyListRequest } from '../tally/requests.js';
@@ -352,16 +352,22 @@ export function registerTieOutTools(server: McpServer, deps: ToolDeps): void {
 
         if (!explicitDates) {
           const response = await deps.client.send(buildCompanyListRequest(), 'standard');
-          const startingFrom = normalizeCompanies(response.body).data[0]?.startingFrom ?? null;
+          const company = normalizeCompanies(response.body).data[0];
+          const startingFrom = company?.startingFrom ?? null;
 
           if (startingFrom === null) {
             periodNotes.push(
               'TallyPrime did not report when this company books begin, so the period defaults to the financial year containing today. If that is not the company own year, the roll-forward check below will report differences that are not errors.'
             );
           } else {
-            period = financialYearFor(startingFrom);
+            // Anchored on the company's own start month, not on 1 April. A
+            // company whose books run January to December gets its January year;
+            // assuming April would pick a window that need not even contain the
+            // company's own data, and this tool's entire value rests on the
+            // period being the one Tally closed against.
+            period = bookYearFor(startingFrom, company?.endingAt ?? startingFrom);
             periodNotes.push(
-              `No dates were given, so this checked ${period.fromDate} to ${period.toDate} — the financial year the company books begin in.`
+              `No dates were given, so this checked ${period.fromDate} to ${period.toDate} — the company's own book year, twelve months from the date its books begin.`
             );
           }
         } else {

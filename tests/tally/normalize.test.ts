@@ -35,6 +35,7 @@ describe('normalizeCompanies', () => {
     expect(data[0]).toEqual({
       name: 'EXAMPLE TRADING PRIVATE LIMITED',
       startingFrom: '2021-04-01',
+      endingAt: '2022-03-31',
       // This fixture predates CurrencyName being requested, so both are null —
       // which is the fallback path: callers then label figures DEFAULT_CURRENCY.
       currency: null,

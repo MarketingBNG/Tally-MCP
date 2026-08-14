@@ -16,7 +16,7 @@ import {
   fromPage,
   noteEmptyDefaultedPeriod,
   periodWasDefaulted,
-  resolvePeriod,
+  resolvePeriodForCompany,
   runTool,
   type ToolDeps,
 } from './toolResult.js';
@@ -93,7 +93,7 @@ export function registerLedgerTransactionTools(server: McpServer, deps: ToolDeps
     async (args) =>
       runTool('tally_get_ledger_transactions', deps, async () => {
         const pagination = resolvePagination(args.page, args.pageSize);
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
 
         // The ledger master, for the opening balance and to confirm the ledger
         // exists at all — a typo should not look like a ledger with no activity.
@@ -106,7 +106,7 @@ export function registerLedgerTransactionTools(server: McpServer, deps: ToolDeps
             `No ledger named "${args.name}" exists in the loaded company.`,
             {
               suggestion:
-                'Check the spelling, or use tally_get_ledgers with a `query` fragment to find the ledger by name.',
+                'Check the spelling, or use tally_get_masters type "ledger" with a `query` fragment to find the ledger by name.',
             }
           );
         }
@@ -118,12 +118,7 @@ export function registerLedgerTransactionTools(server: McpServer, deps: ToolDeps
         );
 
         const warnings = [
-          ...(await noteEmptyDefaultedPeriod(
-            deps,
-            period,
-            periodWasDefaulted(args.fromDate, args.toDate),
-            vouchers.length
-          )),
+          ...(await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company)),
           ...ledgerWarnings,
           ...voucherWarnings,
         ];

@@ -120,7 +120,7 @@ describe.skipIf(!built)('stdio integration', () => {
       expect(names).toContain('tally_connection_status');
       // Registration in mcpServer.ts is easy to forget on a new tool, and the
       // symptom is invisible until a real client asks for the list.
-      expect(names).toContain('tally_get_voucher_types');
+      expect(names).toContain('tally_get_masters');
       expect(names).toContain('tally_get_bank_reconciliation');
 
       // Tool descriptions are load-bearing: Claude selects on them.

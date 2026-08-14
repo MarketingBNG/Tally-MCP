@@ -27,7 +27,7 @@ import {
   noteEmptyDefaultedPeriod,
   periodWasDefaulted,
   resolveCompanyCurrency,
-  resolvePeriod,
+  resolvePeriodForCompany,
   runTool,
   whole,
   type ToolDeps,
@@ -252,6 +252,110 @@ function filterByPeriod(
 }
 
 /**
+ * Warn when TallyPrime did not send vouchers for the period that was asked for.
+ *
+ * ## Why this exists
+ *
+ * A voucher collection is scoped by TallyPrime to the **current financial year**,
+ * whatever `SVFROMDATE`/`SVTODATE` are set to. Verified live on 2026-08-14
+ * against a company whose books run 2021-04-01 to 2026-07-28: a request for
+ * 2021-04-01 to 2026-07-28 returned 284 vouchers dated 2026-04 to 2026-07, and a
+ * request for FY 2023-24 returned the same current-year vouchers. The history is
+ * real — `Profit and Loss` reports actual FY 2023-24 expenses — so those five
+ * years are unreachable by this route, not absent.
+ *
+ * Without this warning the failure is silent and total: the local period filter
+ * then discards every returned voucher as out of range, and the caller receives
+ * an empty list carrying `hasMore: false` and `truncated: false`. Every
+ * completeness signal the server has says "there is nothing there", when the
+ * truth is "this period could not be read". Those are opposite answers, and an
+ * auditor acting on the first one would conclude a year had no transactions.
+ *
+ * ## What it does and does not claim
+ *
+ * It reports a **measurement**, not a rule: the span Tally actually sent against
+ * the span requested. That distinction matters, because "Tally truncated" and
+ * "this company genuinely has no transactions that early" are indistinguishable
+ * from a single response. So the wording states what came back, names the
+ * verified cause as the likely explanation, and explicitly refuses to let a zero
+ * be read as "none exist".
+ *
+ * ## When it stays silent, and why that is deliberate
+ *
+ * It warns on exactly two evidenced conditions:
+ *
+ *  1. **The returned span does not overlap the request at all.** Unambiguous, and
+ *     the dangerous one: the caller's list is empty for a reason unrelated to
+ *     their question.
+ *  2. **Tally returned vouchers OUTSIDE the requested window**, and the window
+ *     also extends beyond what came back. Sending data nobody asked for is proof
+ *     that the date range was ignored, so the span is Tally's choice rather than
+ *     ours — and anything earlier than it is therefore unreachable rather than
+ *     absent.
+ *
+ * It stays silent when the first returned voucher merely falls a few days after
+ * `fromDate`. Asking 1 April to 31 July and finding the first transaction on
+ * 5 April is ordinary sparse data, and warning about it would fire on nearly
+ * every query. A warning that fires constantly is worse than none, because it
+ * trains the reader to skip the one that matters.
+ *
+ * **Known residual gap, stated rather than hidden.** A request wholly containing
+ * the returned span — asking 2025-04-01 to 2026-07-31 and receiving only
+ * 2026-04-01 onwards — satisfies neither condition, because nothing arrived
+ * outside the window to prove the range was ignored. That case is genuinely
+ * indistinguishable from a company with no transactions in the earlier year. It
+ * becomes detectable once the company's own financial-year start is available
+ * (the A1 fix), since the truncation always begins the span exactly on a
+ * financial-year boundary; until then this function under-reports rather than
+ * guesses.
+ */
+export function describeVoucherReachShortfall(
+  /** Every voucher Tally sent, BEFORE the local period filter. */
+  all: readonly Voucher[],
+  period: { fromDate: string; toDate: string }
+): string | null {
+  const dated = all.map((voucher) => voucher.date).filter((date): date is string => date !== null);
+
+  // Nothing dated came back at all: there is no span to compare, and an empty
+  // company is a perfectly ordinary reason for that. Silence is correct here —
+  // claiming a shortfall on no evidence would be its own inaccuracy.
+  if (dated.length === 0) return null;
+
+  const earliest = dated.reduce((a, b) => (a < b ? a : b));
+  const latest = dated.reduce((a, b) => (a > b ? a : b));
+
+  // Does what came back overlap the request at all? An empty overlap is the
+  // dangerous case, because the caller's list will be empty for a reason that
+  // has nothing to do with their question.
+  const overlaps = earliest <= period.toDate && latest >= period.fromDate;
+
+  // The requested window reaches past what arrived, in either direction.
+  const windowExceedsData = period.fromDate < earliest || period.toDate > latest;
+
+  // Tally sent data nobody asked for, which PROVES the date range was ignored.
+  // Without this proof, a late first voucher is just sparse data — see the note
+  // on silence above.
+  const tallyIgnoredTheRange = dated.some(
+    (date) => date < period.fromDate || date > period.toDate
+  );
+
+  if (overlaps && !(tallyIgnoredTheRange && windowExceedsData)) return null;
+
+  return [
+    `INCOMPLETE PERIOD: you asked about ${period.fromDate} to ${period.toDate}, but TallyPrime`,
+    `returned vouchers dated only ${earliest} to ${latest}.`,
+    overlaps
+      ? 'Only the overlapping part of your period could be read; figures here cover that overlap and not the whole period you asked for.'
+      : 'NONE of the period you asked about was returned, so any total here is zero because the data could not be read — NOT because no such transactions exist. Do not report this as "no transactions in that period".',
+    'TallyPrime scopes a voucher collection to the current financial year regardless of the',
+    'dates requested (verified live 2026-08-14), which is the usual cause. A company that',
+    'genuinely has no earlier transactions would look identical from this response alone, so',
+    'confirm against a statement report — Profit and Loss and Trial Balance do reach prior',
+    'years — before concluding either way.',
+  ].join(' ');
+}
+
+/**
  * One full fetch of the voucher register for a period, shared by every tool that
  * reads vouchers.
  *
@@ -278,13 +382,18 @@ export async function fetchVouchers(
    */
   nested = allFields
 ): Promise<{ vouchers: Voucher[]; warnings: string[] }> {
-  await assertCompanyIsLoaded(deps, company);
+  // Tally's own spelling, not the caller's — see assertCompanyIsLoaded. This
+  // also has to flow into the cache key below, or two spellings of one company
+  // would occupy two entries and each pay a full fetch.
+  const canonicalCompany = await assertCompanyIsLoaded(deps, company);
 
   const ttl = deps.config.tallyCacheTtlMs;
   // `nested` is part of the key but NOT part of the request: a lean parse cannot
   // serve a nested request, yet both come from the same bytes on the wire.
   const key = [
-    company ?? '(loaded)',
+    // Canonical, so two spellings of one company share one cached parse instead
+    // of each paying a full fetch.
+    canonicalCompany ?? '(loaded)',
     period.fromDate,
     period.toDate,
     String(allFields),
@@ -307,7 +416,7 @@ export async function fetchVouchers(
 
   const request = buildVoucherCollectionRequest(
     {
-      ...(company === undefined ? {} : { company }),
+      ...(canonicalCompany === undefined ? {} : { company: canonicalCompany }),
       fromDate: period.fromDate,
       toDate: period.toDate,
       format: deps.config.tallyPreferredFormat,
@@ -317,9 +426,17 @@ export async function fetchVouchers(
 
   // Report-class: a wide voucher range is one of the slowest things Tally does.
   const currencyWarnings: string[] = [];
-  const currency = await resolveCompanyCurrency(deps, company, currencyWarnings);
+  const currency = await resolveCompanyCurrency(deps, canonicalCompany, currencyWarnings);
   const response = await deps.client.send(request, 'report');
   const { data, warnings } = normalizeVouchers(response.body, allFields, currency, nested);
+
+  // Measured against `data` — everything Tally sent — and therefore BEFORE the
+  // local period filter below, which is what would otherwise turn a truncated
+  // fetch into a confident empty list. Placed here, in the one shared fetch, so
+  // no voucher-reading tool can be added later that forgets to check.
+  const shortfall = describeVoucherReachShortfall(data, period);
+  if (shortfall !== null) warnings.unshift(shortfall);
+
   const inPeriod = filterByPeriod(data, period, warnings);
   const value = {
     vouchers: inPeriod,
@@ -495,7 +612,7 @@ export function registerVoucherTools(server: McpServer, deps: ToolDeps): void {
     },
     async (args) =>
       runTool('tally_get_vouchers', deps, async () => {
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
 
         if (args.voucherNumber !== undefined) {
           // Full detail by default: fetching one specific voucher is
@@ -602,12 +719,7 @@ export function registerVoucherTools(server: McpServer, deps: ToolDeps): void {
 
         // Only when the whole period came back empty — a filter matching
         // nothing is a normal answer and needs no period explanation.
-        const periodNote = await noteEmptyDefaultedPeriod(
-          deps,
-          period,
-          periodWasDefaulted(args.fromDate, args.toDate),
-          vouchers.length
-        );
+        const periodNote = await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company);
 
         return fromPage(
           {

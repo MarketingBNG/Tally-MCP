@@ -1,0 +1,66 @@
+<!--
+  TallyPrime "Stock Summary" report. Structure copied from a live response
+  (2026-08-14); every name and figure below is INVENTED, per the no-real-data
+  rule enforced by tests/noRealData.test.ts.
+
+  Deliberately not a clean happy path. It carries, in order:
+
+  1. A normal item, whose rate is ROUNDED such that quantity x rate does NOT
+     equal the reported value: 400.00 x 2.50 = 1,000.00 but the value is
+     -1,004.32. This is the live behaviour and the reason the tool forbids
+     recomputing value from rate.
+  2. An item whose DSPCLQTY element is EMPTY. Must read as null, never zero.
+  3. A row with a name but NO DSPSTKINFO block at all — the shape a heading or
+     subtotal row takes. It must still pair correctly and must not consume the
+     NEXT row's figures, which is the silent mispairing that positional parsing
+     exists to avoid.
+  4. An item whose value is not a number. Must become null plus a warning
+     rather than a salvaged figure.
+  5. A genuine ZERO value, which must survive as 0 and be distinguishable
+     from the nulls above.
+-->
+<ENVELOPE>
+ <DSPACCNAME>
+  <DSPDISPNAME>Invented Widget 10mm</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPSTKINFO>
+  <DSPSTKCL>
+   <DSPCLQTY>400.00 Nos</DSPCLQTY>
+   <DSPCLRATE>2.50</DSPCLRATE>
+   <DSPCLAMTA>-1004.32</DSPCLAMTA>
+</DSPSTKCL>
+</DSPSTKINFO>
+ <DSPACCNAME>
+  <DSPDISPNAME>Invented Gasket</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPSTKINFO>
+  <DSPSTKCL>
+   <DSPCLQTY></DSPCLQTY>
+   <DSPCLRATE>7.00</DSPCLRATE>
+   <DSPCLAMTA>-70.00</DSPCLAMTA>
+</DSPSTKCL>
+</DSPSTKINFO>
+ <DSPACCNAME>
+  <DSPDISPNAME>Invented Subtotal Row</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPACCNAME>
+  <DSPDISPNAME>Invented Unreadable Item</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPSTKINFO>
+  <DSPSTKCL>
+   <DSPCLQTY>12.00 Kg</DSPCLQTY>
+   <DSPCLRATE>1.00</DSPCLRATE>
+   <DSPCLAMTA>not a number</DSPCLAMTA>
+</DSPSTKCL>
+</DSPSTKINFO>
+ <DSPACCNAME>
+  <DSPDISPNAME>Invented Zero Stock Item</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPSTKINFO>
+  <DSPSTKCL>
+   <DSPCLQTY>0.00 Nos</DSPCLQTY>
+   <DSPCLRATE>0.00</DSPCLRATE>
+   <DSPCLAMTA>0.00</DSPCLAMTA>
+</DSPSTKCL>
+</DSPSTKINFO>
+</ENVELOPE>

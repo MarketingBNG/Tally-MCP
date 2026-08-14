@@ -17,6 +17,14 @@ import { companySchema, READ_ONLY_NOTICE, UNTRUSTED_CONTENT_NOTICE } from '../sc
 import { runTool, whole, type ToolDeps } from './toolResult.js';
 
 /**
+ * How many distinct values are retained per field before counting stops.
+ *
+ * Anything above one already means "this field varies", so collecting every
+ * GUID buys nothing. Named because the reporting below must agree with it: a
+ * count that reaches this number is a lower bound, not a total.
+ */
+const DISTINCT_VALUE_CAP = 25;
+/**
  * Company listing.
  *
  * Worth knowing when reading the output: TallyPrime serves data only for the
@@ -185,14 +193,31 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
             }
             // Cap the set: a GUID-like field would otherwise retain one entry
             // per ledger for no benefit, since anything above 1 is "varies".
-            if (seen.size < 25) seen.add(value);
+            if (seen.size < DISTINCT_VALUE_CAP) seen.add(value);
           }
           if (ledger.parent !== null) {
             groups.set(ledger.parent, (groups.get(ledger.parent) ?? 0) + 1);
           }
         }
 
-        const varying: Record<string, { ledgers: number; distinctValues: number }> = {};
+        /**
+         * `distinctValues` is CAPPED, so it must not be reported as a plain count.
+         *
+         * The set above stops collecting at 25 (see the comment there), which is
+         * a sound optimisation — anything above 1 already means "varies". But a
+         * field with 330 distinct values then reported `distinctValues: 25`,
+         * which is simply a wrong number, and the accuracy rule for this server
+         * does not have an exemption for numbers that are only a bit wrong.
+         *
+         * So a capped count is reported as `atLeast` instead of `distinctValues`.
+         * A reader cannot mistake "at least 25" for "exactly 25", and the two
+         * shapes are distinguishable, which a `capped: true` flag alongside an
+         * exact-looking figure would not reliably be.
+         */
+        const varying: Record<
+          string,
+          { ledgers: number; distinctValues?: number; atLeast?: number }
+        > = {};
         const uniform: Record<string, string> = {};
 
         for (const [key, count] of counts) {
@@ -201,7 +226,12 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
             // Same value on every ledger — a default, not a choice.
             uniform[key] = [...(values.get(key) ?? [])][0] ?? '';
           } else {
-            varying[key] = { ledgers: count, distinctValues: distinct };
+            // At the cap, the true count is unknown and only a lower bound can
+            // be stated honestly.
+            varying[key] =
+              distinct >= DISTINCT_VALUE_CAP
+                ? { ledgers: count, atLeast: distinct }
+                : { ledgers: count, distinctValues: distinct };
           }
         }
 

@@ -50,6 +50,11 @@ const DESCRIPTION = [
   'WHEN TO USE: as a first step when any other Tally tool fails, or to confirm setup ' +
     'before starting an analysis. Cheap and safe to call at any time.',
   '',
+  'ALWAYS REACHES TALLYPRIME: this is the one tool that never answers from the response ' +
+    'cache, because a cached liveness answer would report success while TallyPrime was in ' +
+    'fact serving nothing. So a green result here means Tally answered just now, not that ' +
+    'it answered at some point in the last few minutes.',
+  '',
   'RETURNS: whether the connection succeeded, the endpoint tried, the version of this ' +
     'server, round-trip time, the wire format and character encoding TallyPrime replied ' +
     'with, and — on failure — a stable error code with a specific suggestion for fixing it.',
@@ -98,7 +103,17 @@ export async function checkConnection(deps: {
   const startedAt = Date.now();
 
   try {
-    const response = await client.send(buildConnectionProbeRequest(), 'standard');
+    // bypassCache is REQUIRED here, not an optimisation. This probe body is
+    // byte-identical on every call, so it is the most cacheable request this
+    // server makes — and a liveness answer served from memory is not a liveness
+    // answer at all. Verified live on 2026-08-14: with TallyPrime parked behind
+    // a modal "incorrect object type" dialog and serving nothing, this tool
+    // reported connected:true / responseTimeMs:0 from cache while a real
+    // request timed out at 30s. Every probe script's abort guard calls this, so
+    // the false green disabled the one check protecting a wedged Tally.
+    const response = await client.send(buildConnectionProbeRequest(), 'standard', {
+      bypassCache: true,
+    });
     const elapsed = Date.now() - startedAt;
 
     logger.info('connection probe succeeded', {

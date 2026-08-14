@@ -1,0 +1,30 @@
+<!--
+  TallyPrime "Godown Summary" report. Identical wire shape to Stock Summary,
+  with location names in place of item names — verified live 2026-08-14, which
+  is why one normaliser serves both. Names and figures INVENTED.
+
+  Two locations, so a test can prove the tool reports per-location rows rather
+  than collapsing them into a single total.
+-->
+<ENVELOPE>
+ <DSPACCNAME>
+  <DSPDISPNAME>Invented Main Store</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPSTKINFO>
+  <DSPSTKCL>
+   <DSPCLQTY>300.00 Nos</DSPCLQTY>
+   <DSPCLRATE>2.50</DSPCLRATE>
+   <DSPCLAMTA>-750.00</DSPCLAMTA>
+</DSPSTKCL>
+</DSPSTKINFO>
+ <DSPACCNAME>
+  <DSPDISPNAME>Invented Overflow Shed</DSPDISPNAME>
+</DSPACCNAME>
+ <DSPSTKINFO>
+  <DSPSTKCL>
+   <DSPCLQTY>100.00 Nos</DSPCLQTY>
+   <DSPCLRATE>2.54</DSPCLRATE>
+   <DSPCLAMTA>-254.32</DSPCLAMTA>
+</DSPSTKCL>
+</DSPSTKINFO>
+</ENVELOPE>

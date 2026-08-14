@@ -49,7 +49,14 @@ export interface Normalized<T> {
  */
 export interface SourceRef {
   system: 'tallyprime';
-  entityType: 'company' | 'ledger' | 'group' | 'voucher' | 'stockItem' | 'reportRow';
+  entityType:
+    | 'company'
+    | 'ledger'
+    | 'group'
+    | 'voucher'
+    | 'stockItem'
+    | 'godown'
+    | 'reportRow';
   /** Best available identity: a GUID where Tally provides one, else a name. */
   identifier: string;
 }
@@ -144,6 +151,16 @@ export interface Company {
   /** ISO date the books start, or null if Tally did not report one. */
   startingFrom: string | null;
   /**
+   * ISO date the books END AT, or null if Tally did not report one.
+   *
+   * This is the last date the company holds data for, NOT the end of its book
+   * year: verified live 2026-08-14 on a company reporting `20260731` whose year
+   * runs to 31 December. Use it as the anchor for `bookYearFor` rather than
+   * today's date — a company holding 2019 books does not become a current-year
+   * company because someone opened it today.
+   */
+  endingAt: string | null;
+  /**
    * The company's base currency exactly as Tally labels it — a SYMBOL, not an
    * ISO code: `"$"` on a US company, `"₹"` or `"Rs."` on an Indian one. Null
    * when Tally did not report it.
@@ -175,9 +192,16 @@ export function normalizeCompanies(xml: string): Normalized<Company[]> {
         warnings.push(`Company "${name}" reported an unreadable start date "${rawStart}".`);
       }
 
+      const rawEnd = childText(node, 'ENDINGAT');
+      const endingAt = rawEnd === null ? null : tallyDateToIso(rawEnd);
+      if (rawEnd !== null && endingAt === null) {
+        warnings.push(`Company "${name}" reported an unreadable end date "${rawEnd}".`);
+      }
+
       return {
         name,
         startingFrom,
+        endingAt,
         currency: childText(node, 'CURRENCYNAME'),
         country: childText(node, 'COUNTRYNAME'),
         source: sourceRef('company', name),
@@ -232,6 +256,17 @@ export interface Ledger {
   openingBalance: Money | null;
   closingBalance: Money | null;
   gstin: string | null;
+  /**
+   * TallyPrime's own related-party marking, from `ISRELATEDPARTY`.
+   *
+   * A real, populated field — but a SEED, not an answer. Whether a party is
+   * related under AS 18 / Ind AS 24 is a legal determination about directors,
+   * relatives, key management personnel and common control, and a company that
+   * has never ticked the box has every ledger reading `false`. So `false` here
+   * means "not marked in Tally", never "not a related party". Screening seeds
+   * from this and takes the rest from a caller-supplied list.
+   */
+  isRelatedParty: boolean;
   source: SourceRef;
   /**
    * Every other populated field Tally holds for this ledger, verbatim.
@@ -250,6 +285,7 @@ const LEDGER_PROMOTED_FIELDS = new Set([
   'OPENINGBALANCE',
   'CLOSINGBALANCE',
   'PARTYGSTIN',
+  'ISRELATEDPARTY',
   'NAME',
 ]);
 
@@ -283,6 +319,7 @@ export function normalizeLedgers(
           currency
         ),
         gstin: childText(node, 'PARTYGSTIN'),
+        isRelatedParty: isYes(childText(node, 'ISRELATEDPARTY')),
         // GUID is only present on a full fetch; fall back to the name.
         source: sourceRef('ledger', childText(node, 'GUID') ?? name),
         ...(fields === undefined ? {} : { fields }),
@@ -354,7 +391,7 @@ export interface VoucherType {
    * answer, which is the reason this is a list read from the nested structure.
    *
    * Empty when the request did not ask for all fields — the curated fetch cannot
-   * carry a nested list. `tally_get_voucher_types` always asks for all fields;
+   * carry a nested list. `tally_get_masters type "voucherType"` always asks for all fields;
    * voucher-family resolution does not, and does not read this.
    *
    * Worth having because it changes what a repeated voucher number means: on a
@@ -498,6 +535,93 @@ export function normalizeStockItems(
         ...(Object.keys(nested).length === 0 ? {} : { nested }),
       };
     });
+
+  return { data, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// Closing stock reports (Stock Summary, Godown Summary)
+// ---------------------------------------------------------------------------
+
+export interface ClosingStockRow {
+  /** Stock item name, or godown name, depending on which report was fetched. */
+  name: string;
+  /**
+   * Closing quantity exactly as Tally formats it, unit included — "9500.00 Kg".
+   *
+   * Kept as ONE STRING rather than split into a number and a unit, which is the
+   * convention `StockItem` above already follows. A bare stock number is
+   * meaningless and worse than absent: `toMoney` deliberately refuses strings
+   * like this because the salvage attempt used to return figures 100x too large.
+   */
+  closingQuantity: string | null;
+  /**
+   * Closing rate exactly as Tally formats it.
+   *
+   * ROUNDED, and therefore not a basis for arithmetic. Verified live 2026-08-14:
+   * an item with quantity 9500.00 Kg and rate 4.85 carried a Tally value of
+   * -46,084.41, where 9500 x 4.85 is 46,075.00 — the true rate is 4.8510958 and
+   * the report shows two decimals. Multiplying quantity by rate produces a
+   * figure that looks right and is not. Use `closingValue`, which is Tally's own.
+   */
+  closingRate: string | null;
+  /**
+   * Tally's own closing value. NEGATIVE on stock in hand, matching the debit
+   * convention everywhere else in this server. Sign preserved, never corrected.
+   */
+  closingValue: Money | null;
+  source: SourceRef;
+}
+
+/**
+ * Both `Stock Summary` and `Godown Summary` share one wire shape, verified live
+ * 2026-08-14 on the company that finally populated them:
+ *
+ *   DSPACCNAME > DSPDISPNAME            (item name, or godown name)
+ *   DSPSTKINFO > DSPSTKCL > DSPCLQTY / DSPCLRATE / DSPCLAMTA
+ *
+ * The two alternate as siblings directly under `<ENVELOPE>` with no `<DATA>`
+ * wrapper, which is the same positional pairing the trial balance uses — so it
+ * goes through `pairReportRows` rather than a zip of two filtered lists, for the
+ * reason documented there: a heading or subtotal row missing one side would
+ * otherwise shift every subsequent pairing silently.
+ *
+ * `entityKind` only picks the source entity type and the wording of warnings.
+ * The parsing is identical because the reports are identical in shape.
+ */
+export function normalizeClosingStock(
+  xml: string,
+  reportName: string,
+  entityKind: 'stockItem' | 'godown',
+  currency: string = DEFAULT_CURRENCY
+): Normalized<ClosingStockRow[]> {
+  const warnings: string[] = [];
+  const container = reportContainer(openDocument(xml));
+  const rows = pairReportRows(container, 'DSPACCNAME', 'DSPSTKINFO');
+
+  const data = rows.map((row) => {
+    const closing = row.value === null ? null : findFirst([row.value], 'DSPSTKCL');
+    const read = (tag: string): string | null => {
+      if (closing === null) return null;
+      const node = findFirst([closing], tag);
+      return node === null ? null : textOf(node);
+    };
+
+    noteMissingValue(row, reportName, warnings);
+
+    return {
+      name: row.name,
+      closingQuantity: read('DSPCLQTY'),
+      closingRate: read('DSPCLRATE'),
+      closingValue: readMoney(
+        read('DSPCLAMTA'),
+        `closing value of "${row.name}"`,
+        warnings,
+        currency
+      ),
+      source: sourceRef(entityKind, row.name),
+    };
+  });
 
   return { data, warnings };
 }
@@ -753,6 +877,19 @@ export interface Voucher {
   narration: string | null;
   isCancelled: boolean;
   isOptional: boolean;
+  /**
+   * A sales or purchase ORDER — a commitment, not a transaction. It carries no
+   * ledger entries, so it contributes nothing to any total while still inflating
+   * voucher COUNTS if left in a population.
+   */
+  isOrderVoucher: boolean;
+  /**
+   * A stock-only voucher such as a delivery or receipt note: it moves inventory
+   * without touching accounts. Reported rather than silently dropped, because
+   * whether it belongs in a stock figure is a judgement — a receipt note and the
+   * purchase invoice that follows it describe the same goods.
+   */
+  isInventoryVoucher: boolean;
   entries: LedgerEntry[];
   source: SourceRef;
   /**
@@ -895,6 +1032,10 @@ export function normalizeVouchers(
         narration: childText(node, 'NARRATION'),
         isCancelled: isYes(childText(node, 'ISCANCELLED')),
         isOptional: isYes(childText(node, 'ISOPTIONAL')),
+        // Absent on a company recording no orders or notes, which isYes reads as
+        // false — the correct reading, since absence means "not one of these".
+        isOrderVoucher: isYes(childText(node, 'ISORDERVOUCHER')),
+        isInventoryVoucher: isYes(childText(node, 'ISINVENTORYVOUCHER')),
         entries: normalizeEntries(
           node,
           number,
@@ -956,4 +1097,94 @@ function normalizeEntries(
 /** Tally's boolean encoding. Anything that is not an explicit Yes is false. */
 function isYes(value: string | null): boolean {
   return value !== null && value.trim().toLowerCase() === 'yes';
+}
+
+// ---------------------------------------------------------------------------
+// Generic reports (the allowlisted tally_get_report)
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of a report whose exact shape is not known in advance.
+ *
+ * `amounts` holds every scalar under the value block under TallyPrime's own tag
+ * names — `DSPCLDRAMTA`, `DSPCLCRAMTA`, and whatever else the particular report
+ * emits — rather than being renamed to debit/credit. Renaming would mean
+ * asserting which column is which on a report whose columns have not been
+ * verified, and getting that wrong silently is the failure this whole file is
+ * written to avoid. A caller reading `DSPCLDRAMTA` knows exactly what it has.
+ */
+export interface GenericReportRow {
+  name: string;
+  amounts: Record<string, string>;
+}
+
+/**
+ * Parse a report into name/amount rows without knowing its column meanings.
+ *
+ * Every TallyPrime report observed so far uses the same positional pairing the
+ * trial balance does: a name node and an info node alternating as siblings. So
+ * this reads the shape rather than the report, which is what makes one function
+ * serve an allowlist of views whose individual layouts differ.
+ *
+ * When the pairing finds nothing, the result is an EMPTY row list plus a
+ * warning — never an error and never an invented row. Tally answers a valid
+ * report that has nothing to show with a 23-byte empty envelope, and that is a
+ * real answer ("no negative ledgers") which must not be reported as a failure.
+ */
+export function normalizeGenericReport(
+  xml: string,
+  reportName: string
+): Normalized<GenericReportRow[]> {
+  const warnings: string[] = [];
+  const container = reportContainer(openDocument(xml));
+  const rows = pairReportRows(container, 'DSPACCNAME', 'DSPACCINFO');
+
+  const data: GenericReportRow[] = [];
+  for (const row of rows) {
+    // Amounts nest one level deeper than the info block on every report
+    // observed, so a shallow scalar read would come back empty. The descendant
+    // walk finds them wherever the particular report puts them.
+    const amounts = row.value === null ? {} : descendantScalars(row.value);
+    if (row.value === null) {
+      warnings.push(
+        `The "${reportName}" row "${row.name}" arrived with no amount block; it is reported with ` +
+          'no amounts rather than with zeros.'
+      );
+    }
+    data.push({ name: row.name, amounts });
+  }
+
+  if (data.length === 0) {
+    warnings.push(
+      `TallyPrime accepted "${reportName}" and returned no rows. On this report that is a real ` +
+        'answer, not a failure — but it is also what an unpopulated feature looks like, so ' +
+        'check whether this company uses the feature before reading it as "nothing to report".'
+    );
+  }
+
+  return { data, warnings };
+}
+
+/** Every scalar tag at any depth below a node, first occurrence winning. */
+function descendantScalars(node: TallyNode): Record<string, string> {
+  const found: Record<string, string> = {};
+
+  const walk = (current: TallyNode): void => {
+    for (const child of childrenOf(current)) {
+      const tag = tagNameOf(child);
+      if (tag === null) continue;
+      if (childrenOf(child).some((grandchild) => tagNameOf(grandchild) !== null)) {
+        walk(child);
+        continue;
+      }
+      const text = textOf(child);
+      if (text === null) continue;
+      const trimmed = text.trim();
+      if (trimmed === '') continue;
+      found[tag] ??= trimmed;
+    }
+  };
+
+  walk(node);
+  return found;
 }

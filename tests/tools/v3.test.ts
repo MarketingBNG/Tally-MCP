@@ -8,7 +8,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerVoucherTypeTools } from '../../src/tools/voucherTypes.js';
+import { registerMasterTools } from '../../src/tools/masters.js';
 import { registerBankReconciliationTools } from '../../src/tools/bankReconciliation.js';
 import { registerOutstandingTools } from '../../src/tools/outstanding.js';
 import { registerReportTools } from '../../src/tools/reports.js';
@@ -30,7 +30,7 @@ function build(overrides: Record<string, string> = {}): ToolRegistry {
   const registry = createToolRegistry();
   const deps = makeDeps(port, overrides);
 
-  registerVoucherTypeTools(registry.server, deps);
+  registerMasterTools(registry.server, deps);
   registerBankReconciliationTools(registry.server, deps);
   registerOutstandingTools(registry.server, deps);
   registerReportTools(registry.server, deps);
@@ -75,9 +75,9 @@ interface TypeRow {
   isDeemedPositive: boolean;
 }
 
-describe('tally_get_voucher_types', () => {
+describe('tally_get_masters', () => {
   it('lists every type with the built-in it derives from', async () => {
-    const result = await callToolOk(build(), 'tally_get_voucher_types');
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'voucherType' });
     const rows = result.items as TypeRow[];
 
     expect(rows.map((r) => r.name)).toEqual([
@@ -96,7 +96,7 @@ describe('tally_get_voucher_types', () => {
    * returns zero rows and reads as an empty period.
    */
   it('matches on parent as well as name, so custom type names surface', async () => {
-    const result = await callToolOk(build(), 'tally_get_voucher_types', { query: 'sales' });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'voucherType', query: 'sales' });
 
     expect((result.items as TypeRow[]).map((r) => r.name)).toEqual(['Sales', 'Tax Invoice']);
   });
@@ -112,7 +112,7 @@ describe('tally_get_voucher_types', () => {
    * instead of the nested list must fail here.
    */
   it('reads the numbering method from the series, not the legacy scalar', async () => {
-    const result = await callToolOk(build(), 'tally_get_voucher_types');
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'voucherType' });
     const rows = result.items as TypeRow[];
 
     const sales = rows.find((r) => r.name === 'Sales');
@@ -134,7 +134,7 @@ describe('tally_get_voucher_types', () => {
 
   /** Directly audit-relevant: whether Tally itself would refuse a repeat. */
   it('reports whether a series prevents duplicate numbers', async () => {
-    const result = await callToolOk(build(), 'tally_get_voucher_types');
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'voucherType' });
     const rows = result.items as TypeRow[];
 
     expect(rows.find((r) => r.name === 'Payment')?.numberingSeries[0]?.preventsDuplicates).toBe(
@@ -146,7 +146,7 @@ describe('tally_get_voucher_types', () => {
   });
 
   it('returns an empty series list where Tally reported none', async () => {
-    const result = await callToolOk(build(), 'tally_get_voucher_types');
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'voucherType' });
     const journal = (result.items as TypeRow[]).find((r) => r.name === 'Journal');
 
     // Empty means "Tally reported no series", never "unnumbered".
@@ -154,7 +154,7 @@ describe('tally_get_voucher_types', () => {
   });
 
   it('filters on more than one field at once', async () => {
-    const result = await callToolOk(build(), 'tally_get_voucher_types', {
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'voucherType',
       conditions: [
         { field: 'parent', op: 'eq', value: 'Sales' },
         { field: 'numberingMethod', op: 'eq', value: 'Manual' },
@@ -170,7 +170,7 @@ describe('tally_get_voucher_types', () => {
    * quietly empty and reads as "no series recorded".
    */
   it('asks TallyPrime for every field, since the series is nested', async () => {
-    await callToolOk(build(), 'tally_get_voucher_types');
+    await callToolOk(build(), 'tally_get_masters', { type: 'voucherType' });
     const request = mock.requests.find((r) => r.body.includes('<ID>VoucherTypes</ID>'));
 
     expect(request?.body).toContain('<FETCH>*</FETCH>');
@@ -322,12 +322,23 @@ interface RowChange {
 }
 
 /**
- * The mock company's books begin 2021-04-01, so the financial year TallyPrime
- * would accumulate to ends 2022-03-31. A period ending there is the only shape
- * where the end date is known to bind — see END_DATE_NOTE in reports.ts.
+ * The mock company's books run 2021-04-01 to 2022-03-31, so that is the book
+ * year TallyPrime accumulates to when it ignores an end date.
+ *
+ * Taken from the fixture's own STARTINGFROM and ENDINGAT rather than from an
+ * assumed April year — the point of `bookYearFor`. Both dates are in the fixture
+ * so these assertions do not depend on today's date.
  */
 const FY_END = '2022-03-31';
 const CUMULATIVE = { fromDate: '2021-04-01', toDate: FY_END };
+
+/**
+ * A period whose end date TallyPrime does NOT honour. 30 June is the important
+ * case rather than an arbitrary one: it is a calendar quarter end, so it is
+ * exactly the date a caller reaches for, and it is ignored because it is not a
+ * 31st.
+ */
+const UNBOUNDED = { fromDate: '2021-04-01', toDate: '2021-06-30' };
 
 describe('tally_get_statement period comparison', () => {
   it('returns a single period unchanged when no comparison is asked for', async () => {
@@ -340,23 +351,39 @@ describe('tally_get_statement period comparison', () => {
   });
 
   /**
-   * The most consequential finding of the live run. TallyPrime ignores SVTODATE
-   * on these reports and accumulates to the financial year end, so a mid-year
-   * statement is NOT the period requested. Answering it silently would let a
-   * cumulative figure be quoted as a quarter's.
+   * TallyPrime honours the end date only on a 31st, so a period ending 30 June
+   * is NOT the period requested — the figures run on to the book year end.
+   * Answering it silently would let a cumulative figure be quoted as a quarter's.
    */
-  it('flags a mid-year period as not covering what was asked for', async () => {
+  it('flags a period whose end date Tally ignores', async () => {
+    const result = await callToolOk(build(), 'tally_get_statement', {
+      statement: 'trial_balance',
+      ...UNBOUNDED,
+    });
+
+    expect(result.coversPeriodRequested).toBe(false);
+    expect(result.figuresActuallyCover).toEqual({ fromDate: UNBOUNDED.fromDate, toDate: FY_END });
+    expect((result.warnings as string[]).some((w) => /did not honour the end date/i.test(w))).toBe(
+      true
+    );
+  });
+
+  /**
+   * The correction made 2026-08-14. This period ends on a 31st but is NOT the
+   * book year end, and it is still covered — the old rule refused anything but
+   * the year end and so denied a whole class of valid monthly questions.
+   */
+  it('reports a mid-year period ending on a 31st as covered', async () => {
     const result = await callToolOk(build(), 'tally_get_statement', {
       statement: 'trial_balance',
       ...PERIOD,
     });
 
-    expect(result.coversPeriodRequested).toBe(false);
-    expect(result.figuresActuallyCover).toEqual({ fromDate: PERIOD.fromDate, toDate: FY_END });
-    expect((result.warnings as string[]).some((w) => /ignores the end date/i.test(w))).toBe(true);
+    expect(result.coversPeriodRequested).toBe(true);
+    expect(result).not.toHaveProperty('figuresActuallyCover');
   });
 
-  it('reports a period ending at the financial year end as covered', async () => {
+  it('reports a period ending at the book year end as covered', async () => {
     const result = await callToolOk(build(), 'tally_get_statement', {
       statement: 'trial_balance',
       ...CUMULATIVE,
@@ -367,22 +394,40 @@ describe('tally_get_statement period comparison', () => {
   });
 
   /**
-   * Refusing rather than answering. If both sides accumulate to the same year
-   * end, the subtraction collapses to minus the whole of the earlier period — on
-   * live data that would have reported sales down 211,852.50 when sales were
-   * flat. A wrong figure of plausible size is the worst possible output here.
+   * Refusing rather than answering. If a side runs past its end date, the
+   * subtraction collapses towards minus the whole of the earlier period — on live
+   * data that would have reported sales down 211,852.50 when sales were flat. A
+   * wrong figure of plausible size is the worst possible output here.
    */
-  it('refuses a comparison whose period does not end at the year end', async () => {
+  it('refuses a comparison whose main period end date is ignored', async () => {
     const error = await callToolError(build(), 'tally_get_statement', {
       statement: 'trial_balance',
-      ...PERIOD,
-      compareFromDate: '2026-06-01',
-      compareToDate: '2026-06-30',
+      ...UNBOUNDED,
+      compareFromDate: '2021-04-01',
+      compareToDate: FY_END,
     });
 
     expect(error.code).toBe('TALLY_UNSUPPORTED_OPERATION');
-    expect(error.message).toMatch(/accumulate to the same year end/);
-    expect(error.suggestion).toContain(FY_END);
+    expect(error.message).toMatch(/did not honour the end date 2021-06-30/);
+    // Points at the nearest 31st rather than only refusing.
+    expect(error.suggestion).toContain('2021-05-31');
+  });
+
+  /**
+   * The asymmetric case, and the one a naive fix would miss: the main period
+   * binds, so a guard that only checked that side would happily subtract a
+   * correctly-bounded period from one that silently ran to the year end.
+   */
+  it('refuses a comparison whose SECOND period end date is ignored', async () => {
+    const error = await callToolError(build(), 'tally_get_statement', {
+      statement: 'trial_balance',
+      ...CUMULATIVE,
+      compareFromDate: '2021-04-01',
+      compareToDate: '2021-06-30',
+    });
+
+    expect(error.code).toBe('TALLY_UNSUPPORTED_OPERATION');
+    expect(error.message).toMatch(/did not honour the end date 2021-06-30/);
   });
 
   it('fetches both periods and subtracts figure by figure', async () => {
@@ -659,7 +704,7 @@ describe('tally_get_outstanding ageing', () => {
  * Found live 2026-08-13, and invisible to every test that existed: the tools
  * were each faithfully reporting a number TallyPrime gave them. `trial_balance`
  * put Current Assets at -385,764.46 while the closing balances from
- * `tally_get_ledgers` summed to -482,384.46 — a 96,620.00 gap, exactly the
+ * `tally_get_masters` summed to -482,384.46 — a 96,620.00 gap, exactly the
  * year's movement on `Stock In Hand`. `balance_sheet` agreed with the masters
  * to the cent, on every group.
  *

@@ -12,7 +12,7 @@ import { FIELD_HEAVY_PAGE_SIZE, paginate, resolvePagination } from '../utils/pag
 import {
   assertResultSetFits,
   fromPage,
-  resolvePeriod,
+  resolvePeriodForCompany,
   runTool,
   whole,
   type ToolBodyResult,
@@ -226,7 +226,7 @@ async function fetchGstSummary(
   const allWarnings = [...warnings];
   if (taxLedgers.length === 0) {
     allWarnings.push(
-      `No ledgers were found under ${groups.map((g) => `"${g}"`).join(', ')}. Either this company records no tax ledgers, or it groups them differently — check tally_get_ledgers.`
+      `No ledgers were found under ${groups.map((g) => `"${g}"`).join(', ')}. Either this company records no tax ledgers, or it groups them differently — check tally_get_masters type "ledger".`
     );
   }
 
@@ -258,7 +258,7 @@ async function fetchGstTransactions(
   // Always field-heavy: GST detail lives in fields and nested structures,
   // so this path parses full detail whether or not the caller asked.
   const pagination = resolvePagination(args.page, args.pageSize, FIELD_HEAVY_PAGE_SIZE);
-  const period = resolvePeriod(args.fromDate, args.toDate);
+  const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
 
   // GST detail is largely in nested structures, so full detail is needed.
   const { vouchers, warnings } = await fetchVouchers(deps, args.company, period, true);

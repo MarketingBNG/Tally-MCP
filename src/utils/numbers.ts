@@ -27,6 +27,42 @@ export interface Money {
 export const DEFAULT_CURRENCY = 'INR';
 
 /**
+ * Label used when TallyPrime's own currency symbol could not be transported.
+ *
+ * A WORD, deliberately, not a symbol or a code. It has to be impossible to
+ * mistake for the real thing when it lands in `{"amount": "-46084.41",
+ * "currency": ...}`, and it must not be a plausible currency — anything
+ * three-lettered would read as an ISO code that nobody chose.
+ */
+export const UNKNOWN_CURRENCY = 'unknown';
+
+/**
+ * True when a currency symbol from Tally cannot be used as a label.
+ *
+ * Verified live 2026-08-14 on a German company: TallyPrime reported its base
+ * currency as a literal `?` — byte `0x3F` in the raw response, not a decoding
+ * artefact on our side. The euro sign is not in the single-byte codepage Tally
+ * exports with, so Tally substituted it before the bytes ever left. Ten candidate
+ * encoding settings were probed (`scripts/probe-encoding.ts`) and every response
+ * came back byte-identical, so there is no request-side fix.
+ *
+ * The point of detecting it: `"?"` passed through as a currency looks like data.
+ * Every figure from that company was labelled `"currency": "?"`, which is not a
+ * currency, and falling back to `DEFAULT_CURRENCY` instead would be worse still —
+ * it would label euro balances INR, the exact bug fixed on 2026-08-13.
+ *
+ * U+FFFD is included because it is what a mis-decoded byte becomes, so this stays
+ * correct even if a payload arrives through a path that mangles rather than
+ * substitutes.
+ */
+export function currencyIsUnavailable(symbol: string | null | undefined): boolean {
+  if (symbol === null || symbol === undefined) return false;
+  const trimmed = symbol.trim();
+  if (trimmed === '') return false;
+  return /^[?�]+$/.test(trimmed);
+}
+
+/**
  * Parse a raw Tally amount into a decimal string, preserving sign.
  *
  * Tally amounts arrive with assorted noise: thousands separators, currency

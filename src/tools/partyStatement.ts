@@ -14,7 +14,7 @@ import {
   assertResultSetFits,
   noteEmptyDefaultedPeriod,
   periodWasDefaulted,
-  resolvePeriod,
+  resolvePeriodForCompany,
   runTool,
   whole,
   type ToolDeps,
@@ -63,7 +63,7 @@ const DESCRIPTION = [
     'value is finding and combining several.',
   '',
   'HOW MATCHING WORKS: the query is matched, case-insensitive, as a substring against every ' +
-    'ledger name and parent group (same rule as tally_get_ledgers with a `query`). Every ledger that matches ' +
+    'ledger name and parent group (same rule as tally_get_masters type "ledger" with a `query`). Every ledger that matches ' +
     'gets its own statement in the response. "Sai" therefore finds "Sai - Salary" and ' +
     '"Sai - Professional Fees" as two separate ledgers, not one merged figure — the response is ' +
     'per-ledger on purpose, since salary and professional fees are different tax and compliance ' +
@@ -151,7 +151,7 @@ export function registerPartyStatementTools(server: McpServer, deps: ToolDeps): 
     },
     async (args) =>
       runTool('tally_get_party_statement', deps, async () => {
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
 
         const ledgerLimit = args.ledgerLimit ?? DEFAULT_LEDGER_LIMIT;
         const mentionLimit = args.mentionLimit ?? DEFAULT_MENTION_LIMIT;
@@ -199,12 +199,7 @@ export function registerPartyStatementTools(server: McpServer, deps: ToolDeps): 
         );
         warnings.push(...voucherWarnings);
         warnings.push(
-          ...(await noteEmptyDefaultedPeriod(
-            deps,
-            period,
-            periodWasDefaulted(args.fromDate, args.toDate),
-            vouchers.length
-          ))
+          ...(await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company))
         );
 
         const ledgers = matchedLedgers.map((ledger) =>

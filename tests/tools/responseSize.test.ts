@@ -9,7 +9,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerLedgerTools } from '../../src/tools/ledgers.js';
+import { registerMasterTools } from '../../src/tools/masters.js';
 import { registerVoucherTools } from '../../src/tools/vouchers.js';
 import { serializeToolPayload } from '../../src/tools/toolResult.js';
 import { FIELD_HEAVY_PAGE_SIZE } from '../../src/utils/pagination.js';
@@ -33,7 +33,7 @@ let port: number;
 function build(overrides: Record<string, string> = {}): ToolRegistry {
   const registry = createToolRegistry();
   const deps = makeDeps(port, overrides);
-  registerLedgerTools(registry.server, deps);
+  registerMasterTools(registry.server, deps);
   registerVoucherTools(registry.server, deps);
   return registry;
 }
@@ -97,12 +97,12 @@ describe('the response byte ceiling', () => {
   }
 
   it('refuses a response above the ceiling instead of letting the client discard it', async () => {
-    const error = await callToolError(oversized(), 'tally_get_ledgers', { pageSize: 500 });
+    const error = await callToolError(oversized(), 'tally_get_masters', { type: 'ledger', pageSize: 500 });
     expect(error.code).toBe('RESPONSE_TOO_LARGE');
   });
 
   it('names a smaller pageSize, computed from the measured size', async () => {
-    const error = await callToolError(oversized(), 'tally_get_ledgers', { pageSize: 500 });
+    const error = await callToolError(oversized(), 'tally_get_masters', { type: 'ledger', pageSize: 500 });
 
     // The advice must be arithmetic on real bytes, not a fixed string: a
     // suggestion that fails again sends Claude bisecting.
@@ -116,7 +116,7 @@ describe('the response byte ceiling', () => {
   });
 
   it('says the data was retrieved, so this is not read as a Tally failure', async () => {
-    const error = await callToolError(oversized(), 'tally_get_ledgers', { pageSize: 500 });
+    const error = await callToolError(oversized(), 'tally_get_masters', { type: 'ledger', pageSize: 500 });
 
     expect(error.message).toContain('retrieved successfully');
     // Distinct from the record-count guard, which has a different remedy.
@@ -126,15 +126,15 @@ describe('the response byte ceiling', () => {
   it('the suggested pageSize actually succeeds', async () => {
     // The point of computing advice from a measurement rather than guessing:
     // one retry should work, not begin a search.
-    const error = await callToolError(oversized(), 'tally_get_ledgers', { pageSize: 500 });
+    const error = await callToolError(oversized(), 'tally_get_masters', { type: 'ledger', pageSize: 500 });
     const suggested = Number(/pageSize (\d+) or lower/.exec(error.suggestion)?.[1]);
 
-    const result = await callToolOk(oversized(), 'tally_get_ledgers', { pageSize: suggested });
+    const result = await callToolOk(oversized(), 'tally_get_masters', { type: 'ledger', pageSize: suggested });
     expect((result.pagination as { pageSize: number }).pageSize).toBe(suggested);
   });
 
   it('lets an ordinary response through untouched', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers');
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger' });
     expect(Array.isArray(result.items)).toBe(true);
   });
 
@@ -146,7 +146,7 @@ describe('the response byte ceiling', () => {
 
     // Measure the real payload, then pit the two units against each other by
     // setting the ceiling between them.
-    const ok = await callToolOk(build({ TALLY_MAX_RESPONSE_BYTES: '50000000' }), 'tally_get_ledgers', {
+    const ok = await callToolOk(build({ TALLY_MAX_RESPONSE_BYTES: '50000000' }), 'tally_get_masters', { type: 'ledger',
       pageSize: 500,
     });
     const text = serializeToolPayload(ok);
@@ -159,8 +159,8 @@ describe('the response byte ceiling', () => {
     mock.onBodyContaining('<ID>Ledgers</ID>', { body: largeLedgerList(500, '₹ अदा करें ') });
     const error = await callToolError(
       build({ TALLY_MAX_RESPONSE_BYTES: String(characters) }),
-      'tally_get_ledgers',
-      { pageSize: 500 }
+      'tally_get_masters',
+      { type: 'ledger', pageSize: 500 }
     );
     expect(error.code).toBe('RESPONSE_TOO_LARGE');
   });
@@ -169,8 +169,8 @@ describe('the response byte ceiling', () => {
     mock.onBodyContaining('<ID>Ledgers</ID>', { body: largeLedgerList(500) });
     const payload = (await callTool(
       build({ TALLY_MAX_RESPONSE_BYTES: '10000' }),
-      'tally_get_ledgers',
-      { pageSize: 500 }
+      'tally_get_masters',
+      { type: 'ledger', pageSize: 500 }
     )) as { error?: { code: string } };
 
     expect(payload.error?.code).toBe('RESPONSE_TOO_LARGE');
@@ -180,21 +180,21 @@ describe('the response byte ceiling', () => {
 
 describe('page size defaults adapt to field-heavy requests', () => {
   it('defaults to the smaller page when includeAllFields is on', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', { includeAllFields: true });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger', includeAllFields: true });
     const pagination = result.pagination as { pageSize: number };
 
     expect(pagination.pageSize).toBe(FIELD_HEAVY_PAGE_SIZE);
   });
 
   it('keeps the ordinary default when it is off', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers');
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger' });
     expect((result.pagination as { pageSize: number }).pageSize).toBe(100);
   });
 
   it('honours an explicit pageSize rather than silently substituting one', async () => {
     // A caller who names a page size gets it, and the byte guard has the final
     // say — a silent substitution would make the response not match the request.
-    const result = await callToolOk(build(), 'tally_get_ledgers', {
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger',
       includeAllFields: true,
       pageSize: 200,
     });

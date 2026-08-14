@@ -13,6 +13,9 @@ import {
   ageBills,
   allocationAmount,
   DEFAULT_AGEING_BUCKETS,
+  SCHEDULE_III_INCOMPLETE_NOTE,
+  SCHEDULE_III_LABELS,
+  scheduleIiiBoundaries,
   validateBuckets,
   type DatedBillAllocation,
   type PartyAgeing,
@@ -23,7 +26,7 @@ import {
   fromPage,
   noteEmptyDefaultedPeriod,
   periodWasDefaulted,
-  resolvePeriod,
+  resolvePeriodForCompany,
   runTool,
   type ToolDeps,
 } from './toolResult.js';
@@ -229,7 +232,45 @@ export function registerOutstandingTools(server: McpServer, deps: ToolDeps): voi
           .optional()
           .describe(
             'Day boundaries for the buckets, ascending, e.g. [30, 60, 90] (the default) gives ' +
-              '0-30, 31-60, 61-90 and 90+. Must ascend strictly so buckets cannot overlap.'
+              '0-30, 31-60, 61-90 and 90+. Must ascend strictly so buckets cannot overlap. ' +
+              'Ignored when ageingPreset is "schedule_iii", which sets its own.'
+          ),
+        ageingPreset: z
+          .enum(['days', 'schedule_iii'])
+          .optional()
+          .describe(
+            'Which bucket set to use. "days" (default) uses ageingBuckets. "schedule_iii" uses ' +
+              'the Schedule III disclosure periods — under 6 months, 6 months to 1 year, 1-2 ' +
+              'years, 2-3 years, over 3 years — computed as real calendar months back from ' +
+              'ageingAsOn, not as fixed day counts. Read the warning it returns: Schedule III ' +
+              'also needs an undisputed/disputed and good/doubtful split that TallyPrime does ' +
+              'not hold, so this is the ageing half of the note and not the whole note.'
+          ),
+        creditTerms: z
+          .array(
+            z.object({
+              party: z
+                .string()
+                .min(1)
+                .optional()
+                .describe('Party ledger name, matched case-insensitively and exactly.'),
+              group: z
+                .string()
+                .min(1)
+                .optional()
+                .describe('Parent group name, applying to every party filed under it.'),
+              days: z.number().int().min(0).describe('Credit days allowed.'),
+            })
+          )
+          .max(500)
+          .optional()
+          .describe(
+            'Credit terms you supply, which turn bill AGE into genuinely OVERDUE. A `party` ' +
+              'entry wins over a `group` entry for the same party. Parties with no matching ' +
+              'entry get NO overdue figure at all rather than a zero — a zero would read as ' +
+              '"nothing overdue", which cannot be said without knowing when the bills were due. ' +
+              'TallyPrime may record a credit period, but it may record it per party, per bill ' +
+              'or not at all, so this is asked for rather than assumed.'
           ),
         company: companySchema,
         ...dateRangeSchema,
@@ -240,16 +281,18 @@ export function registerOutstandingTools(server: McpServer, deps: ToolDeps): voi
       runTool('tally_get_outstanding', deps, async () => {
         const spec = SPECS[args.side];
         const pagination = resolvePagination(args.page, args.pageSize);
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
 
         // Validated FIRST, before anything is fetched. Measured live: rejecting a
         // descending bucket list used to take 1,180ms, because the ledger and
         // voucher fetches happened before the check. Input validation must never
         // cost a round trip to Tally, let alone a 21MB one.
         const wantsAgeing = args.includeAgeing === true;
-        const buckets = wantsAgeing
-          ? validateBuckets(args.ageingBuckets ?? DEFAULT_AGEING_BUCKETS)
-          : [];
+        const scheduleIii = args.ageingPreset === 'schedule_iii';
+        // Resolved before the fetch, like the bucket validation below and for
+        // the same measured reason: rejecting bad input must not cost a 21MB
+        // round trip to Tally.
+        const ageingAsOnEarly = args.ageingAsOn;
 
         const groups = args.groups ?? [...spec.defaultGroups];
         const groupSet = new Set(groups.map((group) => group.toLowerCase()));
@@ -274,8 +317,44 @@ export function registerOutstandingTools(server: McpServer, deps: ToolDeps): voi
 
         const billsByParty = collectBills(vouchers);
 
-        const ageingAsOn = args.ageingAsOn ?? period.toDate;
+        const ageingAsOn = ageingAsOnEarly ?? period.toDate;
+        const buckets = wantsAgeing
+          ? scheduleIii
+            ? validateBuckets(scheduleIiiBoundaries(ageingAsOn))
+            : validateBuckets(args.ageingBuckets ?? DEFAULT_AGEING_BUCKETS)
+          : [];
         const ageingWarnings: string[] = [];
+        if (wantsAgeing && scheduleIii) {
+          ageingWarnings.push(SCHEDULE_III_INCOMPLETE_NOTE);
+          ageingWarnings.push(
+            'MAPPING TO THE DISCLOSURE: the FIRST bucket returned is "future-dated" and is not ' +
+              'part of Schedule III — it holds bills dated after the as-at date, which the ' +
+              'disclosure has no line for and which are worth looking at on their own account. ' +
+              'The five buckets AFTER it are, in order: ' +
+              SCHEDULE_III_LABELS.join('; ') +
+              `. Boundaries were computed as calendar months back from ${ageingAsOn}.`
+          );
+          if (args.ageingBuckets !== undefined) {
+            ageingWarnings.push(
+              'ageingBuckets was ignored because ageingPreset is "schedule_iii", which defines ' +
+                'its own boundaries. Drop one of the two so the request says one thing.'
+            );
+          }
+        }
+
+        // Party terms beat group terms: the more specific statement wins, which
+        // is how someone writing "30 days generally, 60 for this customer"
+        // expects it to be read.
+        const creditByParty = new Map<string, number>();
+        const creditByGroup = new Map<string, number>();
+        for (const term of args.creditTerms ?? []) {
+          if (term.party !== undefined) creditByParty.set(term.party.toLowerCase(), term.days);
+          else if (term.group !== undefined) creditByGroup.set(term.group.toLowerCase(), term.days);
+        }
+        const creditDaysFor = (name: string, group: string | null): number | null =>
+          creditByParty.get(name.toLowerCase()) ??
+          creditByGroup.get((group ?? '').toLowerCase()) ??
+          null;
 
         const rows: PartyOutstanding[] = parties
           .filter((ledger) => {
@@ -288,7 +367,13 @@ export function registerOutstandingTools(server: McpServer, deps: ToolDeps): voi
           .map((ledger) => {
             const allocations = billsByParty.get(ledger.name.toLowerCase()) ?? [];
             const ageing = wantsAgeing
-              ? ageBills(allocations, ageingAsOn, buckets, ageingWarnings)
+              ? ageBills(
+                  allocations,
+                  ageingAsOn,
+                  buckets,
+                  ageingWarnings,
+                  creditDaysFor(ledger.name, ledger.parent)
+                )
               : null;
 
             return {
@@ -309,12 +394,7 @@ export function registerOutstandingTools(server: McpServer, deps: ToolDeps): voi
         const warnings = [
           // Bills come from the period's vouchers, so an empty defaulted
           // period silently strips every bill reference off these balances.
-          ...(await noteEmptyDefaultedPeriod(
-            deps,
-            period,
-            periodWasDefaulted(args.fromDate, args.toDate),
-            vouchers.length
-          )),
+          ...(await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company)),
           ...ledgerWarnings,
           ...voucherWarnings,
           ...ageingWarnings,
@@ -335,7 +415,7 @@ export function registerOutstandingTools(server: McpServer, deps: ToolDeps): voi
 
         if (parties.length === 0) {
           warnings.push(
-            `No ledgers were found under ${groups.map((g) => `"${g}"`).join(', ')}. This company may file its parties under different group names — check tally_get_ledgers for the groups actually in use.`
+            `No ledgers were found under ${groups.map((g) => `"${g}"`).join(', ')}. This company may file its parties under different group names — check tally_get_masters type "ledger" for the groups actually in use.`
           );
         }
 

@@ -20,7 +20,7 @@ import {
   fromPage,
   noteEmptyDefaultedPeriod,
   periodWasDefaulted,
-  resolvePeriod,
+  resolvePeriodForCompany,
   runTool,
   type ToolDeps,
 } from './toolResult.js';
@@ -153,7 +153,7 @@ const DESCRIPTION = [
   '',
   'BALANCES ARE NOT RECONCILED HERE: this lists instruments and their status. It does not compute ' +
     'book balance against bank balance — that needs a rule about which side each uncleared item ' +
-    'falls on, which is an accounting judgement. Use tally_get_ledgers for the book balance and ' +
+    'falls on, which is an accounting judgement. Use tally_get_masters type "ledger" for the book balance and ' +
     'state your own basis.',
   '',
   'AMOUNTS: TallyPrime signs, unchanged — a payment out and a receipt in carry opposite signs. ' +
@@ -269,7 +269,7 @@ export function registerBankReconciliationTools(server: McpServer, deps: ToolDep
           .describe(
             'Restrict to bank ledgers whose name contains this text, case-insensitive — e.g. ' +
               '"HDFC". Omit to cover every bank ledger with instrument detail in the period. Use ' +
-              'tally_get_ledgers with the "Bank Accounts" group to see the names available.'
+              'tally_get_masters type "ledger" with the "Bank Accounts" group to see the names available.'
           ),
         status: statusSchema,
         instrumentMatch: z
@@ -289,7 +289,7 @@ export function registerBankReconciliationTools(server: McpServer, deps: ToolDep
     },
     async (args) =>
       runTool('tally_get_bank_reconciliation', deps, async () => {
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
         const pagination = resolvePagination(args.page, args.pageSize);
 
         // Full detail: the instrument structure is nested on the entry, so
@@ -365,12 +365,7 @@ export function registerBankReconciliationTools(server: McpServer, deps: ToolDep
         );
 
         const warnings = [
-          ...(await noteEmptyDefaultedPeriod(
-            deps,
-            period,
-            periodWasDefaulted(args.fromDate, args.toDate),
-            vouchers.length
-          )),
+          ...(await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company)),
           ...voucherWarnings,
         ];
 

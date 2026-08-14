@@ -15,7 +15,7 @@ import { paginate, resolvePagination } from '../utils/pagination.js';
 import { matchesVoucherFilters } from './voucherFilters.js';
 import { fetchLedgers } from './ledgers.js';
 import { fetchVouchers } from './vouchers.js';
-import { fromPage, resolvePeriod, runTool, type ToolDeps } from './toolResult.js';
+import { fromPage, resolvePeriodForCompany, runTool, type ToolDeps } from './toolResult.js';
 
 /**
  * `tally_summarise_movements`: totals per ledger, group, month, voucher type or
@@ -293,7 +293,7 @@ export function registerSummaryTools(server: McpServer, deps: ToolDeps): void {
     },
     async (args) =>
       runTool('tally_summarise_movements', deps, async () => {
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
         const pagination = resolvePagination(args.page, args.pageSize);
 
         // The lean fetch: no scalar fields, no nested structures. This is the

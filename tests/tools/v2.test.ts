@@ -11,10 +11,29 @@ import {
 import { registerCompanyTools } from '../../src/tools/companies.js';
 import { registerVoucherTools } from '../../src/tools/vouchers.js';
 import { registerInventoryTools } from '../../src/tools/inventory.js';
+import { registerMasterTools } from '../../src/tools/masters.js';
 import { registerOutstandingTools } from '../../src/tools/outstanding.js';
 import { registerGstTools } from '../../src/tools/gst.js';
 import { registerReportTools } from '../../src/tools/reports.js';
 import { registerSearchTools } from '../../src/tools/search.js';
+
+/**
+ * The shared company fixture, but with books covering the voucher fixtures.
+ *
+ * Inline rather than a fixture file because it carries no real data — it exists
+ * only so a DEFAULTED period can contain something, which the shared fixture
+ * cannot do: its books end 2022-03-31 while its vouchers are dated July 2026.
+ */
+const COMPANY_WITH_CURRENT_BOOKS = [
+  '<ENVELOPE><BODY><DATA><COLLECTION>',
+  '<COMPANY NAME="EXAMPLE TRADING PRIVATE LIMITED">',
+  '<ENDINGAT TYPE="Date">20270331</ENDINGAT>',
+  '<STARTINGFROM TYPE="Date">20260401</STARTINGFROM>',
+  '<NAME TYPE="String">EXAMPLE TRADING PRIVATE LIMITED</NAME>',
+  '</COMPANY>',
+  '</COLLECTION></DATA></BODY></ENVELOPE>',
+].join('');
+
 
 /** v2 tools, against a mock serving redacted real-shape responses. */
 
@@ -28,6 +47,7 @@ function build(overrides: Record<string, string> = {}): ToolRegistry {
   registerCompanyTools(registry.server, deps);
   registerVoucherTools(registry.server, deps);
   registerInventoryTools(registry.server, deps);
+  registerMasterTools(registry.server, deps);
   registerOutstandingTools(registry.server, deps);
   registerGstTools(registry.server, deps);
   registerReportTools(registry.server, deps);
@@ -208,6 +228,15 @@ describe('empty result for a period the caller never chose', () => {
 
   /** A filter matching nothing is a normal answer, not a period problem. */
   it('stays silent when the period has vouchers but a filter excludes them all', async () => {
+    // This test needs the DEFAULTED period to actually contain vouchers, and the
+    // default is now the company's own book year rather than a hard-coded Indian
+    // one. The shared company fixture's books end 2022-03-31 while the voucher
+    // fixtures are dated July 2026, so this overrides the company with one whose
+    // year covers them. Without the override the defaulted period genuinely IS
+    // empty and the note fires correctly — which would assert the opposite of
+    // what this test is about.
+    mock.onBodyContaining('List of Companies', { body: COMPANY_WITH_CURRENT_BOOKS });
+
     const result = await callToolOk(build(), 'tally_get_vouchers', {
       party: 'no such party anywhere',
     });
@@ -236,19 +265,19 @@ describe('inventory tools', () => {
    * CMPINFO counter.
    */
   it('returns an empty list for a company with no inventory', async () => {
-    const result = await callToolOk(build(), 'tally_get_stock_items', {});
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'stockItem',});
 
     expect(result.items).toEqual([]);
     expect(result.pagination).toMatchObject({ total: 0 });
   });
 
   it('does not mistake the CMPINFO counter for a stock item', async () => {
-    const result = await callToolOk(build(), 'tally_get_stock_items', {});
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'stockItem',});
     expect((result.items as unknown[]).length).toBe(0);
   });
 
   it('explains that the company may keep no inventory when an item is not found', async () => {
-    const error = await callToolError(build(), 'tally_get_stock_items', { name: 'Widget, 12mm' });
+    const error = await callToolError(build(), 'tally_get_masters', { type: 'stockItem', name: 'Widget, 12mm' });
 
     expect(error.code).toBe('TALLY_COMPANY_NOT_FOUND');
     expect(error.suggestion).toMatch(/no stock items at all/i);
@@ -258,7 +287,7 @@ describe('inventory tools', () => {
   it('promotes balance, value and rate fields for a company that holds stock', async () => {
     mock.onBodyContaining('<ID>StockItems</ID>', { body: fixture('stock-items-populated.xml') });
 
-    const result = await callToolOk(build(), 'tally_get_stock_items', {});
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'stockItem',});
     const items = result.items as Array<Record<string, unknown>>;
 
     expect(items).toHaveLength(2);

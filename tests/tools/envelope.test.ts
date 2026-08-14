@@ -10,8 +10,7 @@ import {
 } from './harness.js';
 import { registerConnectionTools } from '../../src/tools/connection.js';
 import { registerCompanyTools } from '../../src/tools/companies.js';
-import { registerLedgerTools } from '../../src/tools/ledgers.js';
-import { registerGroupTools } from '../../src/tools/groups.js';
+import { registerMasterTools } from '../../src/tools/masters.js';
 import { registerReportTools } from '../../src/tools/reports.js';
 import { registerVoucherTools } from '../../src/tools/vouchers.js';
 import { registerInventoryTools } from '../../src/tools/inventory.js';
@@ -47,8 +46,7 @@ function buildOn(onPort: number, overrides: Record<string, string> = {}): ToolRe
 
   registerConnectionTools(registry.server, deps);
   registerCompanyTools(registry.server, deps);
-  registerLedgerTools(registry.server, deps);
-  registerGroupTools(registry.server, deps);
+  registerMasterTools(registry.server, deps);
   registerReportTools(registry.server, deps);
   registerVoucherTools(registry.server, deps);
   registerInventoryTools(registry.server, deps);
@@ -95,6 +93,7 @@ const GROUP_LIST_XML =
  * values for all four.
  */
 const REQUIRED_ARGS: Record<string, Record<string, unknown>> = {
+  tally_get_masters: { type: 'ledger' },
   tally_get_statement: { statement: 'trial_balance' },
   tally_get_outstanding: { side: 'receivable' },
   tally_get_gst: { view: 'summary' },
@@ -152,7 +151,10 @@ describe('response envelope (spec §4)', () => {
   it('covers every registered tool but the connection probe', () => {
     // Guards the enumeration itself: if this drifts, the per-tool assertions
     // below could silently be covering nothing.
-    expect(DATA_TOOLS).toHaveLength(15);
+    // 13 rather than the earlier 15: the four master lists became one
+    // `tally_get_masters` with a `type` enum, so three registrations went away
+    // without any capability going with them.
+    expect(DATA_TOOLS).toHaveLength(13);
   });
 
   it.each(DATA_TOOLS)('%s returns all six envelope fields', async (name) => {
@@ -205,9 +207,9 @@ describe('response envelope (spec §4)', () => {
   it('dates a cached answer by when the data was actually read', async () => {
     const registry = build();
 
-    const first = await callToolEnvelope(registry, 'tally_get_ledgers');
+    const first = await callToolEnvelope(registry, 'tally_get_masters', { type: 'ledger' });
     // Same request, so it is served from the client's cache rather than re-sent.
-    const second = await callToolEnvelope(registry, 'tally_get_ledgers');
+    const second = await callToolEnvelope(registry, 'tally_get_masters', { type: 'ledger' });
 
     expect(second.data_fetched_at).toBe(first.data_fetched_at);
     // The answer itself is newer than the data it rests on, which is the point.
@@ -267,7 +269,7 @@ describe('response envelope (spec §4)', () => {
 
 describe('truncation is signalled one way (spec §6 rule 4)', () => {
   it('flags a partial page from a paginated tool', async () => {
-    const envelope = await callToolEnvelope(build(), 'tally_get_ledgers', {
+    const envelope = await callToolEnvelope(build(), 'tally_get_masters', { type: 'ledger',
       page: 1,
       pageSize: 2,
     });
@@ -282,7 +284,7 @@ describe('truncation is signalled one way (spec §6 rule 4)', () => {
   });
 
   it('reports a complete page as not truncated', async () => {
-    const envelope = await callToolEnvelope(build(), 'tally_get_ledgers', {
+    const envelope = await callToolEnvelope(build(), 'tally_get_masters', { type: 'ledger',
       page: 1,
       pageSize: 500,
     });
@@ -316,7 +318,7 @@ describe('truncation is signalled one way (spec §6 rule 4)', () => {
   it('refuses rather than truncating when the record ceiling is breached', async () => {
     // A hard refusal is a stronger guarantee than a flag, so this path is
     // deliberately left as an error rather than folded into `truncated`.
-    const error = await callToolError(build({ TALLY_MAX_RECORDS: '2' }), 'tally_get_ledgers');
+    const error = await callToolError(build({ TALLY_MAX_RECORDS: '2' }), 'tally_get_masters', { type: 'ledger' });
     expect(error.code).toBe('RESULT_LIMIT_EXCEEDED');
   });
 });
@@ -324,8 +326,8 @@ describe('truncation is signalled one way (spec §6 rule 4)', () => {
 describe('failures carry provenance too', () => {
   it('reports the requests that were sent before the failure', async () => {
     const registry = build();
-    const handler = registry.handlers.get('tally_get_ledgers');
-    const output = await handler?.({ name: 'No Such Ledger' });
+    const handler = registry.handlers.get('tally_get_masters');
+    const output = await handler?.({ type: 'ledger', name: 'No Such Ledger' });
     const payload = JSON.parse(output?.content[0]?.text ?? '{}') as Record<string, unknown>;
 
     expect(output?.isError).toBe(true);

@@ -3,39 +3,24 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { buildStockItemListRequest } from '../tally/requests.js';
 import { normalizeStockItems, type StockItem } from '../tally/normalize.js';
 import { fetchVouchers } from './vouchers.js';
-import { TallyError } from '../tally/TallyError.js';
 import {
-  allFieldsSchema,
   companySchema,
-  conditionsSchema,
   dateRangeSchema,
-  nameSchema,
   paginationSchema,
   PERIOD_NOTE,
-  querySchema,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
 } from '../schemas/common.js';
-import {
-  DEFAULT_PAGE_SIZE,
-  FIELD_HEAVY_PAGE_SIZE,
-  paginate,
-  resolvePagination,
-} from '../utils/pagination.js';
-import { matchesText } from '../utils/text.js';
+import { FIELD_HEAVY_PAGE_SIZE, paginate, resolvePagination } from '../utils/pagination.js';
 import { foldUniformFields, uniformFieldsNote } from '../utils/uniformFields.js';
 import {
-  applyConditions,
   assertResultSetFits,
   fetchCollection,
-  findByName,
   fromPage,
   noteEmptyDefaultedPeriod,
   periodWasDefaulted,
-  resolvePeriod,
+  resolvePeriodForCompany,
   runTool,
-  whole,
-  type DatasetSpec,
   type ToolDeps,
 } from './toolResult.js';
 
@@ -55,45 +40,6 @@ const UNVERIFIED_NOTICE =
   'appears under "fields" with TallyPrime own field names rather than being renamed. If this ' +
   'returns nothing, first check whether the company keeps inventory at all — tally_get_company ' +
   'reports the ledger and group structure.';
-
-/**
- * Verified fields only: every other stock item field lives in the open
- * `fields` map, whose keys vary by company and are not a fixed allowlist
- * this tool can safely expose conditions filtering over.
- */
-const STOCK_ITEM_FIELDS: DatasetSpec<StockItem> = {
-  name: { type: 'string', get: (s) => s.name },
-  parent: { type: 'string', get: (s) => s.parent },
-  closingValue: { type: 'money', get: (s) => s.closingValue },
-  openingValue: { type: 'money', get: (s) => s.openingValue },
-};
-
-const ITEMS_DESCRIPTION = [
-  'Stock items: list, search, fetch one by exact name, or filter by name/parent conditions — ' +
-    'one call, one mode, picked by which parameters are given.',
-  '',
-  'WHEN TO USE: to see what inventory the company holds. Returns nothing for a company that ' +
-    'does not keep stock, which is a real answer rather than an error.',
-  '',
-  'MODES:',
-  '- name given: fetch that one item, with every field TallyPrime holds for it. Fails with ' +
-    'TALLY_COMPANY_NOT_FOUND naming the item, so a typo is distinguishable from an item with ' +
-    'no stock.',
-  '- query given (no name): case-insensitive substring against the item name and its parent group.',
-  '- conditions given: combine name, parent, openingValue and closingValue conditions. Every ' +
-    'other stock item field lives in the open "fields" map and is not filterable here — fetch ' +
-    'by name for full detail on one item.',
-  '- none given: list every item, with their closing balance and value.',
-  '',
-  UNVERIFIED_NOTICE,
-  '',
-  'COST/PAGINATION: client-side over a full fetch, in every mode. A small pageSize does not ' +
-    'make the call cheap.',
-  '',
-  UNTRUSTED_CONTENT_NOTICE,
-  '',
-  READ_ONLY_NOTICE,
-].join('\n');
 
 const MOVEMENTS_DESCRIPTION = [
   'Movements of a stock item over a period, taken from the inventory lines on vouchers.',
@@ -140,94 +86,6 @@ export async function fetchStockItems(
 
 export function registerInventoryTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
-    'tally_get_stock_items',
-    {
-      description: ITEMS_DESCRIPTION,
-      inputSchema: z.object({
-        name: nameSchema,
-        query: querySchema,
-        conditions: conditionsSchema,
-        company: companySchema,
-        includeAllFields: allFieldsSchema,
-        ...paginationSchema,
-      }),
-    },
-    async (args) =>
-      runTool('tally_get_stock_items', deps, async () => {
-        // Full detail by default when fetching one item — that is normally
-        // an investigation, and the whole record is what makes it answerable.
-        const allFields = args.includeAllFields ?? args.name !== undefined;
-        const { items, warnings } = await fetchStockItems(deps, args.company, allFields);
-
-        if (args.name !== undefined) {
-          const item = findByName(items, args.name, (candidate) => candidate.name);
-          if (item === undefined) {
-            throw new TallyError(
-              'TALLY_COMPANY_NOT_FOUND',
-              `No stock item named "${args.name}" exists in the loaded company.`,
-              {
-                suggestion:
-                  items.length === 0
-                    ? 'This company reports no stock items at all — it may not keep inventory.'
-                    : 'Check the spelling, or call this tool with a `query` fragment to find it by name.',
-              }
-            );
-          }
-          return whole({ item, ...(warnings.length > 0 ? { warnings } : {}) }, 1);
-        }
-
-        let matches = items;
-        if (args.query !== undefined) {
-          matches = matches.filter((item) =>
-            matchesText(args.query as string, item.name, item.parent)
-          );
-        }
-        if (args.conditions !== undefined && args.conditions.length > 0) {
-          matches = applyConditions(matches, STOCK_ITEM_FIELDS, args.conditions);
-        }
-
-        const pagination = resolvePagination(
-          args.page,
-          args.pageSize,
-          allFields ? FIELD_HEAVY_PAGE_SIZE : DEFAULT_PAGE_SIZE
-        );
-        assertResultSetFits(
-          matches.length,
-          deps.config,
-          'Add a name/query/conditions filter to narrow.'
-        );
-
-        const itemsPage = paginate(matches, pagination, warnings);
-        // Same "populated but constant" pattern as vouchers and ledgers.
-        const itemsFolded = foldUniformFields(
-          itemsPage.items,
-          (item) => item.fields,
-          (item, fields) => ({ ...item, fields })
-        );
-        if (Object.keys(itemsFolded.uniformFields).length > 0) {
-          itemsPage.warnings = [
-            ...(itemsPage.warnings ?? []),
-            uniformFieldsNote(
-              Object.keys(itemsFolded.uniformFields).length,
-              itemsFolded.foldedOccurrences,
-              'stock item'
-            ),
-          ];
-        }
-
-        return fromPage(
-          { ...itemsPage, items: itemsFolded.records },
-          {
-            ...(args.query === undefined ? {} : { query: args.query }),
-            ...(Object.keys(itemsFolded.uniformFields).length > 0
-              ? { uniformFields: itemsFolded.uniformFields }
-              : {}),
-          }
-        );
-      })
-  );
-
-  server.registerTool(
     'tally_get_inventory_movements',
     {
       description: MOVEMENTS_DESCRIPTION,
@@ -250,7 +108,7 @@ export function registerInventoryTools(server: McpServer, deps: ToolDeps): void 
         // Always field-heavy: inventory lines only exist in nested structures,
         // so this path parses full detail whether or not the caller asked.
         const pagination = resolvePagination(args.page, args.pageSize, FIELD_HEAVY_PAGE_SIZE);
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
 
         // Inventory lines are nested structures, so full detail is required.
         // Nested only: inventory lines are nested records, not scalar fields.
@@ -265,7 +123,38 @@ export function registerInventoryTools(server: McpServer, deps: ToolDeps): void 
         const needle = args.stockItem?.toLowerCase();
         const movements: unknown[] = [];
 
+        /**
+         * Vouchers excluded from the movement list, and vouchers merely flagged.
+         *
+         * Every one of these carries inventory lines, so before this they all
+         * appeared as real stock movements:
+         *
+         * - CANCELLED: posts nothing at all. Nothing was excluded here before,
+         *   which is the same omission the movement-based tools were fixed for.
+         * - ORDER vouchers: a sales or purchase ORDER carries stock lines for
+         *   goods that have not moved. It is a commitment, so counting it as a
+         *   movement overstates what left or entered the warehouse.
+         * - INVENTORY-ONLY vouchers (delivery and receipt notes): these are real
+         *   movements, so they are NOT excluded. But the invoice that follows a
+         *   receipt note carries lines for the same goods, so a period holding
+         *   both double-counts. Whether to net them is an accounting judgement,
+         *   which this tool reports rather than makes.
+         */
+        let excludedCancelled = 0;
+        let excludedOrders = 0;
+        let inventoryOnlyVouchers = 0;
+
         for (const voucher of vouchers) {
+          if (voucher.isCancelled) {
+            excludedCancelled += 1;
+            continue;
+          }
+          if (voucher.isOrderVoucher) {
+            excludedOrders += 1;
+            continue;
+          }
+          if (voucher.isInventoryVoucher) inventoryOnlyVouchers += 1;
+
           for (const tag of INVENTORY_LIST_TAGS) {
             for (const line of voucher.nested?.[tag] ?? []) {
               const itemName = line.fields.STOCKITEMNAME ?? '';
@@ -284,6 +173,22 @@ export function registerInventoryTools(server: McpServer, deps: ToolDeps): void 
               });
             }
           }
+        }
+
+        if (excludedCancelled > 0) {
+          warnings.push(
+            `${String(excludedCancelled)} cancelled voucher(s) were excluded. A cancelled voucher posts nothing, so its stock lines are not movements.`
+          );
+        }
+        if (excludedOrders > 0) {
+          warnings.push(
+            `${String(excludedOrders)} order voucher(s) were excluded. A sales or purchase ORDER carries stock lines for goods that have not moved — it is a commitment, not a movement. Ask for vouchers of that type directly if you want the order book.`
+          );
+        }
+        if (inventoryOnlyVouchers > 0) {
+          warnings.push(
+            `${String(inventoryOnlyVouchers)} voucher(s) here are stock-only (delivery or receipt notes). They ARE included, because the goods did move. But the invoice raised against such a note carries lines for the SAME goods, so if this period contains both, the quantity appears twice. Netting them is an accounting judgement this tool does not make — check whether the note and its invoice both fall in your period before totalling.`
+          );
         }
 
         assertResultSetFits(
@@ -317,12 +222,7 @@ export function registerInventoryTools(server: McpServer, deps: ToolDeps): void 
         // Keyed off the vouchers, not the movements: a company with vouchers
         // but no inventory lines is a real answer about inventory, not a
         // period problem.
-        const periodNote = await noteEmptyDefaultedPeriod(
-          deps,
-          period,
-          periodWasDefaulted(args.fromDate, args.toDate),
-          vouchers.length
-        );
+        const periodNote = await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company);
 
         return fromPage(
           {

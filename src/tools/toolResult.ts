@@ -1,6 +1,6 @@
 import { Decimal } from 'decimal.js';
 import type { z } from 'zod';
-import type { AppConfig } from '../config/config.js';
+import { currencyLabelFor, type AppConfig } from '../config/config.js';
 import type { Logger } from '../utils/logger.js';
 import type { TallyClient } from '../tally/TallyClient.js';
 import { TallyError } from '../tally/TallyError.js';
@@ -9,11 +9,27 @@ import {
   buildCurrencyListRequest,
   type TallyRequestOptions,
 } from '../tally/requests.js';
-import { normalizeCompanies, normalizeCurrencies, type Normalized } from '../tally/normalize.js';
+import {
+  normalizeCompanies,
+  normalizeCurrencies,
+  type Company,
+  type Normalized,
+} from '../tally/normalize.js';
 import { withQueryLog, type QueryScope } from '../tally/queryLog.js';
-import { financialYearFor, todayIso, validateDateRange, type DateRange } from '../utils/dates.js';
+import {
+  bookYearFor,
+  financialYearFor,
+  todayIso,
+  validateDateRange,
+  type DateRange,
+} from '../utils/dates.js';
 import type { PaginatedResult } from '../utils/pagination.js';
-import { DEFAULT_CURRENCY, type Money } from '../utils/numbers.js';
+import {
+  currencyIsUnavailable,
+  DEFAULT_CURRENCY,
+  UNKNOWN_CURRENCY,
+  type Money,
+} from '../utils/numbers.js';
 import type { conditionSchema } from '../schemas/common.js';
 
 /**
@@ -116,12 +132,154 @@ export interface ToolEnvelope {
 }
 
 /**
- * Resolve the period a tool should cover.
+ * The one company every "which company is this?" answer must agree on.
  *
- * With no dates, this defaults to the Indian financial year containing today,
- * matching what TallyPrime's own reports do. The resolved range is always
- * echoed back in the response so Claude reports the period it actually
- * received rather than assuming the one it asked for.
+ * ## The bug this exists to prevent
+ *
+ * Every site below used to take `companies[0]` — the first company in Tally's
+ * list — on the premise, written into the comments, that "TallyPrime serves one
+ * company at a time, so the loaded company IS the scope of the answer". That
+ * premise is false. TallyPrime holds several companies open at once, and
+ * `SVCURRENTCOMPANY` picks between them per request.
+ *
+ * With one company loaded, `companies[0]` was always right. With three loaded it
+ * is whichever sorts first, regardless of which one was asked about — so a
+ * request scoped to a US company came back with its figures correctly fetched and
+ * the envelope naming a GERMAN company. Right numbers, wrong name on them, no
+ * error raised. That is the single worst output this connector can produce, and
+ * it survived a full test suite because every fixture had one company.
+ *
+ * ## How the company is determined now
+ *
+ * From the requests that were actually sent. Every request scoped to a company
+ * carries `<SVCURRENTCOMPANY>`, so the sent bodies are ground truth about what
+ * was asked — better evidence than anything re-derived afterwards.
+ *
+ * When nothing was scoped, there is a real fork:
+ * - exactly one company loaded → that is unambiguously the answer;
+ * - more than one loaded → TallyPrime answered from whichever company is ACTIVE
+ *   on the desktop, and nothing in the response says which. So the answer is
+ *   `null`, meaning "not resolved". Guessing here is what caused the bug.
+ */
+function companyFromSentRequests(bodies: readonly string[]): string | null {
+  const named = new Set<string>();
+  for (const body of bodies) {
+    const match = /<SVCURRENTCOMPANY>([\s\S]*?)<\/SVCURRENTCOMPANY>/.exec(body);
+    const name = match?.[1]?.trim();
+    if (name !== undefined && name !== '') named.add(name);
+  }
+  // Several distinct companies means a genuinely multi-company answer, which no
+  // single company_id describes. Null is the honest value, not the first one.
+  return named.size === 1 ? ([...named][0] ?? null) : null;
+}
+
+/**
+ * The loaded company when — and only when — there is exactly one.
+ *
+ * Returns null with several loaded, because which one TallyPrime would answer
+ * from is not knowable from the company list.
+ */
+async function soleLoadedCompany(deps: ToolDeps): Promise<Company | null> {
+  const response = await deps.client.send(buildCompanyListRequest(), 'standard');
+  const companies = normalizeCompanies(response.body).data;
+  return companies.length === 1 ? (companies[0] ?? null) : null;
+}
+
+/** The company record a name refers to, or null. Never guesses. */
+async function companyNamed(deps: ToolDeps, name: string | undefined): Promise<Company | null> {
+  const response = await deps.client.send(buildCompanyListRequest(), 'standard');
+  const companies = normalizeCompanies(response.body).data;
+  if (name === undefined || name === '') {
+    return companies.length === 1 ? (companies[0] ?? null) : null;
+  }
+  return companies.find((entry) => entry.name.toLowerCase() === name.toLowerCase()) ?? null;
+}
+
+/**
+ * The loaded company's own book year, or null when it cannot be determined.
+ *
+ * Twelve months anchored on the month and day the company's books begin, ending
+ * with the year that contains the last date it holds data for. Derived from the
+ * company's own `startingFrom` and `endingAt`, never from an assumed 1 April.
+ *
+ * Never throws. A tool that could answer must not fail because a metadata
+ * lookup did, so an unreadable company yields null and the caller falls back.
+ *
+ * Cheap in practice: this is the same company-list request every other guard
+ * already makes, so TallyClient's cache serves it (measured 0 ms on a hit).
+ */
+export async function companyBookYear(
+  deps: ToolDeps,
+  /**
+   * Which company's year. Omitted is only safe with ONE company loaded — with
+   * several, the book years differ (a German calendar year against an Indian
+   * April year), so defaulting to the first would silently answer about the
+   * wrong twelve months.
+   */
+  company?: string
+): Promise<DateRange | null> {
+  try {
+    const record = await companyNamed(deps, company);
+    if (record === null) return null;
+    const startingFrom = record.startingFrom ?? null;
+    if (startingFrom === null) return null;
+    // endingAt anchors the year, not today's date: a company holding 2019 books
+    // does not become a 2026 company because someone opened it today.
+    return bookYearFor(startingFrom, record.endingAt ?? startingFrom);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the period a tool should cover, defaulting to the COMPANY'S own year.
+ *
+ * Prefer this over the synchronous `resolvePeriod` in any tool that reads dated
+ * data. The difference matters for every company that does not keep an Indian
+ * April-to-March year:
+ *
+ * `resolvePeriod` defaults to `financialYearFor(today)`, which is hard-coded to
+ * 1 April – 31 March. A US company on a calendar year, asked a question with no
+ * dates, therefore gets a window straddling two of its own years — the second
+ * half of one and the first half of the next — and every total is a blend of
+ * two reporting periods with nothing saying so. The company this server is most
+ * often pointed at is a US LLC, so this was the default in practice.
+ *
+ * `tally_check_tie_out` already did the right thing by hand; this makes the same
+ * behaviour available to every tool instead of one.
+ *
+ * Costs nothing when dates ARE supplied: the company lookup happens only on the
+ * defaulting path.
+ */
+export async function resolvePeriodForCompany(
+  deps: ToolDeps,
+  fromDate?: string,
+  toDate?: string,
+  /**
+   * Whose book year to default to. Omitting it is safe only when ONE company is
+   * loaded: the three companies seen live run a German calendar year, a US
+   * April year and an Indian April year, so defaulting to "the first company"
+   * would answer about the wrong twelve months without saying so.
+   */
+  company?: string
+): Promise<DateRange> {
+  // Explicit dates need no company at all — validate and return, no round trip.
+  if (fromDate !== undefined || toDate !== undefined) {
+    return resolvePeriod(fromDate, toDate);
+  }
+
+  // Falls back to the Indian year only when the company cannot be read, which
+  // preserves the previous behaviour rather than failing the call.
+  return (await companyBookYear(deps, company)) ?? financialYearFor(todayIso());
+}
+
+/**
+ * Resolve the period a tool should cover, without consulting the company.
+ *
+ * Prefer `resolvePeriodForCompany`: this defaults to the Indian financial year
+ * containing today, which is wrong for any company not on an April-to-March
+ * year. Kept for the validation-only path and for callers that have already
+ * resolved a default themselves.
  *
  * A single supplied date is an error, not something to half-guess: filling in
  * the other end silently would produce a period nobody asked for.
@@ -168,20 +326,24 @@ export async function noteEmptyDefaultedPeriod(
   deps: ToolDeps,
   period: DateRange,
   wasDefaulted: boolean,
-  resultCount: number
+  resultCount: number,
+  /** Which company the caller asked about, if any. */
+  forCompany?: string
 ): Promise<string[]> {
   if (!wasDefaulted || resultCount > 0) return [];
 
-  let company;
+  let company: Company | null;
   try {
-    const response = await deps.client.send(buildCompanyListRequest(), 'standard');
-    company = normalizeCompanies(response.body).data[0];
+    // By name where one was given. With several loaded and none named, there is
+    // no company to describe, and naming the wrong one's book dates in a
+    // diagnostic is how a user gets sent to check the wrong set of books.
+    company = await companyNamed(deps, forCompany);
   } catch {
     // A diagnostic must never turn an empty-but-valid answer into a failure.
     return [];
   }
 
-  if (company === undefined) return [];
+  if (company === null) return [];
 
   const books =
     company.startingFrom === null
@@ -192,8 +354,12 @@ export async function noteEmptyDefaultedPeriod(
     company.startingFrom === null
       ? 'Supply fromDate and toDate covering the year you mean.'
       : (() => {
-          const fy = financialYearFor(company.startingFrom);
-          return `Retry with fromDate ${fy.fromDate} and toDate ${fy.toDate} to cover that company's own financial year.`;
+          // The company's own twelve-month year, anchored on the month its books
+          // begin — not 1 April. Assuming April here produced a suggested range
+          // that did not contain the company's data at all on a calendar-year
+          // company, which is worse than making no suggestion.
+          const year = bookYearFor(company.startingFrom, company.endingAt ?? company.startingFrom);
+          return `Retry with fromDate ${year.fromDate} and toDate ${year.toDate} to cover that company's own book year.`;
         })();
 
   return [
@@ -326,7 +492,7 @@ export async function runTool(
     // Resolved outside the query log on purpose: this is metadata about the
     // answer, not one of the queries that produced it, and recording it would
     // put a request in `source_query` that reproduces none of the figures.
-    const companyId = await resolveCompanyId(deps);
+    const companyId = await resolveCompanyId(deps, queries);
 
     const envelope: ToolEnvelope = {
       data: result.data,
@@ -369,7 +535,7 @@ export async function runTool(
           type: 'text',
           text: serializeToolPayload({
             ...tallyError.toClientPayload(),
-            company_id: await resolveCompanyId(deps),
+            company_id: await resolveCompanyId(deps, scope.queries),
             as_of_timestamp: new Date().toISOString(),
             source_query: distinct(queries),
             data_fetched_at:
@@ -417,20 +583,31 @@ function distinct(bodies: readonly string[]): string[] {
 /**
  * Name the company the figures belong to.
  *
- * TallyPrime serves one company at a time, so the loaded company IS the scope
- * of every answer — there is nothing to disambiguate against the caller's
- * `company` argument, which `assertCompanyIsLoaded` has already checked
- * matches. Nearly always free: any tool that touched the company list has it
- * in TallyClient's TTL cache by the time this runs.
+ * **Corrected 14 Aug 2026.** This used to read "TallyPrime serves one company at a
+ * time, so the loaded company IS the scope of every answer" and take the first
+ * company in the list. With three companies loaded that produced AgEx Pharma's
+ * figures under AGBV Nutrition's name — the wrong-attribution failure this whole
+ * codebase is written to avoid, shipped and unnoticed because every fixture had a
+ * single company. See `companyFromSentRequests`.
  *
- * Never throws. A tool that produced a correct answer must not be turned into
- * a failure by a metadata lookup, so an unresolvable company is reported as
- * null — which the envelope documents as "not resolved", not "none".
+ * Never throws. A tool that produced a correct answer must not be turned into a
+ * failure by a metadata lookup, so an unresolvable company is reported as null —
+ * which the envelope documents as "not resolved", not "none". Null is also the
+ * right answer, not a degradation, when several companies are loaded and the
+ * request named none of them: nothing in the response says which one answered.
  */
-async function resolveCompanyId(deps: ToolDeps): Promise<string | null> {
+async function resolveCompanyId(
+  deps: ToolDeps,
+  /** The request bodies this answer was actually built from. */
+  sentBodies: readonly string[]
+): Promise<string | null> {
+  // Ground truth first: what the requests were scoped to.
+  const scoped = companyFromSentRequests(sentBodies);
+  if (scoped !== null) return scoped;
+
   try {
-    const response = await deps.client.send(buildCompanyListRequest(), 'standard');
-    return normalizeCompanies(response.body).data[0]?.name ?? null;
+    // Nothing scoped. Safe only when there is exactly one company to mean.
+    return (await soleLoadedCompany(deps))?.name ?? null;
   } catch {
     return null;
   }
@@ -450,18 +627,48 @@ async function resolveCompanyId(deps: ToolDeps): Promise<string | null> {
  * take the application down. Comparing against the loaded list first means an
  * unknown name never reaches Tally at all, and the caller gets a precise
  * error naming what *is* loaded.
+ *
+ * ## Returns the CANONICAL name, and callers must use it
+ *
+ * This used to return void, so the caller's own spelling continued on to
+ * `SVCURRENTCOMPANY`. That is a wrong-attribution bug, because the match here is
+ * case-INSENSITIVE while **TallyPrime matches the company name exactly**, and on
+ * a mismatch Tally does not raise an error — it silently answers from whichever
+ * company is loaded. So `company: "mudals technologies private limited"` passed
+ * this check, went to Tally in that casing, and produced real figures labelled
+ * with the caller's spelling rather than the company's own.
+ *
+ * With one company loaded the figures happened to be right. With two loaded it is
+ * a silent wrong-company answer, which is the one failure a group comparison
+ * could never survive — and the reason the multi-company tool must not ship until
+ * this is in place.
+ *
+ * Also trims the input before comparing. Company names created by copy-paste
+ * frequently carry a trailing CR or LF, and a trailing-whitespace mismatch is
+ * documented to make Tally reject `SVCURRENTCOMPANY` in a way that is impossible
+ * to diagnose from outside.
+ *
+ * @returns the exact name as TallyPrime spells it, or undefined when no company
+ * was named (in which case Tally uses whatever is loaded and there is nothing to
+ * canonicalise).
  */
 export async function assertCompanyIsLoaded(
   deps: ToolDeps,
   company: string | undefined
-): Promise<void> {
-  if (company === undefined || company === '') return;
+): Promise<string | undefined> {
+  if (company === undefined || company === '') return undefined;
+
+  // Trim first: the comparison, the error message and the returned name must all
+  // agree about what was asked for.
+  const requested = company.trim();
+  if (requested === '') return undefined;
 
   const response = await deps.client.send(buildCompanyListRequest(), 'standard');
   const loaded = normalizeCompanies(response.body).data.map((entry) => entry.name);
 
-  const matches = loaded.some((name) => name.toLowerCase() === company.toLowerCase());
-  if (matches) return;
+  // Return Tally's spelling, never the caller's — see the note above.
+  const match = loaded.find((name) => name.toLowerCase() === requested.toLowerCase());
+  if (match !== undefined) return match;
 
   const available =
     loaded.length === 0
@@ -524,7 +731,12 @@ async function noteMultiCurrency(
     const currencies = normalizeCurrencies(response.body).data;
     if (currencies.length <= 1) return;
 
-    const names = currencies.map((entry) => entry.name).join(', ');
+    // A "?" in this list is a symbol TallyPrime substituted, not a currency named
+    // "?" — worth saying, because a bare list of symbols invites the reader to
+    // treat it as one.
+    const names = currencies
+      .map((entry) => (currencyIsUnavailable(entry.name) ? `${entry.name} (symbol not transportable)` : entry.name))
+      .join(', ');
     warnings.push(
       `This company defines ${String(currencies.length)} currencies (${names}) and every figure here is labelled with the base currency "${base}". TallyPrime does not report a per-transaction currency over this interface, so a transaction recorded in a different currency cannot be distinguished and may be labelled "${base}" incorrectly. Amounts are never converted. Check the currency on any figure that matters before relying on it.`
     );
@@ -547,12 +759,106 @@ export async function resolveCompanyCurrency(
     const response = await deps.client.send(buildCompanyListRequest(), 'standard');
     const companies = normalizeCompanies(response.body).data;
 
+    // Never `companies[0]` on the unnamed path. Currencies differ per company —
+    // dollars, euros, rupees across the three seen live — so picking the first
+    // would label one company's figures in another's currency.
     const match =
       company === undefined || company === ''
-        ? companies[0]
+        ? companies.length === 1
+          ? companies[0]
+          : undefined
         : companies.find((entry) => entry.name.toLowerCase() === company.toLowerCase());
 
+    if (match === undefined && companies.length > 1) {
+      warnings?.push(
+        'CURRENCY NOT ESTABLISHED: several companies are loaded in TallyPrime and this request ' +
+          'did not name one, so which company answered — and therefore which currency these ' +
+          `figures are in — cannot be determined. They are labelled "${UNKNOWN_CURRENCY}" rather ` +
+          'than assuming. Name the company to get a currency on them.'
+      );
+      return UNKNOWN_CURRENCY;
+    }
+
     const currency = match?.currency?.trim();
+
+    /*
+     * A symbol TallyPrime could not transport is reported as unknown, not passed
+     * through and not defaulted.
+     *
+     * Passing it through labels every figure `"currency": "?"`, which reads as
+     * data. Defaulting it is worse: it would label a euro company's balances INR,
+     * the precise bug fixed on 2026-08-13. Saying "unknown" and naming the country
+     * lets the reader supply the currency from the books, which is the only place
+     * the answer actually exists.
+     */
+    if (currencyIsUnavailable(currency)) {
+      // The operator may have supplied the label the books actually use. It is
+      // consulted ONLY here — never where Tally sent a symbol successfully — so
+      // a setting left over from another company cannot relabel figures whose
+      // currency Tally reported perfectly well.
+      const rule = currencyLabelFor(
+        deps.config.tallyCurrencyLabel,
+        match?.name,
+        companies.length
+      );
+      const label = rule?.label ?? UNKNOWN_CURRENCY;
+
+      if (warnings !== undefined) {
+        const where =
+          match?.country === null || match?.country === undefined || match.country === ''
+            ? 'TallyPrime did not report a country either'
+            : `TallyPrime reports the country as ${match.country}`;
+
+        const unlabelled =
+          `The base currency of "${match?.name ?? 'this company'}" could not be read: ` +
+          `TallyPrime reported the symbol as "${currency ?? ''}", which is a substitution ` +
+          'rather than a symbol — the character is not in the codepage TallyPrime exports ' +
+          'with, and it is replaced before the data leaves TallyPrime, so no setting here ' +
+          `can recover it. Every figure in this response is therefore labelled ` +
+          `"${UNKNOWN_CURRENCY}". ${where}. Amounts are exact and are never converted — ` +
+          "only the label is missing. State the currency from the company's own records " +
+          'when quoting any figure, and do NOT assume a currency from the country: this ' +
+          'company also defines other currencies.';
+
+        if (rule === null) {
+          warnings.push(
+            deps.config.tallyCurrencyLabel === undefined
+              ? `${unlabelled} To have the label filled in for you, set TALLY_CURRENCY_LABEL in ` +
+                  'the server configuration.'
+              : // Set, but not applicable here. Saying WHY matters: an operator
+                // who has configured a label and still sees "unknown" will
+                // otherwise assume the setting is broken.
+                `${unlabelled} TALLY_CURRENCY_LABEL IS SET BUT DOES NOT APPLY TO THIS COMPANY. ` +
+                  `TallyPrime has ${String(companies.length)} companies loaded, so a bare label ` +
+                  'cannot be attributed to one of them — and it must not be guessed, because a ' +
+                  'German and an Indian company both report their symbol as "?" and a bare "EUR" ' +
+                  'would label rupees EUR. Name the companies instead, as ' +
+                  '"Company Name=EUR;Other Company=INR".'
+          );
+        } else {
+          warnings.push(
+            'CURRENCY LABEL SUPPLIED BY CONFIGURATION, NOT BY TALLYPRIME. TallyPrime could ' +
+              `not transport the symbol for "${match?.name ?? 'this company'}" — it reported ` +
+              `"${currency ?? ''}", a substitution made before the data left TallyPrime — so ` +
+              `every figure here is labelled "${rule.label}" from TALLY_CURRENCY_LABEL in this ` +
+              `server's configuration. ${where}. Amounts are exact and nothing is converted; ` +
+              'the label is the only part that did not come from Tally. ' +
+              (rule.scope === 'named-company'
+                ? 'The setting names this company specifically, so it cannot be confused with ' +
+                  'another company loaded alongside it.'
+                : 'The setting is a bare label and was applied because this is the only company ' +
+                  'TallyPrime has loaded. If a second company is opened, it stops applying and ' +
+                  'figures go back to being labelled "unknown" — name the companies in the ' +
+                  'setting to avoid that.')
+          );
+        }
+      }
+      // Still worth reporting a multi-currency company, and the base label it
+      // would be compared against is whatever was resolved above.
+      if (warnings !== undefined) await noteMultiCurrency(deps, label, warnings);
+      return label;
+    }
+
     const base = currency === undefined || currency === '' ? DEFAULT_CURRENCY : currency;
 
     if (warnings !== undefined) await noteMultiCurrency(deps, base, warnings);
@@ -614,15 +920,27 @@ export async function fetchCollection<T>(
     timeoutClass?: 'standard' | 'report';
   }
 ): Promise<Normalized<T[]>> {
-  await assertCompanyIsLoaded(deps, company);
+  // Tally's own spelling, not the caller's — but NOT for the reason this comment
+  // used to give. Measured 14 Aug 2026 against three loaded companies:
+  // SVCURRENTCOMPANY matching is case-INSENSITIVE and tolerates leading and
+  // trailing whitespace, and a name that matches nothing returns an EMPTY report
+  // rather than another company's figures. So the wrong-attribution hazard
+  // originally claimed here does not exist on this build.
+  //
+  // Canonicalising is still right, for two smaller reasons: the envelope's
+  // company_id then carries Tally's own spelling rather than the caller's, and
+  // `assertCompanyIsLoaded` rejects a name Tally does not know BEFORE the request
+  // — which matters, because the real failure mode is an unmatched name coming
+  // back as an empty report that reads as "this company has no data".
+  const canonicalCompany = await assertCompanyIsLoaded(deps, company);
 
   const request = spec.build({
-    ...(company === undefined ? {} : { company }),
+    ...(canonicalCompany === undefined ? {} : { company: canonicalCompany }),
     format: deps.config.tallyPreferredFormat,
   });
 
   const currencyWarnings: string[] = [];
-  const currency = await resolveCompanyCurrency(deps, company, currencyWarnings);
+  const currency = await resolveCompanyCurrency(deps, canonicalCompany, currencyWarnings);
   const response = await deps.client.send(request, spec.timeoutClass ?? 'standard');
   const { data, warnings } = spec.normalize(response.body, currency);
 
@@ -651,7 +969,7 @@ export function findByName<T>(
 
 /**
  * Generic field-condition filter, shared by the merged master tools
- * (tally_get_ledgers / tally_get_groups / tally_get_stock_items).
+ * (tally_get_masters type "ledger" / tally_get_masters type "group" / tally_get_masters type "stockItem").
  *
  * Deliberately NOT a SQL or freeform query layer: each dataset exposes a
  * fixed, small field allowlist via `DatasetSpec`, and this only evaluates

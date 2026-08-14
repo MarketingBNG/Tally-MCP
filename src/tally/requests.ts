@@ -216,6 +216,13 @@ export function buildLedgerListRequest(
           'GSTRegistrationType',
           'IsBillWiseOn',
           'IsCostCentresOn',
+          // Tally's own related-party flag. Verified live 2026-08-14: a real
+          // ledger master field, returned populated on 330 of 330 ledgers. It
+          // corrects earlier research for this project which concluded that
+          // TallyPrime holds no related-party marking at all — it does, and it
+          // is the right SEED for related-party screening even though it is not
+          // by itself a complete list.
+          'IsRelatedParty',
         ],
     options
   );
@@ -377,6 +384,19 @@ export function buildVoucherCollectionRequest(
         'Narration',
         'IsCancelled',
         'IsOptional',
+        // Order and note vouchers are NOT transactions in the accounting sense.
+        // `tally-database-loader` fetches both flags precisely so they can be
+        // excluded from financial totals: a sales or purchase ORDER is a
+        // commitment carrying no ledger entries, and a delivery or receipt note
+        // moves stock without touching accounts — so a receipt note and the
+        // purchase invoice that follows it both carry inventory lines for the
+        // same goods, and counting both double-counts the movement.
+        //
+        // Absent on a company that records neither, which reads as false. Adding
+        // them to the fetch list costs nothing: Tally sends the field superset
+        // regardless and leaves the inapplicable ones empty.
+        'IsOrderVoucher',
+        'IsInventoryVoucher',
         'AllLedgerEntries',
         'AllInventoryEntries',
       ];
@@ -481,4 +501,30 @@ export function buildCashFlowRequest(options: TallyRequestOptions): string {
  */
 export function buildFundsFlowRequest(options: TallyRequestOptions): string {
   return buildReportRequest('Funds Flow', options);
+}
+
+/**
+ * Closing stock per item — Tally's own "Stock Summary" report.
+ *
+ * Report ID verified 2026-08-10 (accepted, not rejected) but it returned an
+ * empty envelope on every company probed until 2026-08-14, when a company that
+ * maintains inventory finally populated it. That is why this arrived late: the
+ * ID was known good long before its response shape could be read.
+ *
+ * Shape: alternating DSPACCNAME/DSPSTKINFO siblings, one pair per stock item,
+ * carrying closing quantity, rate and value. See `normalizeClosingStock`.
+ */
+export function buildStockSummaryRequest(options: TallyRequestOptions = {}): string {
+  return buildReportRequest('Stock Summary', options);
+}
+
+/**
+ * Closing stock per location — Tally's own "Godown Summary" report.
+ *
+ * Identical wire shape to Stock Summary, with godown names in place of item
+ * names; verified live 2026-08-14 against a company with one godown ("Main
+ * Location"). This is the only path in the server to location-wise stock.
+ */
+export function buildGodownSummaryRequest(options: TallyRequestOptions = {}): string {
+  return buildReportRequest('Godown Summary', options);
 }

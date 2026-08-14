@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseTallyAmount, toMoney, isNegative, absolute } from '../../src/utils/numbers.js';
+import {
+  parseTallyAmount,
+  toMoney,
+  isNegative,
+  absolute,
+  currencyIsUnavailable,
+} from '../../src/utils/numbers.js';
 
 describe('parseTallyAmount', () => {
   it('preserves sign exactly as Tally sent it', () => {
@@ -107,4 +113,59 @@ describe('Money arithmetic', () => {
     });
   });
 
+});
+
+/**
+ * Detecting a currency symbol TallyPrime could not transport.
+ *
+ * Found live 2026-08-14: a German company reported its base currency as a literal
+ * `?` (byte 0x3F), because the euro sign is not in the codepage TallyPrime exports
+ * with and it substitutes before the data leaves. Ten encoding settings were
+ * probed and none changed it, so this cannot be recovered — only reported.
+ *
+ * The consequence of NOT detecting it: every figure labelled `"currency": "?"`,
+ * which reads as data. Defaulting instead would label euro balances INR.
+ */
+describe('currencyIsUnavailable', () => {
+  it('detects the substituted question mark', () => {
+    expect(currencyIsUnavailable('?')).toBe(true);
+  });
+
+  it('detects a replacement character, in case a payload was mangled not substituted', () => {
+    expect(currencyIsUnavailable('\uFFFD')).toBe(true);
+  });
+
+  it('detects a run of them', () => {
+    // A multi-character symbol whose every character was substituted.
+    expect(currencyIsUnavailable('??')).toBe(true);
+    expect(currencyIsUnavailable('?\uFFFD')).toBe(true);
+  });
+
+  it('tolerates surrounding whitespace', () => {
+    expect(currencyIsUnavailable('  ?  ')).toBe(true);
+  });
+
+  it('accepts real symbols, including ones that survived transport', () => {
+    // These must NOT be treated as unavailable, or a working company would start
+    // reporting "unknown" for a currency Tally reported perfectly well.
+    for (const symbol of ['$', 'INR', 'Rs.', '\u20B9', '\u20AC', 'USD', 'CHF', '\u00A3']) {
+      expect(currencyIsUnavailable(symbol)).toBe(false);
+    }
+  });
+
+  it('does not fire on a symbol that merely contains a question mark', () => {
+    // Only a fully-substituted symbol is unreadable. A partial one still carries
+    // information, and blanking it would discard what did arrive.
+    expect(currencyIsUnavailable('R?')).toBe(false);
+  });
+
+  it('treats absent and empty as not-unavailable, leaving the existing default path alone', () => {
+    // "Tally reported nothing" is a different case from "Tally substituted it",
+    // and it already has its own handling. Conflating them would change verified
+    // behaviour on companies that report no currency at all.
+    expect(currencyIsUnavailable(null)).toBe(false);
+    expect(currencyIsUnavailable(undefined)).toBe(false);
+    expect(currencyIsUnavailable('')).toBe(false);
+    expect(currencyIsUnavailable('   ')).toBe(false);
+  });
 });

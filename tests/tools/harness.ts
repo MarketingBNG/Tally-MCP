@@ -26,21 +26,32 @@ export interface ToolRegistry {
   server: McpServer;
   handlers: Map<string, ToolHandler>;
   schemas: Map<string, { parse: (value: unknown) => unknown } | undefined>;
+  /**
+   * Each tool's description, captured so tests can assert on it.
+   *
+   * Descriptions are load-bearing rather than documentation — Claude selects
+   * tools on them, and a consolidated tool's per-variant caveats live nowhere
+   * else. A merge that flattened them would pass every other test in this
+   * suite, so the text has to be assertable.
+   */
+  descriptions: Map<string, string>;
 }
 
 /** A stand-in for McpServer that records registrations instead of serving them. */
 export function createToolRegistry(): ToolRegistry {
   const handlers = new Map<string, ToolHandler>();
   const schemas = new Map<string, { parse: (value: unknown) => unknown } | undefined>();
+  const descriptions = new Map<string, string>();
 
   const server = {
     registerTool(
       name: string,
-      config: { inputSchema?: { parse: (value: unknown) => unknown } },
+      config: { inputSchema?: { parse: (value: unknown) => unknown }; description?: string },
       handler: ToolHandler
     ) {
       handlers.set(name, handler);
       schemas.set(name, config.inputSchema);
+      descriptions.set(name, config.description ?? '');
       return { name };
     },
     registerResource() {
@@ -48,7 +59,7 @@ export function createToolRegistry(): ToolRegistry {
     },
   } as unknown as McpServer;
 
-  return { server, handlers, schemas };
+  return { server, handlers, schemas, descriptions };
 }
 
 /**

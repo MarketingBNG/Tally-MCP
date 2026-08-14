@@ -10,13 +10,23 @@ import {
   type ToolRegistry,
 } from './harness.js';
 import { registerCompanyTools } from '../../src/tools/companies.js';
-import { registerLedgerTools } from '../../src/tools/ledgers.js';
-import { registerGroupTools } from '../../src/tools/groups.js';
+import { registerMasterTools } from '../../src/tools/masters.js';
 import { registerReportTools } from '../../src/tools/reports.js';
 import { registerVoucherTools } from '../../src/tools/vouchers.js';
 import { registerLedgerTransactionTools } from '../../src/tools/ledgerTransactions.js';
 import { registerPartyStatementTools } from '../../src/tools/partyStatement.js';
 import type { Money } from '../../src/utils/numbers.js';
+
+/**
+ * The period the voucher fixtures actually fall in.
+ *
+ * Stated explicitly because the default period is the COMPANY'S book year, and
+ * this mock company's books run 2021-04-01 to 2022-03-31 while its voucher
+ * fixtures are dated July 2026. These tests exercise filtering and field
+ * shaping, so leaning on any default would make them depend on something they
+ * are not testing.
+ */
+const IN_FIXTURE = { fromDate: '2026-07-01', toDate: '2026-07-31' };
 
 /**
  * Tool-level tests: real handlers, real schemas, real client and parser,
@@ -31,8 +41,7 @@ function build(overrides: Record<string, string> = {}): ToolRegistry {
   const deps = makeDeps(port, overrides);
 
   registerCompanyTools(registry.server, deps);
-  registerLedgerTools(registry.server, deps);
-  registerGroupTools(registry.server, deps);
+  registerMasterTools(registry.server, deps);
   registerReportTools(registry.server, deps);
   registerVoucherTools(registry.server, deps);
   registerLedgerTransactionTools(registry.server, deps);
@@ -91,6 +100,7 @@ describe('tally_list_companies', () => {
       {
         name: 'EXAMPLE TRADING PRIVATE LIMITED',
         startingFrom: '2021-04-01',
+        endingAt: '2022-03-31',
         currency: null,
         country: null,
         source: {
@@ -103,16 +113,16 @@ describe('tally_list_companies', () => {
   });
 });
 
-describe('tally_get_ledgers', () => {
+describe('tally_get_masters', () => {
   it('returns ledgers with pagination metadata', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers');
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger' });
 
     expect(result.items).toHaveLength(8);
     expect(result.pagination).toMatchObject({ page: 1, total: 8, hasMore: false });
   });
 
   it('slices to the requested page', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', { page: 1, pageSize: 2 });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger', page: 1, pageSize: 2 });
 
     expect(result.items).toHaveLength(2);
     expect(result.pagination).toMatchObject({ hasMore: true, total: 8 });
@@ -124,7 +134,7 @@ describe('tally_get_ledgers', () => {
    * rather than a wall of records.
    */
   it('refuses a result set above TALLY_MAX_RECORDS', async () => {
-    const error = await callToolError(build({ TALLY_MAX_RECORDS: '2' }), 'tally_get_ledgers');
+    const error = await callToolError(build({ TALLY_MAX_RECORDS: '2' }), 'tally_get_masters', { type: 'ledger' });
 
     expect(error.code).toBe('RESULT_LIMIT_EXCEEDED');
     expect(error.suggestion).toMatch(/name.query.conditions filter/);
@@ -132,16 +142,16 @@ describe('tally_get_ledgers', () => {
 
   it('reports a Tally outage as a stable code, not an exception', async () => {
     mock.simulateDown();
-    const error = await callToolError(build(), 'tally_get_ledgers');
+    const error = await callToolError(build(), 'tally_get_masters', { type: 'ledger' });
 
     expect(['TALLY_NOT_RUNNING', 'TALLY_CONNECTION_FAILED']).toContain(error.code);
     expect(error.suggestion).toBeTruthy();
   });
 });
 
-describe('tally_get_groups', () => {
+describe('tally_get_masters', () => {
   it('returns groups with their parent and classification', async () => {
-    const result = await callToolOk(build(), 'tally_get_groups');
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'group' });
 
     expect(result.items).toHaveLength(2);
     expect(result.items).toContainEqual(
@@ -150,35 +160,35 @@ describe('tally_get_groups', () => {
   });
 
   it('refuses a result set above TALLY_MAX_RECORDS', async () => {
-    const error = await callToolError(build({ TALLY_MAX_RECORDS: '1' }), 'tally_get_groups');
+    const error = await callToolError(build({ TALLY_MAX_RECORDS: '1' }), 'tally_get_masters', { type: 'group' });
 
     expect(error.code).toBe('RESULT_LIMIT_EXCEEDED');
     expect(error.suggestion).toMatch(/query.conditions filter/);
   });
 });
 
-describe('tally_get_groups', () => {
+describe('tally_get_masters', () => {
   it('matches a fragment of the group name, case-insensitively', async () => {
-    const result = await callToolOk(build(), 'tally_get_groups', { query: 'debtors' });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'group', query: 'debtors' });
 
     expect(result.items).toHaveLength(1);
     expect((result.items as { name: string }[])[0]?.name).toBe('Sundry Debtors');
   });
 
   it('returns an empty page rather than an error when nothing matches', async () => {
-    const result = await callToolOk(build(), 'tally_get_groups', { query: 'zzz-nothing' });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'group', query: 'zzz-nothing' });
     expect(result.items).toEqual([]);
   });
 });
 
-describe('tally_get_ledgers / tally_get_groups conditions filter', () => {
+describe('tally_get_masters / tally_get_masters conditions filter', () => {
   it('returns the whole dataset with no conditions', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', {});
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger',});
     expect(result.items).toHaveLength(8);
   });
 
   it('ANDs multiple conditions on ledgers', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', {
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger',
       conditions: [
         { field: 'parent', op: 'eq', value: 'Indirect Expenses' },
         { field: 'closingBalance', op: 'isNull' },
@@ -189,7 +199,7 @@ describe('tally_get_ledgers / tally_get_groups conditions filter', () => {
   });
 
   it('filters groups on a boolean field', async () => {
-    const result = await callToolOk(build(), 'tally_get_groups', {
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'group',
       conditions: [{ field: 'isRevenue', op: 'eq', value: true }],
     });
 
@@ -197,7 +207,7 @@ describe('tally_get_ledgers / tally_get_groups conditions filter', () => {
   });
 
   it('compares a money field numerically', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', {
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger',
       conditions: [{ field: 'closingBalance', op: 'lt', value: 0 }],
     });
 
@@ -208,7 +218,7 @@ describe('tally_get_ledgers / tally_get_groups conditions filter', () => {
   });
 
   it('rejects an unknown field', async () => {
-    const error = await callToolError(build(), 'tally_get_ledgers', {
+    const error = await callToolError(build(), 'tally_get_masters', { type: 'ledger',
       conditions: [{ field: 'notAField', op: 'eq', value: 'x' }],
     });
 
@@ -217,7 +227,7 @@ describe('tally_get_ledgers / tally_get_groups conditions filter', () => {
   });
 
   it('rejects an operator invalid for the field type', async () => {
-    const error = await callToolError(build(), 'tally_get_ledgers', {
+    const error = await callToolError(build(), 'tally_get_masters', { type: 'ledger',
       conditions: [{ field: 'name', op: 'gt', value: 'A' }],
     });
 
@@ -226,16 +236,16 @@ describe('tally_get_ledgers / tally_get_groups conditions filter', () => {
   });
 });
 
-describe('tally_get_ledgers', () => {
+describe('tally_get_masters', () => {
   it('matches a fragment of the ledger name, case-insensitively', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', { query: 'bramley' });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger', query: 'bramley' });
 
     expect(result.items).toHaveLength(1);
     expect((result.items as { name: string }[])[0]?.name).toContain('Bramley');
   });
 
   it('matches on the parent group too', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', {
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger',
       query: 'Indirect Expenses',
     });
 
@@ -246,16 +256,16 @@ describe('tally_get_ledgers', () => {
 
   /** No matches is a finding about the chart of accounts, not a failure. */
   it('returns an empty page rather than an error when nothing matches', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', { query: 'zzz-nothing' });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger', query: 'zzz-nothing' });
 
     expect(result.items).toEqual([]);
     expect(result.pagination).toMatchObject({ total: 0 });
   });
 });
 
-describe('tally_get_ledgers', () => {
+describe('tally_get_masters', () => {
   it('fetches a ledger by exact name', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', { name: 'Northwind Retail' });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger', name: 'Northwind Retail' });
 
     expect(result.ledger).toMatchObject({
       name: 'Northwind Retail',
@@ -265,12 +275,12 @@ describe('tally_get_ledgers', () => {
   });
 
   it('tolerates a difference in capitalisation', async () => {
-    const result = await callToolOk(build(), 'tally_get_ledgers', { name: 'northwind retail' });
+    const result = await callToolOk(build(), 'tally_get_masters', { type: 'ledger', name: 'northwind retail' });
     expect((result.ledger as { name: string }).name).toBe('Northwind Retail');
   });
 
   it('fails with a specific code when the ledger does not exist', async () => {
-    const error = await callToolError(build(), 'tally_get_ledgers', { name: 'No Such Ledger' });
+    const error = await callToolError(build(), 'tally_get_masters', { type: 'ledger', name: 'No Such Ledger' });
 
     expect(error.code).toBe('TALLY_COMPANY_NOT_FOUND');
     expect(error.message).toContain('No Such Ledger');
@@ -379,7 +389,7 @@ describe('tally_get_vouchers', () => {
    * asserts the wire shape that actually carries entries.
    */
   it('requests a Voucher collection with its entry lists, never the register or DayBook', async () => {
-    await callToolOk(build(), 'tally_get_vouchers');
+    await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE });
 
     const sent = mock.requests.map((r) => r.body).join(' ');
     expect(sent).toContain('<TYPE>Voucher</TYPE>');
@@ -390,26 +400,26 @@ describe('tally_get_vouchers', () => {
 
   /** Exploding a voucher adds ~50 KB of scaffolding per record for no gain. */
   it('does not ask Tally to explode vouchers', async () => {
-    await callToolOk(build(), 'tally_get_vouchers');
+    await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE });
     expect(mock.requests[0]?.body ?? '').not.toContain('EXPLODEFLAG');
   });
 });
 
 describe('tally_get_vouchers', () => {
   it('matches on the party name', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { query: 'bramley' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, query: 'bramley' });
 
     expect(result.items).toHaveLength(1);
     expect((result.items as { voucherNumber: string }[])[0]?.voucherNumber).toBe('MT/2026/0042');
   });
 
   it('matches on an entry ledger name the header does not mention', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { query: 'Output IGST' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, query: 'Output IGST' });
     expect(result.items).toHaveLength(1);
   });
 
   it('filters by voucher type', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { voucherType: 'payment' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, voucherType: 'payment' });
 
     expect(result.items).toHaveLength(1);
     expect((result.items as { voucherType: string }[])[0]?.voucherType).toBe('Payment');
@@ -417,7 +427,7 @@ describe('tally_get_vouchers', () => {
 
   it('filters by amount using the largest entry on the voucher', async () => {
     // Payment is 150505.05, Sales 59595.95. A floor of 100000 keeps only the payment.
-    const result = await callToolOk(build(), 'tally_get_vouchers', { minAmount: 100000 });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, minAmount: 100000 });
 
     expect(result.items).toHaveLength(1);
     expect((result.items as { voucherNumber: string }[])[0]?.voucherNumber).toBe('111');
@@ -442,7 +452,7 @@ describe('tally_get_vouchers', () => {
   });
 
   it('filters by ledger across all entries', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { ledger: 'Output IGST' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, ledger: 'Output IGST' });
 
     expect(result.items).toHaveLength(1);
     expect((result.items as { voucherNumber: string }[])[0]?.voucherNumber).toBe('MT/2026/0042');
@@ -450,15 +460,15 @@ describe('tally_get_vouchers', () => {
 
   /** party is narrower than ledger: counterparty only, not every account touched. */
   it('distinguishes party from ledger', async () => {
-    const byParty = await callToolOk(build(), 'tally_get_vouchers', { party: 'HDFC' });
+    const byParty = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, party: 'HDFC' });
     expect(byParty.items).toEqual([]);
 
-    const byLedger = await callToolOk(build(), 'tally_get_vouchers', { ledger: 'HDFC' });
+    const byLedger = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, ledger: 'HDFC' });
     expect(byLedger.items).toHaveLength(1);
   });
 
   it('filters by narration', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { narration: 'NEFT' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, narration: 'NEFT' });
     expect(result.items).toHaveLength(1);
   });
 
@@ -468,6 +478,7 @@ describe('tally_get_vouchers', () => {
    */
   it('matches a value inside a nested structure', async () => {
     const result = await callToolOk(build(), 'tally_get_vouchers', {
+      ...IN_FIXTURE,
       fieldMatch: 'A/c Payee',
     });
 
@@ -476,12 +487,12 @@ describe('tally_get_vouchers', () => {
   });
 
   it('matches a value in a nested inventory line', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { fieldMatch: 'Widget' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, fieldMatch: 'Widget' });
     expect((result.items as { voucherNumber: string }[])[0]?.voucherNumber).toBe('MT/2026/0042');
   });
 
   it('parses fields for fieldMatch even when they are not requested for output', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { fieldMatch: 'Cheque' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, fieldMatch: 'Cheque' });
 
     expect(result.items).toHaveLength(1);
     // Not requested in output, so it must not be emitted.
@@ -500,7 +511,7 @@ describe('tally_get_vouchers', () => {
 
 describe('tally_get_vouchers', () => {
   it('fetches a voucher by number', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { voucherNumber: '111' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, voucherNumber: '111' });
     const vouchers = result.vouchers as { voucherNumber: string; entries: unknown[] }[];
 
     expect(vouchers).toHaveLength(1);
@@ -509,13 +520,14 @@ describe('tally_get_vouchers', () => {
 
   it('handles a voucher number containing slashes', async () => {
     const result = await callToolOk(build(), 'tally_get_vouchers', {
+      ...IN_FIXTURE,
       voucherNumber: 'MT/2026/0042',
     });
     expect(result.vouchers).toHaveLength(1);
   });
 
   it('fails with a specific message when the number is not in the period', async () => {
-    const error = await callToolError(build(), 'tally_get_vouchers', { voucherNumber: '999' });
+    const error = await callToolError(build(), 'tally_get_vouchers', { ...IN_FIXTURE, voucherNumber: '999' });
 
     expect(error.code).toBe('TALLY_COMPANY_NOT_FOUND');
     expect(error.suggestion).toMatch(/widen the date range/i);
@@ -651,7 +663,7 @@ describe('tally_get_ledger_transactions', () => {
     });
 
     expect(error.code).toBe('TALLY_COMPANY_NOT_FOUND');
-    expect(error.suggestion).toMatch(/tally_get_ledgers/);
+    expect(error.suggestion).toMatch(/tally_get_masters/);
   });
 
   it('uses a Voucher collection rather than the unverified per-ledger report', async () => {
@@ -732,9 +744,9 @@ describe('read-only guarantee at the wire level', () => {
   it('never sends anything but an Export request', async () => {
     const registry = build();
     await callToolOk(registry, 'tally_list_companies');
-    await callToolOk(registry, 'tally_get_ledgers');
+    await callToolOk(registry, 'tally_get_masters', { type: 'ledger' });
     await callToolOk(registry, 'tally_get_statement', { statement: 'trial_balance' });
-    await callToolOk(registry, 'tally_get_vouchers');
+    await callToolOk(registry, 'tally_get_vouchers', { ...IN_FIXTURE });
 
     expect(mock.requests.length).toBeGreaterThan(0);
     for (const request of mock.requests) {
@@ -748,7 +760,7 @@ describe('read-only guarantee at the wire level', () => {
 
 describe('company scoping', () => {
   it('passes the company through to Tally once it is confirmed loaded', async () => {
-    await callToolOk(build(), 'tally_get_ledgers', { company: 'EXAMPLE TRADING PRIVATE LIMITED' });
+    await callToolOk(build(), 'tally_get_masters', { type: 'ledger', company: 'EXAMPLE TRADING PRIVATE LIMITED' });
 
     // Three requests: the loaded-company check (which also yields the base
     // currency), the currency list behind the multi-currency caveat, then the data
@@ -760,7 +772,7 @@ describe('company scoping', () => {
   });
 
   it('matches the loaded company case-insensitively', async () => {
-    await callToolOk(build(), 'tally_get_ledgers', { company: 'example trading private limited' });
+    await callToolOk(build(), 'tally_get_masters', { type: 'ledger', company: 'example trading private limited' });
     expect(mock.requests).toHaveLength(3);
   });
 
@@ -769,7 +781,7 @@ describe('company scoping', () => {
    * asking Tally harder. The user has to open the company.
    */
   it('refuses a company TallyPrime does not have open', async () => {
-    const error = await callToolError(build(), 'tally_get_ledgers', { company: 'SOME OTHER CO' });
+    const error = await callToolError(build(), 'tally_get_masters', { type: 'ledger', company: 'SOME OTHER CO' });
 
     expect(error.code).toBe('TALLY_COMPANY_NOT_LOADED');
     expect(error.message).toContain('SOME OTHER CO');
@@ -783,7 +795,7 @@ describe('company scoping', () => {
    * application, so the check must be local.
    */
   it('never sends an unknown company name to Tally', async () => {
-    await callToolError(build(), 'tally_get_ledgers', { company: 'SOME OTHER CO' });
+    await callToolError(build(), 'tally_get_masters', { type: 'ledger', company: 'SOME OTHER CO' });
 
     for (const request of mock.requests) {
       expect(request.body).not.toContain('SOME OTHER CO');
@@ -791,7 +803,7 @@ describe('company scoping', () => {
   });
 
   it('omits the company and skips the verification check when none is given', async () => {
-    const envelope = await callToolEnvelope(build(), 'tally_get_ledgers');
+    const envelope = await callToolEnvelope(build(), 'tally_get_masters', { type: 'ledger' });
 
     // The data request itself is unscoped: with no company named there is
     // nothing to verify, so no name is sent and no check is performed.
@@ -815,12 +827,12 @@ describe('full-field retrieval', () => {
     // Asserted across every request rather than at a fixed index: resolving the
     // company's base currency sends a company-list request first, and pinning an
     // index made this test about call ORDER rather than about the fetch shape.
-    await callToolOk(build(), 'tally_get_ledgers');
+    await callToolOk(build(), 'tally_get_masters', { type: 'ledger' });
     expect(mock.requests.map((r) => r.body).join(' ')).not.toContain('<FETCH>*</FETCH>');
 
     mock.reset();
     serveDefaults();
-    await callToolOk(build(), 'tally_get_ledgers', { includeAllFields: true });
+    await callToolOk(build(), 'tally_get_masters', { type: 'ledger', includeAllFields: true });
     expect(mock.requests.map((r) => r.body).join(' ')).toContain('<FETCH>*</FETCH>');
   });
 
@@ -829,7 +841,7 @@ describe('full-field retrieval', () => {
    * company, so they are returned as an open map rather than a fixed shape.
    */
   it('returns unmapped voucher fields under "fields"', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { includeAllFields: true });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, includeAllFields: true });
     const first = (result.items as { fields?: Record<string, string> }[])[0];
 
     expect(first?.fields).toBeDefined();
@@ -838,7 +850,7 @@ describe('full-field retrieval', () => {
   });
 
   it('omits empty fields entirely rather than reporting them as blank', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { includeAllFields: true });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, includeAllFields: true });
     const first = (result.items as { fields?: Record<string, string> }[])[0];
 
     // <FROMDATE/> and friends are empty in the fixture and must not appear.
@@ -853,7 +865,7 @@ describe('full-field retrieval', () => {
    * not.
    */
   it('returns populated nested structures, nested arbitrarily deep', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { includeAllFields: true });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, includeAllFields: true });
     const invoice = (
       result.items as {
         voucherNumber: string;
@@ -873,7 +885,7 @@ describe('full-field retrieval', () => {
   });
 
   it('drops nested structures that contain no values at any depth', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { includeAllFields: true });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, includeAllFields: true });
     const items = result.items as { nested?: Record<string, unknown> }[];
 
     // Present but entirely empty in the fixture — reporting them would
@@ -885,7 +897,7 @@ describe('full-field retrieval', () => {
   });
 
   it('returns nested structures on ledger entries too', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { voucherNumber: '111' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, voucherNumber: '111' });
     const entries = (result.vouchers as { entries: { nested?: Record<string, { fields: Record<string, string> }[]> }[] }[])[0]?.entries;
 
     const bank = entries?.[1]?.nested?.['BANKALLOCATIONS.LIST']?.[0];
@@ -896,7 +908,7 @@ describe('full-field retrieval', () => {
 
   /** Entries are returned as `entries`; repeating them under `nested` would double-report. */
   it('does not repeat ledger entries inside nested', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { includeAllFields: true });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, includeAllFields: true });
     const first = (result.items as { nested?: Record<string, unknown> }[])[0];
 
     expect(first?.nested ?? {}).not.toHaveProperty('ALLLEDGERENTRIES.LIST');
@@ -908,7 +920,7 @@ describe('full-field retrieval', () => {
    * on every voucher and entry and crowd out the structures that matter.
    */
   it('excludes Tally internal audit-trail structures', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers', { voucherNumber: '111' });
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE, voucherNumber: '111' });
     const voucher = (
       result.vouchers as {
         nested?: Record<string, unknown>;
@@ -923,12 +935,12 @@ describe('full-field retrieval', () => {
   });
 
   it('leaves fields out altogether when not requested', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers');
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE });
     expect((result.items as { fields?: unknown }[])[0]?.fields).toBeUndefined();
   });
 
   it('carries source provenance on every record', async () => {
-    const result = await callToolOk(build(), 'tally_get_vouchers');
+    const result = await callToolOk(build(), 'tally_get_vouchers', { ...IN_FIXTURE });
     expect((result.items as { source: unknown }[])[0]?.source).toEqual({
       system: 'tallyprime',
       entityType: 'voucher',

@@ -97,7 +97,7 @@ export function registerPrompts(server: McpServer): void {
               '2. tally_get_statement with statement: "trial_balance" — the overall position, ' +
                 'and a check that the books balance.',
               '3. Follow what you actually see. Use tally_get_statement with statement: ' +
-                '"profit_loss" or "balance_sheet" for position, tally_get_ledgers for the chart ' +
+                '"profit_loss" or "balance_sheet" for position, tally_get_masters type "ledger" for the chart ' +
                 'of accounts, tally_get_vouchers with filters to pull specific transactions.',
               '4. When something needs explaining, fetch the full record: tally_get_vouchers ' +
                 'with a voucherNumber returns every field plus nested inventory, bank and tax detail.',
@@ -158,7 +158,7 @@ export function registerPrompts(server: McpServer): void {
                 'differs between companies.',
               '2. Pull the complete record for anything that needs explaining, via ' +
                 'tally_get_vouchers with its voucherNumber.',
-              '3. Cross-check against tally_get_ledgers with a name, or tally_get_statement, ' +
+              '3. Cross-check against tally_get_masters type "ledger" with a name, or tally_get_statement, ' +
                 'where the answer depends on balances rather than individual entries.',
               '',
               'Show the specific vouchers behind any claim — number, date, party, amount — so ' +

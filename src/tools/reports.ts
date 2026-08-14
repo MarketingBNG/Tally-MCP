@@ -32,12 +32,18 @@ import {
 import {
   assertCompanyIsLoaded,
   resolveCompanyCurrency,
-  resolvePeriod,
+  resolvePeriodForCompany,
   runTool,
   whole,
   type ToolDeps,
 } from './toolResult.js';
-import { financialYearFor, validateDateRange } from '../utils/dates.js';
+import {
+  bookYearFor,
+  endDateBinds as endDateIsHonoured,
+  nearestBindingEndDate,
+  todayIso,
+  validateDateRange,
+} from '../utils/dates.js';
 import { CASH_FLOW_SUMMARY, FUND_FLOW_SUMMARY } from './flowReports.js';
 import {
   compareStatements,
@@ -74,35 +80,39 @@ const SIGN_NOTE =
 
 const GROUP_NOTE =
   'GRANULARITY: top-level groups as TallyPrime presents them, not individual ledgers. ' +
-  'For per-ledger balances use tally_get_ledgers.';
+  'For per-ledger balances use tally_get_masters type "ledger".';
 
 /**
- * The rule, without the proof. The evidence behind it — a three-month Cash Flow
- * request returning nine months, a first-quarter Trial Balance identical to the
- * whole year — lives in docs/known-limitations.md, where it is worth its length.
- * Here it was spending tokens on every request to justify a rule that must simply
- * be followed.
+ * The rule, without the proof. The evidence behind it — a 19-point sweep of
+ * `SVTODATE` against a live install — lives in docs/known-limitations.md, where
+ * it is worth its length. Here it was spending tokens on every request to
+ * justify a rule that must simply be followed.
  */
 const END_DATE_NOTE = [
-  'THE END DATE IS NOT HONOURED. `fromDate` binds, `toDate` does NOT: figures accumulate from ' +
-    "fromDate to the end of the company's financial year whatever end date is asked for.",
+  'THE END DATE ONLY BINDS ON THE 31st. `fromDate` always binds. `toDate` is honoured only when ' +
+    'it falls on the 31st of a month; on any other day TallyPrime ignores it and the figures ' +
+    "accumulate from fromDate to the end of the company's own book year. This is verified " +
+    'behaviour, not a guess, and it applies to a real month end like 30 November too.',
+  '',
+  'So 31 January, 31 March, 31 May, 31 July, 31 August, 31 October and 31 December work; ' +
+    'every other end date silently gives you a longer period. Calendar quarter ends are the trap ' +
+    '— 30 June and 30 September do NOT bind.',
   '',
   'Every response carries `coversPeriodRequested`. When FALSE, it also carries ' +
     '`figuresActuallyCover`, and the figures MUST be described as a cumulative position from ' +
     'fromDate — never as the period requested. For a date-bounded question use tally_get_vouchers ' +
-    'or tally_summarise_movements, whose ranges are honoured.',
+    'or tally_summarise_movements, whose ranges are honoured to the day.',
 ].join('\n');
 
 const COMPARISON_NOTE = [
   'COMPARING TWO PERIODS: pass compareFromDate and compareToDate to fetch the statement twice in ' +
     'one call. Never defaulted — supply both or neither.',
   '',
-  'REFUSED unless the main period ends on the financial year end, because of the end-date ' +
-    'behaviour above: two periods accumulating to the same year end would subtract to minus the ' +
-    'whole earlier period rather than the movement between them, so the call fails with ' +
-    'TALLY_UNSUPPORTED_OPERATION rather than return a wrong figure of plausible size. Two ' +
-    'cumulative positions from different start dates, both run to the year end, is the shape that ' +
-    'works.',
+  'REFUSED unless BOTH periods end on a 31st, because of the end-date behaviour above: two ' +
+    'periods that both got extended to the same year end would subtract to minus the whole ' +
+    'earlier period rather than the movement between them, so the call fails with ' +
+    'TALLY_UNSUPPORTED_OPERATION rather than return a wrong figure of plausible size. Shift each ' +
+    'end date to a 31st and the comparison works.',
   '',
   'The response carries `rows` plus `comparison` holding its own `rows`, a `changes` array and ' +
     '`unpaired`. `change` = current − previous in TallyPrime signs on BOTH sides, so a growing ' +
@@ -248,38 +258,59 @@ const STATEMENTS: { [K in StatementKey]: StatementSpec<unknown> } = {
 };
 
 /**
- * TallyPrime ignores SVTODATE on these reports — the guard that exists because
- * of it.
+ * When TallyPrime honours SVTODATE on these reports — the guard that exists
+ * because it usually does not.
  *
- * Verified live 2026-08-12, and it is the most consequential thing found so far
- * about these five reports. A `Cash Flow` request carrying
- * `<SVFROMDATE>20250701</SVFROMDATE><SVTODATE>20250930</SVTODATE>` returned NINE
- * monthly rows, July through March. A `Trial Balance` for 1-Apr to 30-Jun
- * returned figures identical, row for row, to the same report for the whole
- * financial year. So `SVFROMDATE` binds and **`SVTODATE` does not**: the figures
- * accumulate from the start date to the end of the company's financial year,
- * whatever end date was asked for.
+ * **Corrected 2026-08-14.** This was previously recorded as "SVTODATE is always
+ * ignored", verified live 2026-08-12: a `Cash Flow` for 1-Jul to 30-Sep returned
+ * NINE monthly rows, and a `Trial Balance` for 1-Apr to 30-Jun matched the whole
+ * year row for row. Both observations are real and still reproduce. The
+ * generalisation drawn from them was wrong.
  *
- * Why this went unnoticed until a second company was probed: the original trial
- * balance reconciliation covered 1-Apr-26 to 28-Jul-26 on a company whose books
- * held nothing after 28 July. "Accumulated to the year end" and "as at the end
- * date" produce the same figures when there are no transactions in between, so
- * the check that was meant to catch exactly this class of error could not.
+ * A 19-point sweep with the cache off (`scripts/probe-todate-binding.ts`) found
+ * the actual rule: **SVTODATE binds if and only if its day of the month is the
+ * 31st.** 31 January, 31 March, 31 May, 31 July, 31 August and 31 December each
+ * returned exactly the months requested; 29 February, 15 March, 30 March,
+ * 30 April, 30 June, 30 September and 30 November each returned the whole book
+ * year. 30 November is what rules out "the last day of the month" — it is a real
+ * month end and it is still ignored.
+ *
+ * The earlier evidence fits this rule exactly. Both of those tests ended on a
+ * calendar quarter end, and three of the four quarter ends fall on the 30th;
+ * 1-Jul to the year end of an April company is nine months to the row. The
+ * original conclusion was not a bad inference, it was an under-sampled one.
+ *
+ * Why it went unnoticed even earlier: the first trial balance reconciliation ran
+ * 1-Apr-26 to 28-Jul-26 on a company holding nothing after 28 July, and
+ * "accumulated to the year end" and "as at the end date" agree when there are no
+ * transactions in between.
  *
  * The consequence for a comparison is worse than a wrong period. If both sides
- * accumulate to the same year end, subtracting them collapses algebraically to
+ * get extended to the same year end, subtracting them collapses algebraically to
  * *minus the whole of the earlier period's activity* — on the company probed,
  * a Q2-vs-Q1 comparison reported sales down 211,852.50 when sales were flat,
  * because 211,852.50 was the entirety of Q1. A fabricated figure of plausible
  * size, in answer to the one question the feature exists to answer, with no
- * warning. Hence: refuse.
+ * warning. Hence: still refuse, but now only when an end date genuinely does not
+ * bind, rather than for every period that is not the year end.
  */
-const STATEMENT_TO_DATE_IS_IGNORED = [
-  'TallyPrime ignores the end date on this report. Verified against a live install: figures ' +
-    "accumulate from fromDate to the end of the company's financial year, whatever toDate is " +
-    'given. A three-month Cash Flow request returned nine months, and a first-quarter Trial ' +
-    'Balance returned the whole year.',
-].join('');
+function statementEndDateIsIgnored(toDate: string): string {
+  return (
+    `TallyPrime did not honour the end date ${toDate} on this report. Verified against a live ` +
+    'install by sweeping the end date across a range: it binds ONLY when it falls on the 31st of ' +
+    'a month, and is ignored on every other day — including a real month end such as 30 November. ' +
+    // Re-measured 2026-08-14 with four different date wire formats (YYYYMMDD,
+    // d-MMM-yyyy, a TYPE="Date" attribute, and ISO). The first three behave
+    // identically, so the rule is a property of the report and not an artefact
+    // of how the date is written. ISO is silently mis-parsed and is never sent.
+    'When ignored, figures accumulate from fromDate to the end of the LAST book year the company ' +
+    'has, which is often far past both the date you asked for and the last date the company holds ' +
+    'data for — so this is a much longer span than "the year you asked about". Measured on a ' +
+    'company whose books run 2021-04-01 to 2026-07-28: every request, from any start date, ' +
+    'accumulated to 2027-03-31, turning a request for one financial year into four years of ' +
+    'cumulative figures. See figuresActuallyCover for the span these numbers really represent.'
+  );
+}
 
 /**
  * Tally's top-level groups carry the parent name "Primary". It is a sentinel
@@ -297,7 +328,7 @@ const TOLERANCE = '0.005';
  * to be said out loud rather than quietly picked between.
  *
  * Found live 2026-08-13 against real books: `trial_balance` reported Current
- * Assets as -385,764.46, while the closing balances `tally_get_ledgers` gives
+ * Assets as -385,764.46, while the closing balances `tally_get_masters type "ledger"` gives
  * for the same group summed to -482,384.46. The difference, 96,620.00, is
  * exactly the year's movement on `Stock In Hand` (opening -207,968, closing
  * -304,588). `balance_sheet` agreed with the masters to the cent on every
@@ -398,14 +429,14 @@ async function noteMastersDivergence(
 
       notes.push(
         `"${name}" is ${stated.toString()} on this trial balance, but the closing balances ` +
-          `tally_get_ledgers reports for the same group add up to ${masters.toString()} — a ` +
+          `tally_get_masters type "ledger" reports for the same group add up to ${masters.toString()} — a ` +
           `difference of ${difference.toString()}. ` +
           (culprit === undefined
             ? ''
             : `That is exactly the period movement on "${culprit.name}" (opening ` +
               `${culprit.openingBalance?.amount ?? 'unreported'}, closing ` +
               `${culprit.closingBalance?.amount ?? 'unreported'}), so TallyPrime's trial balance ` +
-              `carries that account at its OPENING value while tally_get_ledgers and ` +
+              `carries that account at its OPENING value while tally_get_masters type "ledger" and ` +
               `tally_get_statement (balance_sheet) carry its CLOSING value. `) +
           `Both figures are TallyPrime's own and neither has been adjusted here. State which ` +
           `basis you are quoting, and do not present the two as agreeing.`
@@ -419,17 +450,32 @@ async function noteMastersDivergence(
 }
 
 /**
- * The end of the loaded company's financial year, or null when it cannot be read.
+ * The date these reports accumulate TO when the requested end date is ignored,
+ * or null when it cannot be read.
+ *
+ * This is the end of the loaded company's own book year — twelve months anchored
+ * on the month and day its books begin, containing the last date it holds data
+ * for. Derived from the company's own `startingFrom` and `endingAt` rather than
+ * from an assumed 1 April, because Tally imposes no such year: verified live
+ * 2026-08-14 against a German company whose books run January to December, where
+ * assuming April produced an end date EARLIER than the start of the requested
+ * period and put that inverted range in a user-facing warning.
+ *
+ * `endingAt` anchors it rather than today's date. A company holding 2019 books
+ * does not become a 2026 company because someone opened it today, and the figure
+ * this feeds is a claim about what Tally actually returned.
  *
  * Never throws: this is a guard, and a guard that turns a working call into an
  * error because a metadata lookup failed is worse than the thing it guards
  * against. A null means "could not check", which is reported as such.
  */
-async function companyPeriodEnd(deps: ToolDeps): Promise<string | null> {
+async function companyAccumulationEnd(deps: ToolDeps): Promise<string | null> {
   try {
     const response = await deps.client.send(buildCompanyListRequest(), 'standard');
-    const start = normalizeCompanies(response.body).data[0]?.startingFrom ?? null;
-    return start === null ? null : financialYearFor(start).toDate;
+    const company = normalizeCompanies(response.body).data[0];
+    const start = company?.startingFrom ?? null;
+    if (start === null) return null;
+    return bookYearFor(start, company?.endingAt ?? todayIso()).toDate;
   } catch {
     return null;
   }
@@ -484,15 +530,19 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
     async (args) =>
       runTool('tally_get_statement', deps, async () => {
         const spec = STATEMENTS[args.statement];
-        const period = resolvePeriod(args.fromDate, args.toDate);
+        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
         const comparisonPeriod = resolveComparisonPeriod(args.compareFromDate, args.compareToDate);
-        await assertCompanyIsLoaded(deps, args.company);
+        // Tally's own spelling, not the caller's. Measured 14 Aug 2026: matching is
+        // case-insensitive and whitespace-tolerant, and an unmatched name returns an
+        // EMPTY report — so the point of canonicalising is a truthful company_id and
+        // rejecting an unknown name before it becomes a misleading empty answer.
+        const company = await assertCompanyIsLoaded(deps, args.company);
         const currencyWarnings: string[] = [];
-        const currency = await resolveCompanyCurrency(deps, args.company, currencyWarnings);
+        const currency = await resolveCompanyCurrency(deps, company, currencyWarnings);
 
         const fetchFor = async (range: { fromDate: string; toDate: string }) => {
           const request = spec.build({
-            ...(args.company === undefined ? {} : { company: args.company }),
+            ...(company === undefined ? {} : { company }),
             fromDate: range.fromDate,
             toDate: range.toDate,
             format: deps.config.tallyPreferredFormat,
@@ -504,24 +554,41 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
           return { rows: data, warnings: [...response.repairs, ...currencyWarnings, ...warnings] };
         };
 
-        // Checked before any comparison is attempted, because the failure mode
-        // is a fabricated movement rather than a visibly wrong figure.
-        const periodEnd = await companyPeriodEnd(deps);
-        const endDateBinds = periodEnd !== null && period.toDate === periodEnd;
+        // Whether Tally will honour each end date. This is a property of the
+        // DATE, not of the company — see statementEndDateIsIgnored above — so it
+        // is decided locally and costs nothing. The company lookup below is only
+        // needed to say what the figures cover when it does not bind.
+        const endDateBinds = endDateIsHonoured(period.toDate);
+        const comparisonEndBinds =
+          comparisonPeriod === undefined || endDateIsHonoured(comparisonPeriod.toDate);
 
-        if (comparisonPeriod !== undefined && !endDateBinds) {
+        // Checked before any comparison is attempted, because the failure mode
+        // is a fabricated movement rather than a visibly wrong figure. BOTH
+        // sides must bind: one honoured period minus one that silently ran to
+        // the year end is the same fabrication, half the time.
+        if (comparisonPeriod !== undefined && !(endDateBinds && comparisonEndBinds)) {
+          const offending = !endDateBinds ? period.toDate : comparisonPeriod.toDate;
+          const suggested = nearestBindingEndDate(offending);
           throw new TallyError(
             'TALLY_UNSUPPORTED_OPERATION',
-            `Period comparison cannot be answered for ${period.fromDate} to ${period.toDate}. ${STATEMENT_TO_DATE_IS_IGNORED} Both periods would therefore accumulate to the same year end, and subtracting them yields minus the whole of the earlier period rather than the movement between them — a wrong figure of plausible size.`,
+            `Period comparison cannot be answered: ${statementEndDateIsIgnored(offending)} That period would therefore run past the end date asked for, and subtracting two such periods yields minus the whole of the earlier one rather than the movement between them — a wrong figure of plausible size.`,
             {
               suggestion:
-                periodEnd === null
-                  ? "The loaded company's financial year end could not be read, so this cannot be checked. Fetch each period separately with tally_get_statement and compare only if you can establish what period Tally actually covered."
-                  : `Fetch each period separately and read the figures as accumulating to ${periodEnd}, or compare cumulative positions by calling this tool once per fromDate with toDate ${periodEnd}. Do not subtract two mid-year statements.`,
-              context: { requested: period, companyPeriodEnd: periodEnd },
+                suggested === null
+                  ? 'Move both end dates onto the 31st of a month — 31 January, 31 March, 31 May, 31 July, 31 August, 31 October or 31 December — and this comparison will be answered. For a period that genuinely ends mid-month, use tally_get_vouchers or tally_summarise_movements, whose date ranges are honoured to the day.'
+                  : `Use ${suggested} instead of ${offending} (and likewise for the other period, if it does not end on a 31st) and this comparison will be answered. For a period that genuinely must end on ${offending}, use tally_get_vouchers or tally_summarise_movements, whose date ranges are honoured to the day.`,
+              context: {
+                requested: period,
+                comparison: comparisonPeriod,
+                endDatesHonoured: { period: endDateBinds, comparison: comparisonEndBinds },
+              },
             }
           );
         }
+
+        // Only paid for when it is needed: the figures bound correctly, so there
+        // is nothing to explain and no reason to spend a request on the company.
+        const periodEnd = endDateBinds ? null : await companyAccumulationEnd(deps);
 
         const current = await fetchFor(period);
 
@@ -542,12 +609,15 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
         const periodWarnings = endDateBinds
           ? []
           : [
-              `${STATEMENT_TO_DATE_IS_IGNORED} These figures therefore cover ${period.fromDate} to ` +
-                `${periodEnd === null ? "the end of the company's financial year" : periodEnd}, NOT ` +
+              `${statementEndDateIsIgnored(period.toDate)} These figures therefore cover ` +
+                `${period.fromDate} to ` +
+                `${periodEnd === null ? "the end of the company's own book year" : periodEnd}, NOT ` +
                 `${period.toDate} as requested. Quote them as a cumulative position from ` +
                 `${period.fromDate}, and do NOT describe them as the figures for the requested ` +
-                'period. To ask about a shorter span, use tally_get_vouchers, whose date range ' +
-                'TallyPrime does honour.',
+                'period. ' +
+                (nearestBindingEndDate(period.toDate) === null
+                  ? 'To bound the period, move the end date to the 31st of a month, or use tally_get_vouchers, whose date range TallyPrime honours to the day.'
+                  : `To get a period that really ends where you asked, retry with toDate ${nearestBindingEndDate(period.toDate) ?? ''}, or use tally_get_vouchers, whose date range TallyPrime honours to the day.`),
             ];
 
         if (comparisonPeriod === undefined) {
