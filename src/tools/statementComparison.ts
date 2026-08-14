@@ -238,3 +238,136 @@ export function compareStatements(
 
   return { changes, unpaired, warnings };
 }
+
+// ---------------------------------------------------------------------------
+// Trend: the same statement across N periods
+// ---------------------------------------------------------------------------
+
+/**
+ * A trend is the two-period comparison generalised, and it keeps both of that
+ * comparison's rules for the same reasons.
+ *
+ * **Rows pair by name, and an ambiguous name is not paired.** A name appearing
+ * twice in ANY period disqualifies that row across the whole series — not just
+ * in the period where it repeated. Pairing it elsewhere and dropping it in one
+ * place would produce a series with a hole that looks like an absence of data
+ * rather than an absence of certainty.
+ *
+ * **A row missing from a period is null, never zero.** This matters more in a
+ * trend than in a comparison, because a series is normally read as a shape:
+ * five figures and a zero reads as "it fell to nothing", when what happened is
+ * that Tally did not report the row at all. Which periods a row was actually
+ * present in is returned alongside the series, so the shape can be read
+ * correctly.
+ */
+export interface TrendRow {
+  key: string;
+  /**
+   * One value per period, in the order the periods were given. `null` means the
+   * row was absent from that period, or present with no figure in that column.
+   */
+  figures: Record<string, (Money | null)[]>;
+  /**
+   * Movement between consecutive periods: index `i` is period `i+1` minus
+   * period `i`, so a series of N periods has N−1 movements. Computed only
+   * where both sides are present, exactly as in the two-period comparison.
+   */
+  movements: Record<string, FigureChange[]>;
+  /** Indices of the periods this row actually appeared in. */
+  presentIn: number[];
+}
+
+export interface StatementTrend {
+  rows: TrendRow[];
+  /** Names that could not be tracked, with the reason. */
+  unpaired: {
+    /** Appeared more than once in at least one period, so pairing is unsafe. */
+    ambiguous: string[];
+  };
+  warnings: string[];
+}
+
+/**
+ * Track every row of one statement across N periods.
+ *
+ * The periods are NOT sorted here. They are returned in the order given,
+ * because "compare Q4 against Q1" is a legitimate question and silently
+ * reordering the caller's periods would relabel every movement.
+ */
+export function buildTrend(
+  periodRows: readonly (readonly unknown[])[],
+  adapter: ComparisonAdapter
+): StatementTrend {
+  const indexes = periodRows.map((rows) => indexByKey(rows, adapter));
+
+  // A key is ambiguous if ANY period reported it more than once.
+  const ambiguous = new Set<string>();
+  const displayNames = new Map<string, string>();
+  for (const index of indexes) {
+    for (const [lowered, entries] of index) {
+      const first = entries[0];
+      if (first === undefined) continue;
+      // First spelling wins, so the series is labelled consistently even where
+      // capitalisation differs between periods.
+      if (!displayNames.has(lowered)) displayNames.set(lowered, first.key);
+      if (entries.length > 1) ambiguous.add(lowered);
+    }
+  }
+
+  const rows: TrendRow[] = [];
+  for (const [lowered, displayName] of displayNames) {
+    if (ambiguous.has(lowered)) continue;
+
+    const presentIn: number[] = [];
+    const perPeriod: (RowFigures | null)[] = indexes.map((index, position) => {
+      const entry = index.get(lowered)?.[0];
+      if (entry === undefined) return null;
+      presentIn.push(position);
+      return adapter.figuresOf(entry.row);
+    });
+
+    // The union of column names, because a statement can report a column in one
+    // period and omit it in another. Restricting to the first period's columns
+    // would silently drop a figure that exists.
+    const columns = new Set<string>();
+    for (const figures of perPeriod) {
+      if (figures !== null) for (const column of Object.keys(figures)) columns.add(column);
+    }
+
+    const figures: Record<string, (Money | null)[]> = {};
+    const movements: Record<string, FigureChange[]> = {};
+    for (const column of columns) {
+      const series = perPeriod.map((row) => row?.[column] ?? null);
+      figures[column] = series;
+      movements[column] = series
+        .slice(1)
+        .map((value, position) => subtract(value, series[position] ?? null));
+    }
+
+    rows.push({ key: displayName, figures, movements, presentIn });
+  }
+
+  const warnings: string[] = [];
+  if (ambiguous.size > 0) {
+    warnings.push(
+      `${String(ambiguous.size)} row name(s) appeared more than once in at least one period, so ` +
+        'they are not tracked across the series: ' +
+        [...ambiguous].map((key) => `"${displayNames.get(key) ?? key}"`).join(', ') +
+        '. TallyPrime statements carry headings and subtotals as ordinary rows, so a repeated ' +
+        'name is not unusual — but tracking one would risk reporting one account movement under ' +
+        "another account's name. Read those rows from each period's own figures instead."
+    );
+  }
+
+  const partial = rows.filter((row) => row.presentIn.length < periodRows.length);
+  if (partial.length > 0) {
+    warnings.push(
+      `${String(partial.length)} row(s) are absent from at least one period. Their value for ` +
+        'those periods is null, meaning TallyPrime did not report the row — NOT that the figure ' +
+        'was zero. A series read as a shape will otherwise look like a fall to nothing. See ' +
+        '`presentIn` on each row for which periods it actually appeared in.'
+    );
+  }
+
+  return { rows, unpaired: { ambiguous: [...ambiguous] }, warnings };
+}

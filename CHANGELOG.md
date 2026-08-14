@@ -108,6 +108,32 @@ properly again.
 **If you have been working with one company open, nothing you have been told was
 affected.** With one company there was nothing to confuse it with.
 
+**New: see a statement across several periods at once.**
+
+Ask for a trial balance, balance sheet or P&L over up to twelve periods and every
+line is tracked through the series, with the movement from one period to the next.
+Previously this was one call per period and the arithmetic by hand.
+
+Two things it deliberately will not do:
+
+- **A row missing from a period comes back empty, not zero.** This matters more
+  here than anywhere else, because a row of figures gets read as a shape — and a
+  blank read as zero looks like something fell to nothing, when TallyPrime simply
+  did not report that line. Each row says which periods it actually appeared in.
+- **If any period ends on a date TallyPrime will not honour, the whole trend is
+  refused** rather than answered. Tally only respects a statement end date that
+  falls on the 31st of a month. For a single statement we answer anyway and say
+  loudly what the figures really cover — but in a trend every period would quietly
+  run to the same endpoint, so the "movements" would be differences between
+  overlapping totals rather than real period-to-period change. That is a wrong
+  number of entirely believable size, in the output most likely to be quoted
+  without its footnotes. The error names each offending date and the nearest one
+  that works.
+
+Verified against real books: three periods on the US company returned 172,702.50,
+211,852.50 and 417,952.50 — genuinely different figures, not the same total three
+times.
+
 **Fewer tools, and they answer more.**
 
 Four separate tools for looking up ledgers, account groups, voucher types and stock

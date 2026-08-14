@@ -35,6 +35,7 @@ import {
   runTool,
   whole,
   type ToolDeps,
+  type ToolBodyResult,
 } from './toolResult.js';
 import {
   bookYearFor,
@@ -42,9 +43,11 @@ import {
   nearestBindingEndDate,
   todayIso,
   validateDateRange,
+  type DateRange,
 } from '../utils/dates.js';
 import { CASH_FLOW_SUMMARY, FUND_FLOW_SUMMARY } from './flowReports.js';
 import {
+  buildTrend,
   compareStatements,
   type ComparisonAdapter,
   type RowFigures,
@@ -104,6 +107,18 @@ const END_DATE_NOTE = [
 ].join('\n');
 
 const COMPARISON_NOTE = [
+  'A TREND ACROSS MANY PERIODS: pass `periods` — two to twelve {fromDate, toDate} pairs — and ' +
+    'every row is tracked through the series, with the movement between consecutive periods. ' +
+    'Periods stay in the order you give them and are NOT sorted. Rows pair by NAME and only when ' +
+    'unambiguous: a name appearing twice in any one period is excluded from the whole series ' +
+    'rather than tracked in some periods and not others. A row missing from a period is NULL, ' +
+    'never zero — read `presentIn` before treating a series as a shape, because a null read as ' +
+    'zero looks like a fall to nothing when TallyPrime simply did not report the row. EVERY ' +
+    'period end date must fall on a 31st, or the whole trend is refused; a single statement is ' +
+    'answered-with-caveats in that case, but a trend is not, because every period would ' +
+    'accumulate to the same endpoint and the movements would be differences between overlapping ' +
+    'accumulations rather than period-to-period change.',
+  '',
   'COMPARING TWO PERIODS: pass compareFromDate and compareToDate to fetch the statement twice in ' +
     'one call. Never defaulted — supply both or neither.',
   '',
@@ -512,6 +527,120 @@ function resolveComparisonPeriod(
   return validateDateRange(compareFromDate, compareToDate);
 }
 
+/**
+ * Run one statement across several periods.
+ *
+ * ## Why every period end date must fall on a 31st
+ *
+ * TallyPrime honours a statement's end date ONLY when it lands on the 31st of a
+ * month, and ignores it on every other day — including real month ends such as
+ * 30 November. When ignored, the figures accumulate from the start date to the
+ * end of the last book year the company holds. Measured live: on a company whose
+ * books run 2021-04-01 to 2026-07-28, every request from any start date ran to
+ * 2027-03-31.
+ *
+ * A single statement can still be answered under that condition, loudly
+ * annotated, because the figures are real and merely cover a different span. A
+ * TREND cannot. Every period would silently share the same endpoint, so the
+ * series would be a run of cumulative positions that differ only by their start
+ * date — and the movements between them would be differences between two
+ * overlapping accumulations rather than the change from one period to the next.
+ * That is a wrong figure of entirely plausible size, in the output most likely
+ * to be read as a shape and quoted without its caveats.
+ *
+ * So this refuses, names every offending period, and suggests the nearest date
+ * that does bind. Consistent with the two-period comparison, which refuses for
+ * the same reason.
+ */
+async function runTrend(
+  deps: ToolDeps,
+  statement: StatementKey,
+  periods: readonly { fromDate: string; toDate: string }[],
+  companyArg: string | undefined
+): Promise<ToolBodyResult> {
+  const spec = STATEMENTS[statement];
+
+  // Validated before anything is fetched: a trend is N report-class requests,
+  // and rejecting bad input must never cost them.
+  const ranges = periods.map((range) => validateDateRange(range.fromDate, range.toDate));
+
+  const offending = ranges.filter((range) => !endDateIsHonoured(range.toDate));
+  if (offending.length > 0) {
+    const suggestions = offending
+      .map((range) => {
+        const nearest = nearestBindingEndDate(range.toDate);
+        return nearest === null ? `${range.toDate} (no nearby 31st)` : `${range.toDate} → ${nearest}`;
+      })
+      .join('; ');
+
+    throw new TallyError(
+      'TALLY_UNSUPPORTED_OPERATION',
+      `A trend cannot be answered: ${String(offending.length)} of the ${String(ranges.length)} ` +
+        `periods end on a date TallyPrime will not honour. ${statementEndDateIsIgnored(offending[0]?.toDate ?? '')} ` +
+        'Every period would therefore accumulate to the same endpoint, so the series would show ' +
+        'cumulative positions differing only by start date, and the movements between them would ' +
+        'be differences between overlapping accumulations rather than period-to-period change.',
+      {
+        suggestion:
+          `Move each end date onto the 31st of a month — ${suggestions}. Only 31 January, 31 ` +
+          'March, 31 May, 31 July, 31 August, 31 October and 31 December bind. For periods that ' +
+          'genuinely end mid-month, use tally_summarise_movements with groupBy "month", whose ' +
+          'date ranges TallyPrime honours to the day.',
+        context: { periods: ranges },
+      }
+    );
+  }
+
+  const company = await assertCompanyIsLoaded(deps, companyArg);
+  const currencyWarnings: string[] = [];
+  const currency = await resolveCompanyCurrency(deps, company, currencyWarnings);
+
+  // Sequential, not parallel: Tally serves one request at a time and the client
+  // queue would serialise these anyway. Awaiting in order keeps a failure
+  // attributable to the period that caused it.
+  const fetched: { period: DateRange; rows: unknown[]; warnings: string[] }[] = [];
+  for (const range of ranges) {
+    const response = await deps.client.send(
+      spec.build({
+        ...(company === undefined ? {} : { company }),
+        fromDate: range.fromDate,
+        toDate: range.toDate,
+        format: deps.config.tallyPreferredFormat,
+      }),
+      'report'
+    );
+    const { data, warnings } = spec.normalize(response.body, currency);
+    fetched.push({ period: range, rows: data, warnings: [...response.repairs, ...warnings] });
+  }
+
+  const trend = buildTrend(
+    fetched.map((entry) => entry.rows),
+    spec.compare
+  );
+
+  const warnings = [
+    ...currencyWarnings,
+    ...trend.warnings,
+    ...fetched.flatMap((entry) => entry.warnings),
+    'Movements are in TallyPrime own sign convention on both sides, so a movement is a change ' +
+      'in Tally encoding and NOT a plain-English increase: a debit balance growing larger becomes ' +
+      'more negative. Say which direction a figure moved in Tally terms rather than calling it a ' +
+      'rise or a fall.',
+  ];
+
+  return whole(
+    {
+      statement,
+      periods: ranges,
+      coversPeriodRequested: true,
+      ...(companyArg === undefined ? {} : { company: companyArg }),
+      trend: { rows: trend.rows, unpaired: trend.unpaired },
+      warnings,
+    },
+    trend.rows.length
+  );
+}
+
 export function registerReportTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     'tally_get_statement',
@@ -533,11 +662,47 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
           .describe(
             'End of the comparison period, ISO YYYY-MM-DD. Must be on or after compareFromDate.'
           ),
+        periods: z
+          .array(z.object({ fromDate: isoDateSchema, toDate: isoDateSchema }))
+          .min(2)
+          .max(12)
+          .optional()
+          .describe(
+            'Two to twelve periods to run this statement across, giving a TREND: each row tracked ' +
+              'through the series with the movement between consecutive periods. Use instead of ' +
+              'fromDate/toDate/compareFromDate/compareToDate, not alongside them. Periods are kept ' +
+              'in the order you give them and are NOT sorted, because "Q4 against Q1" is a real ' +
+              'question and reordering would relabel every movement. EVERY period end date must ' +
+              'fall on the 31st of a month — see the end-date rule in this description; a period ' +
+              'ending otherwise is refused rather than answered with figures that run past it.'
+          ),
       }),
     },
     async (args) =>
       runTool('tally_get_statement', deps, async () => {
         const spec = STATEMENTS[args.statement];
+
+        if (args.periods !== undefined) {
+          if (
+            args.fromDate !== undefined ||
+            args.toDate !== undefined ||
+            args.compareFromDate !== undefined ||
+            args.compareToDate !== undefined
+          ) {
+            throw new TallyError(
+              'INVALID_PARAMETERS',
+              'Give either `periods` or the fromDate/toDate/compare* parameters, not both.',
+              {
+                suggestion:
+                  'A trend already carries every period it covers, so a separate period would ' +
+                  'either duplicate one of them or add a period the trend does not describe. ' +
+                  'Drop whichever you did not mean.',
+              }
+            );
+          }
+          return runTrend(deps, args.statement, args.periods, args.company);
+        }
+
         const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
         const comparisonPeriod = resolveComparisonPeriod(args.compareFromDate, args.compareToDate);
         // Tally's own spelling, not the caller's. Measured 14 Aug 2026: matching is
