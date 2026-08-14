@@ -186,7 +186,7 @@ async function soleLoadedCompany(deps: ToolDeps): Promise<Company | null> {
 }
 
 /** The company record a name refers to, or null. Never guesses. */
-async function companyNamed(deps: ToolDeps, name: string | undefined): Promise<Company | null> {
+export async function companyNamed(deps: ToolDeps, name: string | undefined): Promise<Company | null> {
   const response = await deps.client.send(buildCompanyListRequest(), 'standard');
   const companies = normalizeCompanies(response.body).data;
   if (name === undefined || name === '') {

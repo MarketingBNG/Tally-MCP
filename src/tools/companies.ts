@@ -134,10 +134,30 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
         const listResponse = await deps.client.send(buildCompanyListRequest(), 'standard');
         const companies = normalizeCompanies(listResponse.body).data;
 
+        // Never `companies[0]` on the unnamed path. This tool's whole output —
+        // ledger count, groups in use, which features the data shows — is a
+        // description OF a company, so handing back the first one in the list
+        // when several are open describes the wrong books under no name at all.
         const company =
           args.company === undefined
-            ? companies[0]
+            ? companies.length === 1
+              ? companies[0]
+              : undefined
             : companies.find((entry) => entry.name.toLowerCase() === args.company?.toLowerCase());
+
+        if (company === undefined && args.company === undefined && companies.length > 1) {
+          throw new TallyError(
+            'TALLY_COMPANY_NOT_LOADED',
+            `TallyPrime has ${String(companies.length)} companies loaded, so "which company?" has ` +
+              'no single answer.',
+            {
+              suggestion:
+                'Name one with the `company` parameter. Loaded: ' +
+                companies.map((entry) => `"${entry.name}"`).join(', ') +
+                '.',
+            }
+          );
+        }
 
         if (company === undefined) {
           const loaded = companies.map((entry) => entry.name);

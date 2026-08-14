@@ -82,6 +82,32 @@ restarts while testing. Nothing was damaged and no books were altered, but if
 TallyPrime ever seems to hang while you are asking questions, **look at the Tally
 window for a dialog** before restarting anything.
 
+**Fixed: with more than one company open, figures could be labelled with the
+wrong company's name.**
+
+The most important fix in this release, and it only becomes possible when you have
+a second company open in TallyPrime.
+
+Asking about one company would fetch that company's figures correctly — and then
+label them with a different company's name. On the install this was found on,
+AgEx Pharma's accounts came back headed "AGBV Nutrition GmbH". The numbers were
+right and the name on them was wrong, and nothing flagged it.
+
+The same mistake was in four places: the company name on every answer, the
+currency label, the period used when you don't give dates, and the "which company
+is this?" description. All four assumed TallyPrime only ever has one company open,
+so they simply took the first one in the list. That is true for most installs and
+was true for every test we had — which is exactly why it survived.
+
+Now the company is taken from the request that was actually sent to Tally. If
+several companies are open and you did not say which one you meant, the answer
+says **so** — the company reads "not determined" and figures are not given a
+currency — rather than guessing. Name the company and everything is labelled
+properly again.
+
+**If you have been working with one company open, nothing you have been told was
+affected.** With one company there was nothing to confuse it with.
+
 **Fewer tools, and they answer more.**
 
 Four separate tools for looking up ledgers, account groups, voucher types and stock

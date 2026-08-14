@@ -12,9 +12,7 @@ import { DEFAULT_CURRENCY, type Money } from '../utils/numbers.js';
 import { bookYearFor } from '../utils/dates.js';
 import { adaptAccounts, adaptVouchers } from '../model/fromTally.js';
 import type { Account, SignedAmount, Voucher } from '../model/ledger.js';
-import { buildCompanyListRequest } from '../tally/requests.js';
-import { normalizeCompanies } from '../tally/normalize.js';
-import { resolvePeriod, runTool, whole, type ToolDeps } from './toolResult.js';
+import { companyNamed, resolvePeriod, runTool, whole, type ToolDeps } from './toolResult.js';
 import { fetchLedgers } from './ledgers.js';
 import { fetchGroups } from './groups.js';
 import { fetchVouchers } from './vouchers.js';
@@ -351,11 +349,26 @@ export function registerTieOutTools(server: McpServer, deps: ToolDeps): void {
         const periodNotes: string[] = [];
 
         if (!explicitDates) {
-          const response = await deps.client.send(buildCompanyListRequest(), 'standard');
-          const company = normalizeCompanies(response.body).data[0];
-          const startingFrom = company?.startingFrom ?? null;
+          // By name where one was given. With several companies loaded and none
+          // named, this resolves to null and the note below fires — which is
+          // right: their book years differ, so picking the first company's year
+          // would check a period the company never closed against.
+          const company = await companyNamed(deps, args.company);
+          const startingFrom = company === null ? null : company.startingFrom;
 
-          if (startingFrom === null) {
+          if (company === null) {
+            // Several companies loaded and none named. Their book years differ
+            // — a German calendar year against two April years, live — so
+            // there is no "the company's year" to default to, and picking one
+            // would check a period that company never closed against.
+            periodNotes.push(
+              'No dates were given and TallyPrime has more than one company loaded, so whose book ' +
+                'year to use could not be determined. The period defaults to the financial year ' +
+                'containing today, which may not be any of their years — name a company to check ' +
+                'against its own. The roll-forward below will report differences that are not ' +
+                'errors if the period is wrong.'
+            );
+          } else if (startingFrom === null) {
             periodNotes.push(
               'TallyPrime did not report when this company books begin, so the period defaults to the financial year containing today. If that is not the company own year, the roll-forward check below will report differences that are not errors.'
             );
@@ -365,7 +378,7 @@ export function registerTieOutTools(server: McpServer, deps: ToolDeps): void {
             // assuming April would pick a window that need not even contain the
             // company's own data, and this tool's entire value rests on the
             // period being the one Tally closed against.
-            period = bookYearFor(startingFrom, company?.endingAt ?? startingFrom);
+            period = bookYearFor(startingFrom, company.endingAt ?? startingFrom);
             periodNotes.push(
               `No dates were given, so this checked ${period.fromDate} to ${period.toDate} — the company's own book year, twelve months from the date its books begin.`
             );

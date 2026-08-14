@@ -4,7 +4,6 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import {
   buildBalanceSheetRequest,
   buildCashFlowRequest,
-  buildCompanyListRequest,
   buildFundsFlowRequest,
   buildProfitLossRequest,
   buildTrialBalanceRequest,
@@ -12,7 +11,6 @@ import {
 } from '../tally/requests.js';
 import {
   normalizeBalanceSheet,
-  normalizeCompanies,
   normalizeMonthlyFlow,
   normalizeProfitLoss,
   normalizeTrialBalance,
@@ -32,6 +30,7 @@ import {
 import {
   assertCompanyIsLoaded,
   resolveCompanyCurrency,
+  companyNamed,
   resolvePeriodForCompany,
   runTool,
   whole,
@@ -469,13 +468,22 @@ async function noteMastersDivergence(
  * error because a metadata lookup failed is worse than the thing it guards
  * against. A null means "could not check", which is reported as such.
  */
-async function companyAccumulationEnd(deps: ToolDeps): Promise<string | null> {
+async function companyAccumulationEnd(
+  deps: ToolDeps,
+  /**
+   * Which company's endpoint. Required in practice with several loaded: this
+   * feeds a WARNING about how far the figures really run, and quoting one
+   * company's endpoint against another's statement would make the correction
+   * itself wrong.
+   */
+  company?: string
+): Promise<string | null> {
   try {
-    const response = await deps.client.send(buildCompanyListRequest(), 'standard');
-    const company = normalizeCompanies(response.body).data[0];
-    const start = company?.startingFrom ?? null;
+    const record = await companyNamed(deps, company);
+    if (record === null) return null;
+    const start = record.startingFrom ?? null;
     if (start === null) return null;
-    return bookYearFor(start, company?.endingAt ?? todayIso()).toDate;
+    return bookYearFor(start, record.endingAt ?? todayIso()).toDate;
   } catch {
     return null;
   }
@@ -588,7 +596,7 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
 
         // Only paid for when it is needed: the figures bound correctly, so there
         // is nothing to explain and no reason to spend a request on the company.
-        const periodEnd = endDateBinds ? null : await companyAccumulationEnd(deps);
+        const periodEnd = endDateBinds ? null : await companyAccumulationEnd(deps, args.company);
 
         const current = await fetchFor(period);
 

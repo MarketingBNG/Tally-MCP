@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import {
   MockTallyServer,
   callToolEnvelope,
+  callToolError,
   createToolRegistry,
   fixture,
   makeDeps,
@@ -9,6 +10,8 @@ import {
 } from './harness.js';
 import { registerReportTools } from '../../src/tools/reports.js';
 import { registerGenericReportTools } from '../../src/tools/genericReport.js';
+import { registerCompanyTools } from '../../src/tools/companies.js';
+import { registerTieOutTools } from '../../src/tools/tieOut.js';
 
 /**
  * Which company do the figures actually belong to?
@@ -81,6 +84,8 @@ function build(): ToolRegistry {
   const deps = makeDeps(port);
   registerReportTools(registry.server, deps);
   registerGenericReportTools(registry.server, deps);
+  registerCompanyTools(registry.server, deps);
+  registerTieOutTools(registry.server, deps);
   return registry;
 }
 
@@ -219,5 +224,67 @@ describe('currency is never taken from the wrong company', () => {
 
     const rows = (envelope.data as { rows: { debit: { currency: string } | null }[] }).rows;
     expect(rows[0]?.debit?.currency).toBe('$');
+  });
+});
+
+describe('the same assumption, swept out of three more places', () => {
+  // Found by grepping for `data[0]` after the envelope bug. Each of these read
+  // "the first company in the list" while meaning "the company being asked
+  // about" — invisible with one company loaded, wrong with three.
+
+  it('tally_get_company refuses to profile a company nobody named', async () => {
+    // It used to describe whichever sorted first: ledger count, groups in use,
+    // features — a full description of the WRONG books, under no name at all.
+    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+
+    const error = await callToolError(build(), 'tally_get_company');
+
+    expect(error.code).toBe('TALLY_COMPANY_NOT_LOADED');
+    expect(error.message).toContain('3 companies loaded');
+    // The fix is only useful if it says which ones can be named.
+    expect(error.suggestion).toContain('AgEx Pharma LLC');
+    expect(error.suggestion).toContain('MUDALS TECHNOLOGIES PRIVATE LIMITED');
+  });
+
+  it('tally_get_company still answers with no argument when one is loaded', async () => {
+    mock.onBodyContaining('List of Companies', { body: ONE_COMPANY });
+    mock.onBodyContaining('<FETCH>*</FETCH>', { body: fixture('ledger-list-allfields.xml') });
+
+    const envelope = await callToolEnvelope(build(), 'tally_get_company');
+    expect(envelope.company_id).toBe('AgEx Pharma LLC');
+  });
+
+  it('the accumulation-endpoint warning quotes the right company book end', async () => {
+    // This feeds the caveat saying how far figures REALLY run when Tally
+    // ignores the end date. AGBV's books end 2026-07-31 and AgEx's 2026-03-31,
+    // so quoting the wrong one makes the correction itself wrong.
+    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+
+    const envelope = await callToolEnvelope(build(), 'tally_get_statement', {
+      statement: 'trial_balance',
+      company: 'AgEx Pharma LLC',
+      fromDate: '2025-04-01',
+      // Deliberately not a 31st, so the non-binding path runs.
+      toDate: '2026-06-30',
+    });
+
+    const warnings = JSON.stringify(envelope.data);
+    expect(warnings).not.toContain('2026-07-31');
+  });
+
+  it('tie-out says whose year it could not determine, instead of picking one', async () => {
+    // The three run a German calendar year and two April years. Defaulting to
+    // the first would check a period that company never closed against, and
+    // every roll-forward difference would then be an artefact.
+    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list.xml') });
+    mock.onBodyContaining('<ID>Groups</ID>', {
+      body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',
+    });
+    mock.onBodyContaining('<TYPE>Voucher</TYPE>', { body: fixture('day-book.xml') });
+
+    const envelope = await callToolEnvelope(build(), 'tally_check_tie_out');
+    const text = JSON.stringify(envelope.data);
+    expect(text).toContain('more than one company loaded');
   });
 });
