@@ -296,8 +296,21 @@ export interface StatementTrend {
  */
 export function buildTrend(
   periodRows: readonly (readonly unknown[])[],
-  adapter: ComparisonAdapter
+  adapter: ComparisonAdapter,
+  options: {
+    /**
+     * Whether subtracting one column from the next is meaningful.
+     *
+     * False for a multi-COMPANY view. The pairing is still wanted — showing
+     * Sales for three companies side by side is the whole point — but
+     * subtracting a dollar figure from a rupee one produces a number with no
+     * meaning at all, and one that looks exactly like a real movement. So the
+     * movements are omitted rather than computed and captioned.
+     */
+    movements?: boolean;
+  } = {}
 ): StatementTrend {
+  const wantMovements = options.movements !== false;
   const indexes = periodRows.map((rows) => indexByKey(rows, adapter));
 
   // A key is ambiguous if ANY period reported it more than once.
@@ -339,9 +352,11 @@ export function buildTrend(
     for (const column of columns) {
       const series = perPeriod.map((row) => row?.[column] ?? null);
       figures[column] = series;
-      movements[column] = series
-        .slice(1)
-        .map((value, position) => subtract(value, series[position] ?? null));
+      if (wantMovements) {
+        movements[column] = series
+          .slice(1)
+          .map((value, position) => subtract(value, series[position] ?? null));
+      }
     }
 
     rows.push({ key: displayName, figures, movements, presentIn });

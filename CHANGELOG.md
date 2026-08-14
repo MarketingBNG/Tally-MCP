@@ -108,6 +108,30 @@ properly again.
 **If you have been working with one company open, nothing you have been told was
 affected.** With one company there was nothing to confuse it with.
 
+**New: compare several companies side by side.**
+
+Give `companies` a list and the same statement is read for each of them, with the
+rows lined up. TallyPrime holds several companies open at once, so this reads each
+in turn.
+
+Three rules it will not bend:
+
+- **It asks you for the dates.** Your companies keep different financial years —
+  the German books run January to December and the other two April to March — so
+  there is no shared "this year" to fall back on, and picking one of them would
+  quietly put different months next to each other under one heading.
+- **It does not subtract across currencies.** Where the companies report in
+  different currencies the columns are shown but nothing is compared, because a
+  dollar figure minus a rupee one looks like a real difference and means nothing.
+  Nothing here ever converts between currencies.
+- **A row missing for one company is blank, not zero** — same rule as the trend.
+
+And where the currencies do match and differences ARE shown, it still says they
+are differences between separate businesses, not a change over time.
+
+Verified against your three companies: capital of 47,088.23, 4,844.93 and
+1,161,289.87 — three genuinely different sets of books, not one repeated.
+
 **New: see a statement across several periods at once.**
 
 Ask for a trial balance, balance sheet or P&L over up to twelve periods and every

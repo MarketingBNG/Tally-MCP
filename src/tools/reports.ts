@@ -107,6 +107,15 @@ const END_DATE_NOTE = [
 ].join('\n');
 
 const COMPARISON_NOTE = [
+  'SEVERAL COMPANIES SIDE BY SIDE: pass `companies` — two to ten names, all already OPEN in ' +
+    'TallyPrime, which holds several at once. Each is read in turn and the rows are paired by ' +
+    'name. Requires explicit fromDate and toDate, because the companies keep DIFFERENT BOOK ' +
+    'YEARS and a defaulted period would compare different months under one heading. Differences ' +
+    'between companies are computed ONLY where every company reports the same currency; where ' +
+    'they do not, the columns are still shown but nothing is subtracted, because a dollar figure ' +
+    'minus a rupee one looks like a movement and means nothing. Nothing here converts between ' +
+    'currencies, ever. Read the columns; do not total the row.',
+  '',
   'A TREND ACROSS MANY PERIODS: pass `periods` — two to twelve {fromDate, toDate} pairs — and ' +
     'every row is tracked through the series, with the movement between consecutive periods. ' +
     'Periods stay in the order you give them and are NOT sorted. Rows pair by NAME and only when ' +
@@ -641,6 +650,164 @@ async function runTrend(
   );
 }
 
+/**
+ * Run one statement across several companies, side by side.
+ *
+ * ## The three things that make this different from a trend
+ *
+ * **The period cannot be defaulted.** Each company's default period is its own
+ * book year, and the three seen live run a German calendar year and two April
+ * years. Defaulting would compare different months under one heading, which is
+ * the kind of wrong that never announces itself. So explicit dates are required.
+ *
+ * **No differences are computed across currencies.** Of the companies observed
+ * live one reports `$` and two report a symbol TallyPrime could not transport at
+ * all. Subtracting one company's figure from another's would produce a number
+ * that looks exactly like a movement and means nothing. The rows are still
+ * paired — seeing Sales for three companies side by side is the point — but the
+ * subtraction is omitted, and the response says why.
+ *
+ * **Every company must be open in TallyPrime.** Each is checked against the
+ * loaded list BEFORE any figures are fetched, because an unmatched name returns
+ * an empty report rather than an error, and an empty column in a comparison
+ * reads as "this company had none of that".
+ */
+async function runMultiCompany(
+  deps: ToolDeps,
+  statement: StatementKey,
+  companies: readonly string[],
+  fromDate: string | undefined,
+  toDate: string | undefined
+): Promise<ToolBodyResult> {
+  const spec = STATEMENTS[statement];
+
+  if (fromDate === undefined || toDate === undefined) {
+    throw new TallyError(
+      'INVALID_DATE_RANGE',
+      'Comparing companies needs an explicit fromDate and toDate.',
+      {
+        suggestion:
+          'The companies keep different book years — a calendar year and an April year sit side ' +
+          'by side on a typical install — so there is no shared period to default to, and ' +
+          'picking one of their years would compare different months under one heading. Name ' +
+          'the period you want all of them read over.',
+      }
+    );
+  }
+
+  const period = validateDateRange(fromDate, toDate);
+
+  if (!endDateIsHonoured(period.toDate)) {
+    const nearest = nearestBindingEndDate(period.toDate);
+    throw new TallyError(
+      'TALLY_UNSUPPORTED_OPERATION',
+      `Companies cannot be compared over this period: ${statementEndDateIsIgnored(period.toDate)} ` +
+        'Each company would accumulate to the end of ITS OWN last book year, and those differ ' +
+        'between them — so the columns would cover different spans while appearing to cover one.',
+      {
+        suggestion:
+          nearest === null
+            ? 'Use an end date on the 31st of a month — 31 January, March, May, July, August, October or December.'
+            : `Use ${nearest} instead of ${period.toDate}.`,
+      }
+    );
+  }
+
+  // Duplicates would render one company twice and make any "the figures differ"
+  // check pass for the wrong reason.
+  const seen = new Set<string>();
+  for (const name of companies) {
+    const key = name.trim().toLowerCase();
+    if (seen.has(key)) {
+      throw new TallyError('INVALID_PARAMETERS', `Company "${name}" is listed more than once.`);
+    }
+    seen.add(key);
+  }
+
+  // Every name resolved BEFORE any figures are fetched: an unmatched name
+  // returns an empty report, and an empty column reads as "this company had
+  // none of that" rather than as a mistake.
+  const canonical: string[] = [];
+  for (const name of companies) {
+    const resolved = await assertCompanyIsLoaded(deps, name);
+    if (resolved === undefined) {
+      throw new TallyError('TALLY_COMPANY_NOT_LOADED', `Could not resolve the company "${name}".`);
+    }
+    canonical.push(resolved);
+  }
+
+  // Sequential: Tally serves one request at a time, and awaiting in order keeps
+  // a failure attributable to the company that caused it.
+  const fetched: { company: string; currency: string; rows: unknown[]; warnings: string[] }[] = [];
+  for (const company of canonical) {
+    const currencyWarnings: string[] = [];
+    const currency = await resolveCompanyCurrency(deps, company, currencyWarnings);
+    const response = await deps.client.send(
+      spec.build({
+        company,
+        fromDate: period.fromDate,
+        toDate: period.toDate,
+        format: deps.config.tallyPreferredFormat,
+      }),
+      'report'
+    );
+    const { data, warnings } = spec.normalize(response.body, currency);
+    fetched.push({
+      company,
+      currency,
+      rows: data,
+      warnings: [...response.repairs, ...currencyWarnings, ...warnings],
+    });
+  }
+
+  const currencies = new Set(fetched.map((entry) => entry.currency));
+  const oneCurrency = currencies.size === 1;
+
+  const paired = buildTrend(
+    fetched.map((entry) => entry.rows),
+    spec.compare,
+    { movements: oneCurrency }
+  );
+
+  const warnings = [
+    ...paired.warnings,
+    ...fetched.flatMap((entry) => entry.warnings),
+    `Columns are in the order the companies were given: ${canonical.join(', ')}. Each row's ` +
+      '`presentIn` indexes into that order, so a gap names a company rather than a position.',
+  ];
+
+  if (oneCurrency) {
+    warnings.push(
+      `All ${String(fetched.length)} companies report in ${[...currencies][0] ?? ''}, so ` +
+        'differences between adjacent columns are computed. They are still differences between ' +
+        'separate legal entities, not a movement over time — do not describe them as a change.'
+    );
+  } else {
+    warnings.push(
+      'NO DIFFERENCES BETWEEN COMPANIES ARE COMPUTED, because they do not share a currency — ' +
+        `these figures are in ${[...currencies].join(', ')}. Subtracting across them would ` +
+        'produce a number that looks like a movement and means nothing, and nothing here ' +
+        'converts between currencies. Compare them by reading the columns, not by taking ' +
+        'differences, and never total the row.'
+    );
+  }
+
+  return whole(
+    {
+      statement,
+      period,
+      companies: fetched.map((entry) => ({ company: entry.company, currency: entry.currency })),
+      comparison: {
+        rows: paired.rows,
+        unpaired: paired.unpaired,
+        differencesComputed: oneCurrency,
+      },
+      warnings,
+    },
+    paired.rows.length
+  );
+}
+
 export function registerReportTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     'tally_get_statement',
@@ -662,6 +829,20 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
           .describe(
             'End of the comparison period, ISO YYYY-MM-DD. Must be on or after compareFromDate.'
           ),
+        companies: z
+          .array(z.string().min(1))
+          .min(2)
+          .max(10)
+          .optional()
+          .describe(
+            'Two to ten companies to run this statement across, side by side. Every one must ' +
+              'already be OPEN in TallyPrime — Tally holds several at once and this reads each in ' +
+              'turn. Requires explicit fromDate and toDate: the companies keep different book ' +
+              'years, so a defaulted period would silently compare different months. NO ' +
+              'DIFFERENCES ARE COMPUTED between companies whose currencies differ, because ' +
+              'subtracting a dollar figure from a rupee one produces a number that looks like a ' +
+              'movement and means nothing.'
+          ),
         periods: z
           .array(z.object({ fromDate: isoDateSchema, toDate: isoDateSchema }))
           .min(2)
@@ -681,6 +862,22 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
     async (args) =>
       runTool('tally_get_statement', deps, async () => {
         const spec = STATEMENTS[args.statement];
+
+        if (args.companies !== undefined) {
+          if (args.periods !== undefined || args.company !== undefined) {
+            throw new TallyError(
+              'INVALID_PARAMETERS',
+              'Give `companies` on its own, not with `company` or `periods`.',
+              {
+                suggestion:
+                  'One statement, one period, several companies. A trend across several periods ' +
+                  'AND several companies is a grid rather than a statement — run one call per ' +
+                  'company if that is what you need, so each result says plainly what it covers.',
+              }
+            );
+          }
+          return runMultiCompany(deps, args.statement, args.companies, args.fromDate, args.toDate);
+        }
 
         if (args.periods !== undefined) {
           if (
