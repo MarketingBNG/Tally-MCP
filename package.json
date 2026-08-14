@@ -1,6 +1,6 @@
 {
   "name": "tally-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Read-only MCP server exposing TallyPrime accounting data to Claude Desktop",
   "license": "MIT",
   "type": "module",
@@ -29,12 +29,16 @@
     "mock-tally": "tsx mock-tally/server.ts",
     "probe:reports": "tsx scripts/probe-reports.ts",
     "probe:period": "tsx scripts/probe-statement-period.ts",
+    "probe:empty": "tsx scripts/probe-empty-reports.ts",
+    "probe:todate": "tsx scripts/probe-todate-binding.ts",
     "check:live": "node scripts/live-check.mjs",
+    "check:live4": "node scripts/live-check-v4.mjs",
     "check:build": "node installer/scripts/lib/buildFreshness.mjs",
     "verify": "npm run typecheck && npm run lint && npm test",
-    "preversion": "npm run verify",
+    "preversion": "npm run verify && npm run check:build",
     "version": "node scripts/stamp-changelog.mjs && git add CHANGELOG.md",
-    "postversion": "node -e \"console.log('\\nTagged v' + process.env.npm_package_version + '. Push it with:  git push --follow-tags\\nThen build a release with:  powershell -ExecutionPolicy Bypass -File installer\\\\package.ps1\\n')\""
+    "postversion": "node -e \"console.log('\\nTagged v' + process.env.npm_package_version + '. Push it with:  git push --follow-tags\\nThen build a release with:  powershell -ExecutionPolicy Bypass -File installer\\\\package.ps1\\n')\"",
+    "verify:ship": "npm run verify && npm run check:build"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",

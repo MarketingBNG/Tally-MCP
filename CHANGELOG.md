@@ -12,6 +12,239 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.3.1 — 2026-08-14
+**Read this first: three answers could be wrong, and one of them looked complete.**
+
+Testing against a live Indian company on 14 Aug 2026 found these. All are fixed.
+If you have quoted a figure from this connector, these are the ones worth re-running.
+
+- **Only the current financial year of transactions was ever readable, and nothing
+  said so.** Ask about last year and TallyPrime quietly hands back *this* year's
+  transactions instead. On the books tested — five years of them — a question about
+  2023-24 returned 285 transactions from 2026-27, and every "is this complete?"
+  signal on the answer said yes. Worse, once the dates were filtered the answer came
+  back **empty**, which reads as "there were no transactions that year" when the real
+  meaning is "that year could not be read". Those are opposite statements. The
+  connector now says plainly when the period it read is not the period you asked
+  for, and refuses to let an empty answer be described as "nothing happened".
+  The underlying limit is TallyPrime's and is not fixed yet — but it can no longer
+  be mistaken for an answer.
+- **A statement asked for one year could quietly cover four.** Where TallyPrime
+  ignores your end date, the figures run to the end of the *last* year your books
+  contain — not to the end of the year you asked about. On the company tested,
+  every request, from any start date, ran to 31 March 2027: a request for 2023-24
+  came back as four years of accumulated figures. The warning also stated the
+  period as ending *before* it began, which is nonsense on its face. Both fixed,
+  and the real end date is now named.
+- **Company names: a change we made, and a warning we have since withdrawn.**
+  The connector now sends the spelling TallyPrime itself uses, rather than yours,
+  and it checks the name against the loaded companies before asking anything.
+
+  An earlier draft of this entry said that asking for "acme ltd" could return
+  another company's figures under your spelling. **That was wrong, and it is
+  withdrawn.** Tested afterwards with three companies open at once, TallyPrime
+  matched the name whatever the capitalisation and ignored stray spaces and line
+  breaks; a name it did not recognise returned an *empty* report rather than
+  somebody else's numbers. No figure you have been given was mis-attributed, and
+  there is nothing here you need to re-run.
+
+  The change is still worth having, for a smaller and real reason: a name
+  TallyPrime does not recognise comes back **empty**, and an empty answer reads as
+  "this company has nothing to report" — so the name is now rejected outright
+  instead of quietly producing a blank.
+- **A default period could belong to no year of your books.** With no dates given,
+  the connector assumed an Indian April-to-March year. A company on a
+  January-to-December year — most books outside India, including the US company
+  this was first built against — got a window straddling two of its own years, so
+  every total silently mixed half of one year with half of the next. The period now
+  comes from your own book dates.
+- **Stock movements counted things that never moved.** Sales and purchase *orders*
+  carry stock lines for goods still sitting where they were, and cancelled entries
+  were not excluded at all. Both are now left out, and the count of each is
+  reported rather than silently dropped. Delivery and receipt notes *are* kept —
+  the goods did move — but you are now told when they are present, because the
+  invoice raised against a note covers the same goods and a period holding both
+  shows the quantity twice. Whether to net those off is your judgement, not ours.
+- **"Is Tally responding?" could answer yes while Tally was answering nothing.**
+  The check was cheap enough to be served from memory, so it reported success for
+  up to five minutes after TallyPrime had stopped replying. It now always asks
+  TallyPrime itself.
+- Smaller one: where the connector counts how many different values a field takes,
+  it stops counting at 25 for speed. It was reporting that as though it were the
+  real total — so a field with 330 different values was described as having 25. It
+  now says "at least 25".
+
+**One thing we learned the hard way, recorded so it does not happen to you.**
+A malformed request does not close TallyPrime — it puts a **"incorrect object
+type"** dialog on screen, and until somebody clicks it, TallyPrime accepts
+connections and answers nothing at all. It looks running and is not. This cost two
+restarts while testing. Nothing was damaged and no books were altered, but if
+TallyPrime ever seems to hang while you are asking questions, **look at the Tally
+window for a dialog** before restarting anything.
+
+**Fewer tools, and they answer more.**
+
+Four separate tools for looking up ledgers, account groups, voucher types and stock
+items are now one — `tally_get_masters`, with a `type` to say which you want. They
+always took the same options and worked the same way, so having four of them cost
+Claude attention for nothing. Nothing was dropped: every caution the four
+descriptions carried is still there, including the two that matter most — that a
+negative ledger balance means a *debit* balance, and that a repeated voucher number
+is only worth a second look if that voucher type was set to prevent duplicates in
+the first place.
+
+**New: the audit tests an accountant would actually run.**
+
+One tool, `tally_test_vouchers`, picks the transactions you want and then runs one
+of eight procedures over them:
+
+- **Journal screening** — manual journals that are large, exactly round, carry no
+  narration, or are dated a weekend. Journals are what somebody typed by hand
+  rather than what a process produced, which is why they are the first place to
+  look.
+- **Benford's Law** — whether the leading digits of your amounts fall the way real
+  amounts usually do.
+- **Sampling** — a sample you can draw again. It hands back the seed, so the same
+  sample can be reproduced for a file months later.
+- **Duplicates** — same party, same amount, same day.
+- **Round numbers**, **cut-off** (entries near the start or end of the period), and
+  **weekend-dated** entries.
+- **Related parties** — and TallyPrime turns out to have its own related-party
+  marking, which we had previously concluded it did not. It is now read and used as
+  a starting point, with your own list added on top.
+
+**Every one of these produces things to look at, not things that are wrong.** A
+round number is usually rent. A weekend date is usually nothing. The tool says so on
+every single answer rather than once in the small print, because that sentence is
+the one most likely to get dropped when an answer is summarised. It also tells you
+how many transactions it examined and what it left out — orders and cancelled
+entries never belong in these tests, and a test run over the wrong set of
+transactions gives a confident answer to a question nobody asked.
+
+Two limits stated plainly in the output, because both are easy to miss:
+- The **weekend** test reads the date *on* the voucher, not the date it was typed
+  in. An entry dated Sunday but keyed in on Monday is unremarkable. The real
+  "posted out of hours" test needs TallyPrime's Edit Log, which this connector
+  cannot yet read.
+- **Journals are found by their type name containing "journal"**, because
+  TallyPrime has no "this is a manual journal" flag. A company calling its
+  adjustment type something else is not covered — so an empty result is a fact
+  about the type names, not about the company.
+
+**New: TallyPrime's own exception reports.**
+
+`tally_get_report` opens up nine built-in views, including **Negative Ledgers** —
+negative cash is impossible in real life, so it is one of the classic first checks.
+The list is closed on purpose: every report on it was tried against a real
+TallyPrime. Four of them were accepted by Tally but had nothing to show on the
+company we tested, so their layout has never actually been seen, and those say so
+every time they are used.
+
+The columns come back under TallyPrime's own names rather than being relabelled
+"debit" and "credit". That is deliberate: guessing which column is which would give
+you a figure that is right in value and wrong in meaning, which is far harder to
+notice than an obvious error.
+
+**New: Schedule III ageing, and genuinely overdue balances.**
+
+Receivables and payables can now be aged into the **Schedule III** disclosure
+periods — under 6 months, 6 months to a year, 1-2 years, 2-3 years, over 3 years —
+worked out as real calendar months rather than a fixed number of days, so a bill
+sitting a few days either side of the six-month mark lands in the right bucket of
+the published note.
+
+It is half of the note, and it says so. Schedule III also wants each bucket split
+into disputed and undisputed, and good and doubtful. Whether a debt is disputed is a
+legal fact and whether it is doubtful is a judgement — neither is in TallyPrime, and
+filling them in with "all undisputed, all good" would be inventing the part of the
+disclosure that carries the actual opinion.
+
+Separately: **tell it your credit terms and it will tell you what is genuinely
+overdue**, per party or per group. Until now this connector would only tell you how
+*old* a bill was, which is not the same thing. Where you have not supplied terms for
+a party, there is simply no overdue figure — not a zero, because a zero would read
+as "nothing overdue", and that cannot be said without knowing when the bills were
+due.
+
+**Currency: you can now just tell it.**
+
+Following on from the note below about euro figures coming back labelled `unknown` —
+set `TALLY_CURRENCY_LABEL` in the configuration and your figures carry the right
+label. It is used *only* where TallyPrime could not send its own symbol, so it can
+never relabel figures whose currency came through fine, and the answer always says
+the label came from the configuration rather than from Tally. Those are different
+kinds of fact and should not look the same.
+
+**Fixed: accented names in your books were being mangled.**
+
+This is the important one. Any name containing an accented character — `Allgäuer
+Ölmühle GmbH`, `AOK Baden-Württemberg`, `Bättre Hälsa AB`, `Verkäufe` — was
+arriving with those characters replaced by question-mark boxes. On the company this
+was found on, **twenty supplier and account names** were affected, and nothing
+warned about it.
+
+It mattered more than it looks. Claude looks parties up *by name*, so a mangled
+name meant "no such supplier" for a supplier that is right there in your books.
+Anyone whose books are entirely in plain English was never affected; anyone with
+German, Swedish, Italian, Polish or French names in their ledgers was.
+
+Now fixed and covered by a test that carries the exact data that broke it.
+
+**Currencies: your figures are no longer labelled with a question mark.**
+
+TallyPrime cannot send certain symbols — the euro is one — over this connection. It
+replaces them with `?` before the data leaves TallyPrime, and no setting on our side
+can change that (we tried ten). Previously every figure from a euro company came
+back labelled `"?"`.
+
+Now such figures are labelled **`unknown`**, with a note saying the amounts are
+exact and only the label is missing, and naming the country. Deliberately *not*
+guessed at: a German company can perfectly well keep its books in dollars — the one
+this was found on defines both — so Claude is told to ask rather than assume. **The
+numbers were never wrong and are never converted.** Only the label was.
+
+**Stock reports, and two date bugs that gave wrong answers on companies outside
+India.**
+
+New: **ask about closing stock by item, or by warehouse.** "What stock is on hand
+and what is it worth?" and "what is sitting in each location?" now have answers.
+The second one was previously impossible — there was no way to get location-wise
+stock at all.
+
+Two things it will tell you rather than hide:
+
+- Quantities come back with their unit ("9500.00 Kg"), because a stock number
+  without its unit is meaningless.
+- **The rate shown is rounded**, so quantity × rate does not equal the value. On a
+  real company, half the items disagreed. Claude is told to quote Tally's own
+  value and never to multiply it back, so you will not be handed a total that is
+  quietly a few hundred out.
+
+Fixed: **companies whose financial year is not April to March.** Anyone on a
+January–December year — European companies, most non-Indian books — was affected.
+Asking for a quarter's figures could produce a warning claiming the figures
+covered a period *ending before it started*, and the "here is the period to try
+instead" suggestion pointed at a year containing none of the company's data. The
+year is now read from the company's own start and end dates instead of being
+assumed.
+
+Fixed: **comparing two periods was refused more often than it needed to be.**
+TallyPrime turns out to honour an end date when it falls on the 31st of a month
+and to ignore it on any other day — established by testing nineteen different end
+dates against a live company. Previously the connection assumed the end date never
+worked, so it declined comparisons it could actually have answered. Now:
+
+- Periods ending on a 31st are answered normally and reported as covering exactly
+  what you asked for.
+- Periods ending on any other day are still answered, still flagged as running
+  past the date you asked for, and now the message tells you **which nearby date
+  would work** instead of only saying no.
+- The one trap to know: **30 June and 30 September do not work** — the two quarter
+  ends most people reach for. Ask to 31 March, 31 May, 31 July, 31 August,
+  31 October or 31 December and you get exactly that period.
+
+Nothing about how figures are read or reported changed, and no figure is adjusted.
+
 ## 0.3.0 — 2026-08-13
 
 **Setup now works with Codex as well as Claude Desktop.**
