@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { join } from 'node:path';
 // @ts-expect-error -- plain .mjs installer helper, deliberately not TypeScript.
 import {
   mergeServerIntoToml,
@@ -108,11 +109,53 @@ describe('Codex config.toml merge', () => {
     expect(block).toMatch(/args = \['.*index\.js'\]/);
   });
 
+  /*
+   * Separators come from node:path, so they follow the RUNNER, not the string
+   * that was passed in: on Linux `join('D:\\codexhome', 'config.toml')` yields
+   * `D:\codexhome/config.toml`. This test used to hard-code backslashes and so
+   * passed on Windows and failed on Ubuntu, which is a fact about the test
+   * rather than about the code.
+   *
+   * What actually needs asserting is the decision this function makes — which
+   * variable wins, and that the fallback goes through `.codex` — so that is
+   * asserted on every platform, with the separator left to node:path. The
+   * Windows spelling is then pinned separately, on Windows, because that is
+   * the platform the installer ships to and the one where a wrong separator
+   * would reach a user.
+   */
   it('honours CODEX_HOME over the user profile', () => {
-    expect(codexConfigPath({ CODEX_HOME: 'D:\\codexhome', USERPROFILE: 'C:\\Users\\A' })).toBe(
-      'D:\\codexhome\\config.toml'
+    const home = process.platform === 'win32' ? 'D:\\codexhome' : '/codexhome';
+    const profile = process.platform === 'win32' ? 'C:\\Users\\A' : '/home/a';
+
+    expect(codexConfigPath({ CODEX_HOME: home, USERPROFILE: profile })).toBe(
+      join(home, 'config.toml')
     );
-    expect(codexConfigPath({ USERPROFILE: 'C:\\Users\\A' })).toBe('C:\\Users\\A\\.codex\\config.toml');
+  });
+
+  it('falls back to the user profile, via .codex', () => {
+    const profile = process.platform === 'win32' ? 'C:\\Users\\A' : '/home/a';
+
+    expect(codexConfigPath({ USERPROFILE: profile })).toBe(
+      join(profile, '.codex', 'config.toml')
+    );
+  });
+
+  it('reads HOME where there is no USERPROFILE, so it works off Windows too', () => {
+    expect(codexConfigPath({ HOME: '/home/a' })).toBe(join('/home/a', '.codex', 'config.toml'));
+  });
+
+  it('returns null rather than guessing when neither is set', () => {
+    // Null is what makes setup say it cannot find Codex, instead of writing a
+    // config file to a path assembled out of nothing.
     expect(codexConfigPath({})).toBeNull();
+    expect(codexConfigPath({ CODEX_HOME: '   ' })).toBeNull();
+  });
+
+  it.runIf(process.platform === 'win32')('spells Windows paths with backslashes', () => {
+    // The guarantee that matters to the shipped installer.
+    expect(codexConfigPath({ CODEX_HOME: 'D:\\codexhome' })).toBe('D:\\codexhome\\config.toml');
+    expect(codexConfigPath({ USERPROFILE: 'C:\\Users\\A' })).toBe(
+      'C:\\Users\\A\\.codex\\config.toml'
+    );
   });
 });
