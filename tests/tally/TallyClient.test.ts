@@ -4,6 +4,7 @@ import { TallyClient, decodeTallyPayload } from '../../src/tally/TallyClient.js'
 import { loadConfig, type AppConfig } from '../../src/config/config.js';
 import { createLogger } from '../../src/utils/logger.js';
 import type { TallyError } from '../../src/tally/TallyError.js';
+import { withQueryLog, type QueryScope } from '../../src/tally/queryLog.js';
 
 const silentLogger = createLogger('error');
 
@@ -310,6 +311,42 @@ describe('response cache and the liveness exception', () => {
     // The baseline the cache exists for. If this ever becomes 2, the caching
     // behaviour the performance work depends on has regressed.
     expect(mock.requests.length).toBe(1);
+  });
+
+  it('dates a cache hit identically to the live send it came from', async () => {
+    /*
+     * One read of the clock, reported the same way twice.
+     *
+     * The live send and the cache write used to call `Date.now()` separately,
+     * a few lines apart, so whenever a millisecond ticked between them the
+     * cached entry was dated LATER than the live answer had just reported —
+     * the same fetch described two ways, with the cached copy claiming to be
+     * the fresher of the two.
+     *
+     * It surfaced as a 1ms flake in the envelope test, but the flake was the
+     * symptom: `data_fetched_at` is a provenance claim, and a claim that
+     * changes depending on which copy of one fetch you happen to receive is
+     * wrong however small the gap. Asserted here rather than only through the
+     * envelope, because reproducing it there needs the millisecond to tick.
+     */
+    mock.onBodyContaining('ENVELOPE', { body: OK_XML, contentType: 'text/xml;charset=utf-8' });
+    const client = new TallyClient(configFor({ TALLY_CACHE_TTL_MS: '60000' }), silentLogger);
+
+    // Read through the query log, which is exactly how the envelope gets it.
+    const dateOf = async (): Promise<number | null> => {
+      const scope: QueryScope = { queries: [], oldestFetchAt: null };
+      await withQueryLog(scope, () => client.send('<ENVELOPE>timing</ENVELOPE>'));
+      return scope.oldestFetchAt;
+    };
+
+    const live = await dateOf();
+    const fromCache = await dateOf();
+
+    // Served from cache, so the second call never reached Tally...
+    expect(mock.requests.filter((request) => request.body.includes('timing')).length).toBe(1);
+    // ...and it is dated by that one fetch, to the millisecond.
+    expect(fromCache).toBe(live);
+    expect(live).not.toBeNull();
   });
 
   it('reaches Tally every time when bypassCache is set', async () => {
