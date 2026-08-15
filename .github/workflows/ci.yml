@@ -55,3 +55,17 @@ jobs:
       # Last, because it writes dist/ and the checks above should fail on their
       # own merits rather than on a build artefact.
       - run: npm run build
+
+      # Assembles the real distributable, minus the bundled runtime download.
+      #
+      # The zip is the whole product for the people who use it, and until now
+      # nothing checked that it could still be built until someone tried to cut
+      # a release — the worst moment to find out. -SkipRuntime keeps this to a
+      # few seconds and avoids fetching a Node distribution on every push; the
+      # runtime is exercised for real by the release workflow.
+      #
+      # Windows only: the script is PowerShell and the payload bundles node.exe.
+      - name: Check the installer payload still assembles
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File installer\package.ps1 -SkipRuntime

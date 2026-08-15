@@ -1,0 +1,116 @@
+name: Release
+
+# Builds the distributable zip and attaches it to a GitHub release.
+#
+# WHY THIS RUNS IN CI RATHER THAN ON A LAPTOP. The zip is the whole product for
+# the people who use it: accountants unzip it and double-click Setup. Building
+# it by hand means the shipped artefact depends on whatever happened to be in
+# one developer's working tree — a stray edit, an uncommitted fix, a node_modules
+# left over from an experiment. Built here, it can only ever contain what is
+# actually in the tagged commit.
+#
+# Windows, necessarily: the payload bundles node.exe and the packaging script is
+# PowerShell using Compress-Archive. That is also the platform the audience runs.
+#
+# The packaging script gates itself on typecheck, lint and tests before it will
+# produce anything (see installer/package.ps1), so a release cannot be cut from
+# a red tree even if someone pushes a tag by mistake.
+
+on:
+  push:
+    tags: ['v*']
+  # Lets a release be rebuilt, or a build be rehearsed, without moving a tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build (leave blank to build the current branch without publishing)'
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # The packaging script reads the version from package.json, but the
+          # release notes come from the tag's own history, so fetch it all.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      # Fails the build if the tag and package.json disagree. Shipping a zip
+      # whose internal version does not match the tag it was released under
+      # makes every later support conversation ambiguous.
+      - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $manifest = Get-Content package.json -Raw | ConvertFrom-Json
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          if ($manifest.version -ne $tag) {
+            throw "Tag $tag does not match package.json version $($manifest.version)."
+          }
+          Write-Host "Tag and package.json agree on $tag."
+
+      # Runs typecheck, lint, tests and build itself, then assembles and
+      # smoke-tests the payload before zipping it.
+      - name: Build the distributable zip
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File installer\package.ps1
+
+      - name: Record what was built
+        id: artefact
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem release\*.zip | Select-Object -First 1
+          if (-not $zip) { throw 'No zip was produced.' }
+          $hash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash
+          $mb = [math]::Round($zip.Length / 1MB, 1)
+          "path=$($zip.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
+          "name=$($zip.Name)"     | Out-File $env:GITHUB_OUTPUT -Append
+          "sha256=$hash"          | Out-File $env:GITHUB_OUTPUT -Append
+          "size=$mb MB"           | Out-File $env:GITHUB_OUTPUT -Append
+          Write-Host "$($zip.Name) — $mb MB — SHA256 $hash"
+
+      # Kept even for a dry run, so a rehearsal can be downloaded and checked.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artefact.outputs.name }}
+          path: ${{ steps.artefact.outputs.path }}
+          retention-days: 30
+
+      # The checksum is published with the zip so a recipient can confirm the
+      # file reached them intact — these go out by email and shared drive.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.artefact.outputs.path }}
+          generate_release_notes: true
+          body: |
+            **${{ steps.artefact.outputs.name }}** — ${{ steps.artefact.outputs.size }}
+
+            `SHA256 ${{ steps.artefact.outputs.sha256 }}`
+
+            Download the zip below, unzip it anywhere, and double-click
+            **Setup**. Nothing else needs installing — the folder carries its
+            own runtime. If something looks wrong afterwards, double-click
+            **Check-Tally**.
+
+            What changed in this version is in
+            [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).

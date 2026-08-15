@@ -106,6 +106,27 @@ describe('attributesOf', () => {
     const node = findFirst(parseTallyXml('<VOUCHER/>'), 'VOUCHER')!;
     expect(attributesOf(node)).toEqual({});
   });
+
+  it('decodes numeric character references, exactly as text content does', () => {
+    /*
+     * Found live 2026-08-15 on a real German creditor. Tally sends the same
+     * value in the NAME attribute and the <NAME> child, both escaped — but
+     * only the child was being decoded. `normalizeLedgers` reads the
+     * attribute, so the ledger was named "…VERLAG G&#13;&#10; MBH" while
+     * every voucher line naming the same ledger decoded to a real CR LF.
+     *
+     * The two therefore never matched, the roll-forward saw ZERO movements
+     * for that ledger, and `tally_check_tie_out` reported books that
+     * genuinely tie as OUT. A blocking control failing open-books is the
+     * worst shape of bug this tool can have, so this stays tested.
+     */
+    const xml = '<LEDGER NAME="VERLAG G&#13;&#10; MBH"><NAME>VERLAG G&#13;&#10; MBH</NAME></LEDGER>';
+    const node = findFirst(parseTallyXml(xml), 'LEDGER')!;
+
+    expect(attributesOf(node).NAME).toBe('VERLAG G\r\n MBH');
+    // The whole point: both readings of one value must agree.
+    expect(attributesOf(node).NAME).toBe(childText(node, 'NAME'));
+  });
 });
 
 describe('findAll', () => {

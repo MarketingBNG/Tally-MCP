@@ -111,14 +111,27 @@ export function childrenOf(node: TallyNode): TallyNode[] {
   return Array.isArray(value) ? (value as TallyNode[]) : [];
 }
 
-/** Attributes of a node, keyed by attribute name. */
+/**
+ * Attributes of a node, keyed by attribute name.
+ *
+ * Numeric character references are decoded here exactly as they are for text
+ * content — see `decodeNumericRefs`. An attribute is text and Tally escapes it
+ * the same way, so decoding one and not the other made the SAME value read
+ * differently depending on which the normaliser happened to use.
+ *
+ * Found live 2026-08-15. `normalizeLedgers` takes a ledger's name from the
+ * NAME attribute, so a real creditor came back as
+ * `"BUNDESANZEIGER VERLAG G&#13;&#10; MBH"` — the escape sequence shown
+ * literally, in the party name printed on an audit finding. The same ledger's
+ * `<NAME>` child element decoded correctly, which is why this went unnoticed.
+ */
 export function attributesOf(node: TallyNode): Record<string, string> {
   const raw = node[ATTRIBUTES_KEY];
   if (raw === null || typeof raw !== 'object') return {};
 
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value === 'string') out[key] = value;
+    if (typeof value === 'string') out[key] = decodeNumericRefs(value);
   }
   return out;
 }

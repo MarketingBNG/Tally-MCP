@@ -153,13 +153,14 @@ export function registerInventoryTools(server: McpServer, deps: ToolDeps): void 
             excludedOrders += 1;
             continue;
           }
-          if (voucher.isInventoryVoucher) inventoryOnlyVouchers += 1;
+          let matchedThisVoucher = false;
 
           for (const tag of INVENTORY_LIST_TAGS) {
             for (const line of voucher.nested?.[tag] ?? []) {
               const itemName = line.fields.STOCKITEMNAME ?? '';
               if (needle !== undefined && !itemName.toLowerCase().includes(needle)) continue;
 
+              matchedThisVoucher = true;
               movements.push({
                 stockItem: itemName,
                 date: voucher.date,
@@ -173,6 +174,11 @@ export function registerInventoryTools(server: McpServer, deps: ToolDeps): void 
               });
             }
           }
+
+          // Counted only when a line from this voucher actually made it into
+          // the returned set — a stock-only voucher for an item the caller
+          // didn't ask about must not trigger the double-counting warning.
+          if (voucher.isInventoryVoucher && matchedThisVoucher) inventoryOnlyVouchers += 1;
         }
 
         if (excludedCancelled > 0) {

@@ -26,10 +26,13 @@ import {
   PERIOD_NOTE,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
+  verbositySchema,
 } from '../schemas/common.js';
+import { trimWarnings } from './verbosity.js';
 import {
   assertCompanyIsLoaded,
   resolveCompanyCurrency,
+  resolveCompanyCurrencyDetailed,
   companyNamed,
   resolvePeriodForCompany,
   runTool,
@@ -49,6 +52,7 @@ import { CASH_FLOW_SUMMARY, FUND_FLOW_SUMMARY } from './flowReports.js';
 import {
   buildTrend,
   compareStatements,
+  rowIsNil,
   type ComparisonAdapter,
   type RowFigures,
 } from './statementComparison.js';
@@ -193,6 +197,11 @@ const STATEMENT_DESCRIPTION = [
   SIGN_NOTE,
   '',
   PERIOD_NOTE,
+  '',
+  'VERBOSITY: on a single-period statement, verbosity "summary" omits rows whose every figure ' +
+    'is nil or zero — usually most of a full chart of accounts — and reports how many were left ' +
+    'out. No row carrying a figure is ever omitted, and a row whose amount could not be read is ' +
+    'kept rather than treated as zero.',
   '',
   UNTRUSTED_CONTENT_NOTICE,
   '',
@@ -738,10 +747,16 @@ async function runMultiCompany(
 
   // Sequential: Tally serves one request at a time, and awaiting in order keeps
   // a failure attributable to the company that caused it.
-  const fetched: { company: string; currency: string; rows: unknown[]; warnings: string[] }[] = [];
+  const fetched: {
+    company: string;
+    currency: string;
+    comparable: boolean;
+    rows: unknown[];
+    warnings: string[];
+  }[] = [];
   for (const company of canonical) {
     const currencyWarnings: string[] = [];
-    const currency = await resolveCompanyCurrency(deps, company, currencyWarnings);
+    const resolved = await resolveCompanyCurrencyDetailed(deps, company, currencyWarnings);
     const response = await deps.client.send(
       spec.build({
         company,
@@ -751,17 +766,26 @@ async function runMultiCompany(
       }),
       'report'
     );
-    const { data, warnings } = spec.normalize(response.body, currency);
+    const { data, warnings } = spec.normalize(response.body, resolved.label);
     fetched.push({
       company,
-      currency,
+      currency: resolved.label,
+      comparable: resolved.comparable,
       rows: data,
       warnings: [...response.repairs, ...currencyWarnings, ...warnings],
     });
   }
 
   const currencies = new Set(fetched.map((entry) => entry.currency));
-  const oneCurrency = currencies.size === 1;
+  // Matching LABELS are not enough. A label that was inferred from the
+  // company's country, or that stands in for a symbol Tally could not
+  // transport, can be identical across two companies whose books are in
+  // genuinely different currencies — so subtracting would produce a wrong
+  // figure of plausible size. Differences are computed only when every
+  // company's currency was actually established (by Tally or by
+  // configuration) AND they all agree.
+  const everyCurrencyEstablished = fetched.every((entry) => entry.comparable);
+  const oneCurrency = currencies.size === 1 && everyCurrencyEstablished;
 
   const paired = buildTrend(
     fetched.map((entry) => entry.rows),
@@ -782,6 +806,20 @@ async function runMultiCompany(
         'differences between adjacent columns are computed. They are still differences between ' +
         'separate legal entities, not a movement over time — do not describe them as a change.'
     );
+  } else if (!everyCurrencyEstablished) {
+    const unestablished = fetched
+      .filter((entry) => !entry.comparable)
+      .map((entry) => `${entry.company} (labelled "${entry.currency}")`)
+      .join(', ');
+    warnings.push(
+      'NO DIFFERENCES BETWEEN COMPANIES ARE COMPUTED, because at least one currency was not ' +
+        `established by TallyPrime or by configuration: ${unestablished}. A label that was ` +
+        'inferred, or that stands in for a symbol TallyPrime could not transport, can match ' +
+        'another company\'s label while the books are in a different currency — so subtracting ' +
+        'could silently mix currencies and produce a wrong figure of plausible size. Compare ' +
+        'them by reading the columns, not by taking differences, and never total the row. Set ' +
+        'TALLY_CURRENCY_LABEL to state these currencies and the differences will be computed.'
+    );
   } else {
     warnings.push(
       'NO DIFFERENCES BETWEEN COMPANIES ARE COMPUTED, because they do not share a currency — ' +
@@ -796,7 +834,12 @@ async function runMultiCompany(
     {
       statement,
       period,
-      companies: fetched.map((entry) => ({ company: entry.company, currency: entry.currency })),
+      companies: fetched.map((entry) => ({
+        company: entry.company,
+        currency: entry.currency,
+        /** False when the label was inferred or absent rather than established. */
+        currencyEstablished: entry.comparable,
+      })),
       comparison: {
         rows: paired.rows,
         unpaired: paired.unpaired,
@@ -857,11 +900,13 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
               'fall on the 31st of a month — see the end-date rule in this description; a period ' +
               'ending otherwise is refused rather than answered with figures that run past it.'
           ),
+        verbosity: verbositySchema,
       }),
     },
     async (args) =>
       runTool('tally_get_statement', deps, async () => {
         const spec = STATEMENTS[args.statement];
+        const verbosity = args.verbosity ?? 'full';
 
         if (args.companies !== undefined) {
           if (args.periods !== undefined || args.company !== undefined) {
@@ -992,6 +1037,19 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
 
         if (comparisonPeriod === undefined) {
           const allWarnings = [...periodWarnings, ...divergenceWarnings, ...current.warnings];
+
+          // At "summary", rows where every figure is nil are left out. They are
+          // the chart of accounts showing through rather than facts about the
+          // period, and on a full chart they are usually most of the rows. The
+          // count is reported so the omission is visible, and the totals above
+          // were computed over the WHOLE set before anything was dropped.
+          const summarising = verbosity === 'summary';
+          const visibleRows = summarising
+            ? current.rows.filter((row) => !rowIsNil(spec.compare.figuresOf(row)))
+            : current.rows;
+          const nilRowsOmitted = current.rows.length - visibleRows.length;
+          const trimmed = trimWarnings(verbosity, allWarnings);
+
           // A statement is returned whole — it is not paginated and this server
           // applies no cap of its own, so every row Tally rendered is here.
           return whole(
@@ -1003,10 +1061,28 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
                 ? {}
                 : { figuresActuallyCover: { fromDate: period.fromDate, toDate: periodEnd } }),
               ...(args.company === undefined ? {} : { company: args.company }),
-              rows: current.rows,
-              ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
+              rows: visibleRows,
+              ...(summarising
+                ? {
+                    verbosity,
+                    rowsReturned: visibleRows.length,
+                    rowsInStatement: current.rows.length,
+                    nilRowsOmitted,
+                    ...(nilRowsOmitted === 0
+                      ? {}
+                      : {
+                          nilRowsNote:
+                            `${String(nilRowsOmitted)} row(s) whose every figure was nil or zero ` +
+                            'were omitted. No row carrying a figure was omitted, and no row with ' +
+                            'an unreadable amount was treated as zero. Call again with verbosity ' +
+                            '"full" for the complete statement.',
+                        }),
+                    ...(trimmed.note === undefined ? {} : { verbosityNote: trimmed.note }),
+                  }
+                : {}),
+              ...(trimmed.warnings.length > 0 ? { warnings: trimmed.warnings } : {}),
             },
-            current.rows.length
+            visibleRows.length
           );
         }
 

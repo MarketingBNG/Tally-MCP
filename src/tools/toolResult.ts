@@ -13,6 +13,7 @@ import {
   normalizeCompanies,
   normalizeCurrencies,
   type Company,
+  type Currency,
   type Normalized,
 } from '../tally/normalize.js';
 import { withQueryLog, type QueryScope } from '../tally/queryLog.js';
@@ -31,6 +32,12 @@ import {
   type Money,
 } from '../utils/numbers.js';
 import type { conditionSchema } from '../schemas/common.js';
+import {
+  currencyForCountry,
+  currencyIsComparable,
+  labelFromFormalName,
+  type CurrencySource,
+} from '../utils/currencyFromCountry.js';
 
 /**
  * Shared plumbing for data tools.
@@ -724,18 +731,32 @@ export async function assertCompanyIsLoaded(
 async function noteMultiCurrency(
   deps: ToolDeps,
   base: string,
-  warnings: string[]
+  warnings: string[],
+  /**
+   * Scoped to the company. Unscoped, this answered for whichever company
+   * TallyPrime considered current — so with three open it could report
+   * another company's currency masters against these figures.
+   */
+  company?: string
 ): Promise<void> {
   try {
-    const response = await deps.client.send(buildCurrencyListRequest(), 'standard');
+    const response = await deps.client.send(
+      buildCurrencyListRequest(company === undefined || company === '' ? {} : { company }),
+      'standard'
+    );
     const currencies = normalizeCurrencies(response.body).data;
     if (currencies.length <= 1) return;
 
     // A "?" in this list is a symbol TallyPrime substituted, not a currency named
     // "?" — worth saying, because a bare list of symbols invites the reader to
-    // treat it as one.
+    // treat it as one. Where Tally DID transport a spelled-out name, it is
+    // shown, because "European Euro" identifies the currency that "?" does not.
     const names = currencies
-      .map((entry) => (currencyIsUnavailable(entry.name) ? `${entry.name} (symbol not transportable)` : entry.name))
+      .map((entry) =>
+        currencyIsUnavailable(entry.name)
+          ? `${entry.name} (symbol not transportable${entry.formalName === null ? '' : `, named "${entry.formalName}"`})`
+          : entry.name
+      )
       .join(', ');
     warnings.push(
       `This company defines ${String(currencies.length)} currencies (${names}) and every figure here is labelled with the base currency "${base}". TallyPrime does not report a per-transaction currency over this interface, so a transaction recorded in a different currency cannot be distinguished and may be labelled "${base}" incorrectly. Amounts are never converted. Check the currency on any figure that matters before relying on it.`
@@ -746,7 +767,67 @@ async function noteMultiCurrency(
   }
 }
 
+/**
+ * How many currencies this company defines, or null when it could not be read.
+ *
+ * Used to decide whether a country may be turned into a currency label at all.
+ * Verified live 2026-08-14: the German test company defines `$` alongside its
+ * own base currency, so "registered in Germany" does NOT imply its books are
+ * in euros. Where a company defines more than one currency the country tells
+ * you nothing, and the derivation must not fire.
+ *
+ * Null (unreadable) is treated as "do not derive" by the caller: the whole
+ * point of the check is to refuse when the ground is not solid.
+ */
+async function listDefinedCurrencies(
+  deps: ToolDeps,
+  /**
+   * Scoped to the company on purpose. With three companies open, an unscoped
+   * probe answers for whichever one TallyPrime considers current, so a
+   * currency master could be read off the wrong company entirely.
+   */
+  company: string | undefined
+): Promise<Currency[] | null> {
+  try {
+    const response = await deps.client.send(
+      buildCurrencyListRequest(company === undefined || company === '' ? {} : { company }),
+      'standard'
+    );
+    return normalizeCurrencies(response.body).data;
+  } catch (error) {
+    deps.logger.debug('could not read the defined currencies', { error: String(error) });
+    return null;
+  }
+}
+
+/**
+ * A currency label together with where it came from.
+ *
+ * The provenance is not decoration. A label TallyPrime transported, a label an
+ * operator configured and a label inferred from the company's country are
+ * three different strengths of fact, and cross-company arithmetic is only safe
+ * over the first two — see `currencyIsComparable`.
+ */
+export interface ResolvedCurrency {
+  label: string;
+  source: CurrencySource;
+  /** False when this label must not be subtracted from another company's. */
+  comparable: boolean;
+}
+
+/**
+ * Label-only form, for the many callers that just stamp a currency on figures
+ * and have no cross-company arithmetic to protect.
+ */
 export async function resolveCompanyCurrency(
+  deps: ToolDeps,
+  company: string | undefined,
+  warnings?: string[]
+): Promise<string> {
+  return (await resolveCompanyCurrencyDetailed(deps, company, warnings)).label;
+}
+
+export async function resolveCompanyCurrencyDetailed(
   deps: ToolDeps,
   company: string | undefined,
   /**
@@ -754,7 +835,13 @@ export async function resolveCompanyCurrency(
    * only needs the label — and has nowhere to put a warning — stays unaffected.
    */
   warnings?: string[]
-): Promise<string> {
+): Promise<ResolvedCurrency> {
+  const resolved = (label: string, source: CurrencySource): ResolvedCurrency => ({
+    label,
+    source,
+    comparable: currencyIsComparable(source),
+  });
+
   try {
     const response = await deps.client.send(buildCompanyListRequest(), 'standard');
     const companies = normalizeCompanies(response.body).data;
@@ -776,7 +863,7 @@ export async function resolveCompanyCurrency(
           `figures are in — cannot be determined. They are labelled "${UNKNOWN_CURRENCY}" rather ` +
           'than assuming. Name the company to get a currency on them.'
       );
-      return UNKNOWN_CURRENCY;
+      return resolved(UNKNOWN_CURRENCY, 'unresolved');
     }
 
     const currency = match?.currency?.trim();
@@ -801,7 +888,48 @@ export async function resolveCompanyCurrency(
         match?.name,
         companies.length
       );
-      const label = rule?.label ?? UNKNOWN_CURRENCY;
+
+      /*
+       * Precedence, and why.
+       *
+       * 1. TALLY_CURRENCY_LABEL. An operator stating what the books use
+       *    outranks everything, because they can see the books.
+       * 2. Tally's own spelled-out name for the SAME currency. Verified live
+       *    2026-08-15: the symbol will not transport but MAILINGNAME does, so
+       *    a company reporting symbol "?" also reports "European Euro". That
+       *    is a fact from the company's own currency master, not a guess, and
+       *    it is what closes this gap for real.
+       * 3. The country. An inference, used only when nothing above answered
+       *    and only where it cannot be ambiguous.
+       */
+      const defined = rule === null ? await listDefinedCurrencies(deps, match?.name) : null;
+
+      // Matched on the substituted symbol. Where two currencies both failed to
+      // transport they would BOTH read "?", and there would be no way to tell
+      // which is the base — so an ambiguous match resolves to nothing rather
+      // than picking one.
+      const symbolMatches = (defined ?? []).filter((entry) => entry.name === currency);
+      const formalLabel =
+        symbolMatches.length === 1 ? labelFromFormalName(symbolMatches[0]?.formalName) : null;
+
+      // The country is consulted ONLY when the company defines a single
+      // currency. Where a second is defined, the country cannot establish
+      // which one the books are kept in — the German company that also
+      // defines "U$" is the live case.
+      const derived =
+        rule === null && formalLabel === null && defined?.length === 1
+          ? currencyForCountry(match?.country)
+          : null;
+
+      const label = rule?.label ?? formalLabel ?? derived ?? UNKNOWN_CURRENCY;
+      const source: CurrencySource =
+        rule !== null
+          ? 'configuration'
+          : formalLabel !== null
+            ? 'tally-formal-name'
+            : derived !== null
+              ? 'derived-from-country'
+              : 'unresolved';
 
       if (warnings !== undefined) {
         const where =
@@ -820,7 +948,36 @@ export async function resolveCompanyCurrency(
           'when quoting any figure, and do NOT assume a currency from the country: this ' +
           'company also defines other currencies.';
 
-        if (rule === null) {
+        if (formalLabel !== null) {
+          // Resolved, and from Tally. Still worth one line, because the label
+          // did not come from the field a reader would expect it to.
+          warnings.push(
+            `The currency symbol for "${match?.name ?? 'this company'}" could not be ` +
+              `transported — TallyPrime reported it as "${currency ?? ''}", a substitution made ` +
+              'before the data left TallyPrime. The label used here comes instead from the ' +
+              `currency's spelled-out name in the company's own currency master, which ` +
+              `TallyPrime DID transport: "${symbolMatches[0]?.formalName ?? ''}", shown as ` +
+              `"${formalLabel}". This is read from the books, not inferred. Amounts are exact ` +
+              'and are never converted.'
+          );
+        } else if (derived !== null) {
+          // Labelled, but from an inference rather than from the books. Said
+          // in full, because a reader who cannot tell an inferred label from a
+          // reported one has no way to know which figures to double-check.
+          warnings.push(
+            `CURRENCY LABEL INFERRED FROM THE COUNTRY, NOT REPORTED BY TALLYPRIME. TallyPrime ` +
+              `could not transport the symbol for "${match?.name ?? 'this company'}" — it ` +
+              `reported "${currency ?? ''}", a substitution made before the data left ` +
+              `TallyPrime. ${where}, so every figure here is labelled "${derived}" on that ` +
+              'basis. THIS IS AN INFERENCE ABOUT THE COMPANY, NOT A FACT ABOUT ITS BOOKS: a ' +
+              'company registered in one country may keep its books in another currency, so ' +
+              'confirm the label against the books before quoting any figure externally. ' +
+              'Amounts are exact and nothing is converted — only the label is inferred. ' +
+              'No difference is computed between this company and any other, because an ' +
+              'inferred label cannot establish that two companies share a currency. Set ' +
+              'TALLY_CURRENCY_LABEL to state the currency instead of inferring it.'
+          );
+        } else if (rule === null) {
           warnings.push(
             deps.config.tallyCurrencyLabel === undefined
               ? `${unlabelled} To have the label filled in for you, set TALLY_CURRENCY_LABEL in ` +
@@ -855,23 +1012,26 @@ export async function resolveCompanyCurrency(
       }
       // Still worth reporting a multi-currency company, and the base label it
       // would be compared against is whatever was resolved above.
-      if (warnings !== undefined) await noteMultiCurrency(deps, label, warnings);
-      return label;
+      if (warnings !== undefined) await noteMultiCurrency(deps, label, warnings, match?.name);
+      return resolved(label, source);
     }
 
     const base = currency === undefined || currency === '' ? DEFAULT_CURRENCY : currency;
 
-    if (warnings !== undefined) await noteMultiCurrency(deps, base, warnings);
+    if (warnings !== undefined) await noteMultiCurrency(deps, base, warnings, match?.name);
 
-    return base;
+    return resolved(base, 'tally');
   } catch (error) {
     // A figure with a slightly wrong LABEL is recoverable; refusing the whole
     // answer because the currency probe failed is not. Every caller has already
     // proved Tally is reachable, so this only fires on an odd response shape.
+    //
+    // Marked 'unresolved' rather than 'tally': the default label was not read
+    // from anywhere, so it must not license cross-company arithmetic.
     deps.logger.debug('could not resolve the company currency; using the default', {
       error: String(error),
     });
-    return DEFAULT_CURRENCY;
+    return resolved(DEFAULT_CURRENCY, 'unresolved');
   }
 }
 

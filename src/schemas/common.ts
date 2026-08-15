@@ -88,6 +88,32 @@ export const UNTRUSTED_CONTENT_NOTICE =
 /** Reusable note about read-only scope. */
 export const READ_ONLY_NOTICE = 'Read-only: nothing here can modify TallyPrime.';
 
+/**
+ * How much explanatory material to return alongside the figures.
+ *
+ * WHY: these tools carry a great deal of standing explanation — why a period
+ * defaulted the way it did, what a closing balance is as at, which caveats
+ * apply to a currency label. All of it is true and some of it is load-bearing,
+ * but on the common call where nothing is wrong it is the bulk of the response
+ * and it is the same text every time.
+ *
+ * `summary` keeps everything that reports a PROBLEM and drops what merely
+ * explains normal behaviour, reporting a count of what it dropped so the
+ * omission is visible rather than silent. Nothing that indicates an exception
+ * is ever suppressed at any verbosity — the point is to make real findings
+ * easier to see, not to hide them.
+ */
+export const verbositySchema = z
+  .enum(['full', 'summary'])
+  .optional()
+  .describe(
+    'How much explanation to return. "full" (default) includes every note and caveat. ' +
+      '"summary" returns only findings that indicate a problem, plus a count of the ' +
+      'informational notes it left out — typically a much smaller response. Exceptions and ' +
+      'anything indicating a wrong figure are NEVER suppressed. Ask again with "full" to see ' +
+      'the omitted notes.'
+  );
+
 /** Opt-in switch for the expensive everything-Tally-holds fetch, used by the trading and master tools. */
 export const allFieldsSchema = z
   .boolean()

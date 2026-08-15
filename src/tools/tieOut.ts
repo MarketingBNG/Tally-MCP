@@ -7,12 +7,23 @@ import {
   PERIOD_NOTE,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
+  verbositySchema,
 } from '../schemas/common.js';
 import { DEFAULT_CURRENCY, type Money } from '../utils/numbers.js';
-import { bookYearFor } from '../utils/dates.js';
+import { bookYearFor, type DateRange } from '../utils/dates.js';
 import { adaptAccounts, adaptVouchers } from '../model/fromTally.js';
 import type { Account, SignedAmount, Voucher } from '../model/ledger.js';
-import { companyNamed, resolvePeriod, runTool, whole, type ToolDeps } from './toolResult.js';
+import {
+  assertCompanyIsLoaded,
+  companyNamed,
+  resolveCompanyCurrencyDetailed,
+  resolvePeriod,
+  runTool,
+  whole,
+  type ToolDeps,
+} from './toolResult.js';
+import { highestSeverity, summariseFindings, type Finding } from './findings.js';
+import { TallyError } from '../tally/TallyError.js';
 import { fetchLedgers } from './ledgers.js';
 import { fetchGroups } from './groups.js';
 import { fetchVouchers } from './vouchers.js';
@@ -74,6 +85,18 @@ const DESCRIPTION = [
   'NOT CHECKABLE is reported separately from FAILED, and the distinction matters: a ledger with ' +
     'no opening balance, or a voucher carrying an unreadable amount, cannot be verified either ' +
     'way. Counting those as passes would overstate the assurance this gives.',
+  '',
+  'SEVERAL COMPANIES AT ONCE: pass `companies: ["A", "B"]` instead of `company` to check each ' +
+    'in one call. Every company is checked against its OWN books and its own book year; nothing ' +
+    'is totalled across them. The overall `passed` is true only if all of them pass.',
+  '',
+  'FINDINGS: alongside the prose warnings, every result carries `findings` — typed objects with ' +
+    'a severity ("exception" for books that are out, "not_checkable" for what could not be ' +
+    'verified, "info"), a stable `code`, the subject, and the figures behind it. Triage on those ' +
+    'rather than by reading the warning text. `findingCounts` and `highestSeverity` summarise them.',
+  '',
+  'VERBOSITY: pass verbosity "summary" to drop the standing explanatory notes and return only ' +
+    'the findings, with a count of what was omitted. Exceptions are never suppressed.',
   '',
   PERIOD_NOTE,
   '',
@@ -138,7 +161,16 @@ export interface BalanceException {
  * rather than as balanced: the entries that ARE readable might sum to zero by
  * coincidence, and calling that a pass would be a false assurance.
  */
-export function checkDoubleEntry(vouchers: readonly Voucher[]): {
+export function checkDoubleEntry(
+  vouchers: readonly Voucher[],
+  /**
+   * Label for amounts whose own currency could not be read. Defaults to INR
+   * only for callers that predate currency resolution; the tool passes the
+   * company's resolved currency, so a euro company's imbalance is not
+   * reported in rupees.
+   */
+  fallbackCurrency: string = DEFAULT_CURRENCY
+): {
   imbalances: VoucherImbalance[];
   checked: number;
   notCheckable: string[];
@@ -154,7 +186,7 @@ export function checkDoubleEntry(vouchers: readonly Voucher[]): {
 
     let total = new Decimal(0);
     let readable = true;
-    let currency = DEFAULT_CURRENCY;
+    let currency = fallbackCurrency;
 
     for (const line of voucher.lines) {
       const value = asDecimal(line.amount);
@@ -227,7 +259,9 @@ function derivedBalanceReason(account: Account): string | null {
  */
 export function checkBalanceRollForward(
   accounts: readonly Account[],
-  vouchers: readonly Voucher[]
+  vouchers: readonly Voucher[],
+  /** See `checkDoubleEntry` — the company's currency, not an assumed INR. */
+  fallbackCurrency: string = DEFAULT_CURRENCY
 ): { exceptions: BalanceException[]; checked: number; notCheckable: string[] } {
   const exceptions: BalanceException[] = [];
   const notCheckable: string[] = [];
@@ -269,7 +303,7 @@ export function checkBalanceRollForward(
     const currency =
       account.openingBalance?.magnitude.currency ??
       account.closingBalance?.magnitude.currency ??
-      DEFAULT_CURRENCY;
+      fallbackCurrency;
 
     if (opening === null || reported === null) {
       // Only worth reporting where there was activity — a dormant ledger with
@@ -315,14 +349,322 @@ export function checkBalanceRollForward(
 }
 
 /** Total of every imbalance, so the scale of the problem is visible at a glance. */
-function sumOf(amounts: readonly SignedAmount[]): Money {
+function sumOf(amounts: readonly SignedAmount[], fallbackCurrency: string): Money {
   const total = amounts.reduce(
     (running, amount) => running.plus(asDecimal(amount) ?? new Decimal(0)),
     new Decimal(0)
   );
   return {
     amount: total.abs().toFixed(),
-    currency: amounts[0]?.magnitude.currency ?? DEFAULT_CURRENCY,
+    currency: amounts[0]?.magnitude.currency ?? fallbackCurrency,
+  };
+}
+
+/** One company's tie-out result, so a batch run and a single run share a shape. */
+interface CompanyTieOut {
+  company: string | null;
+  passed: boolean;
+  period: DateRange;
+  currency: string;
+  payload: Record<string, unknown>;
+  findings: Finding[];
+  exceptionCount: number;
+  /**
+   * Notes that explain normal behaviour rather than report a problem. Held
+   * separately from `findings` so `verbosity: "summary"` has something safe
+   * to drop — nothing in here indicates a wrong figure.
+   */
+  informationalNotes: string[];
+}
+
+/**
+ * Run the tie-out for exactly one company.
+ *
+ * Split out so the batch path and the single-company path cannot drift: both
+ * call this, and a fix to the arithmetic lands in both at once.
+ */
+async function tieOutOneCompany(
+  deps: ToolDeps,
+  companyArg: string | undefined,
+  dates: { fromDate?: string | undefined; toDate?: string | undefined }
+): Promise<CompanyTieOut> {
+  // own financial year rather than the one containing today. The
+  // roll-forward compares against Tally's period-end closing balance, so
+  // a range that does not cover the company's period disagrees for
+  // reasons that are not errors — and this tool's whole value is that a
+  // disagreement means something.
+  const explicitDates = dates.fromDate !== undefined || dates.toDate !== undefined;
+  let period = resolvePeriod(dates.fromDate, dates.toDate);
+
+  // Notes that merely explain normal behaviour. Separated from findings so
+  // `verbosity: "summary"` can drop them without touching anything that
+  // reports a problem.
+  const periodNotes: string[] = [];
+  const findings: Finding[] = [];
+
+  if (!explicitDates) {
+    // By name where one was given. With several companies loaded and none
+    // named, this resolves to null and the note below fires — which is
+    // right: their book years differ, so picking the first company's year
+    // would check a period the company never closed against.
+    const company = await companyNamed(deps, companyArg);
+    const startingFrom = company === null ? null : company.startingFrom;
+
+    if (company === null) {
+      // Several companies loaded and none named. Their book years differ
+      // — a German calendar year against two April years, live — so
+      // there is no "the company's year" to default to, and picking one
+      // would check a period that company never closed against.
+      //
+      // A finding, not a note: the period may be wrong, which makes every
+      // roll-forward difference below unreliable. That must survive summary.
+      findings.push({
+        severity: 'not_checkable',
+        code: 'period_not_anchored_to_book_year',
+        subject: null,
+        company: companyArg ?? null,
+        message:
+          'No dates were given and TallyPrime has more than one company loaded, so whose book ' +
+          'year to use could not be determined. The period defaults to the financial year ' +
+          'containing today, which may not be any of their years — name a company to check ' +
+          'against its own. The roll-forward below will report differences that are not ' +
+          'errors if the period is wrong.',
+        figures: { fromDate: period.fromDate, toDate: period.toDate },
+      });
+    } else if (startingFrom === null) {
+      findings.push({
+        severity: 'not_checkable',
+        code: 'period_not_anchored_to_book_year',
+        subject: company.name,
+        company: company.name,
+        message:
+          'TallyPrime did not report when this company books begin, so the period defaults to ' +
+          'the financial year containing today. If that is not the company own year, the ' +
+          'roll-forward check below will report differences that are not errors.',
+        figures: { fromDate: period.fromDate, toDate: period.toDate },
+      });
+    } else {
+      // Anchored on the company's own start month, not on 1 April. A
+      // company whose books run January to December gets its January year;
+      // assuming April would pick a window that need not even contain the
+      // company's own data, and this tool's entire value rests on the
+      // period being the one Tally closed against.
+      period = bookYearFor(startingFrom, company.endingAt ?? startingFrom);
+      periodNotes.push(
+        `No dates were given, so this checked ${period.fromDate} to ${period.toDate} — the company's own book year, twelve months from the date its books begin.`
+      );
+    }
+  } else {
+    periodNotes.push(
+      'Explicit dates were given. TallyPrime reported closing balances are as at its own period end, not the end of this range, so the balance roll-forward will show differences wherever the range does not cover the whole period. Those are not necessarily errors.'
+    );
+  }
+
+  // Resolved so the figures below carry the company's own currency rather
+  // than the INR default this file used to assume — the same wrong-label
+  // bug fixed elsewhere on 2026-08-13, which this tool had kept.
+  const currencyWarnings: string[] = [];
+  const currency = await resolveCompanyCurrencyDetailed(deps, companyArg, currencyWarnings);
+
+  const [{ ledgers, warnings: ledgerWarnings }, { groups, warnings: groupWarnings }] =
+    await Promise.all([fetchLedgers(deps, companyArg), fetchGroups(deps, companyArg)]);
+
+  const { vouchers, warnings: voucherWarnings } = await fetchVouchers(deps, companyArg, period);
+
+  const entityId = companyArg ?? 'loaded-company';
+  const accounts = adaptAccounts(groups, ledgers, { entityId });
+  const adapted = adaptVouchers(vouchers, { entityId });
+
+  const doubleEntry = checkDoubleEntry(adapted.data, currency.label);
+  const rollForward = checkBalanceRollForward(accounts.data, adapted.data, currency.label);
+
+  const passed = doubleEntry.imbalances.length === 0 && rollForward.exceptions.length === 0;
+
+  // Every exception becomes a typed finding as well as staying in its own
+  // list. The lists keep the full record; the findings make severity
+  // explicit so a caller can triage without parsing prose.
+  for (const item of doubleEntry.imbalances) {
+    findings.push({
+      severity: 'exception',
+      code: 'voucher_out_of_balance',
+      subject: item.number ?? item.voucherId,
+      company: companyArg ?? null,
+      message:
+        `Voucher ${item.number ?? item.voucherId} does not balance: its debits and credits ` +
+        `differ by ${item.outBy.magnitude.amount} ${item.outBy.magnitude.currency} ` +
+        `(${item.outBy.side}), across ${String(item.entryCount)} entries.`,
+      figures: {
+        outBy: item.outBy,
+        entryCount: item.entryCount,
+        date: item.date,
+        voucherType: item.voucherType,
+      },
+    });
+  }
+
+  for (const item of rollForward.exceptions) {
+    findings.push({
+      severity: 'exception',
+      code: 'balance_roll_forward_mismatch',
+      subject: item.account,
+      company: companyArg ?? null,
+      message:
+        `"${item.account}" does not roll forward: opening plus ${String(item.movementCount)} ` +
+        `movement(s) computes to ${item.computedClosing.magnitude.amount} ` +
+        `${item.computedClosing.magnitude.currency} (${item.computedClosing.side}), but ` +
+        `TallyPrime reports ${item.reportedClosing?.magnitude.amount ?? 'no closing balance'}` +
+        `${item.reportedClosing === null ? '' : ` ${item.reportedClosing.magnitude.currency} (${item.reportedClosing.side})`}` +
+        ` — a difference of ${item.difference.magnitude.amount} ` +
+        `${item.difference.magnitude.currency} (${item.difference.side}).`,
+      figures: {
+        opening: item.opening,
+        computedClosing: item.computedClosing,
+        reportedClosing: item.reportedClosing,
+        difference: item.difference,
+        movementCount: item.movementCount,
+      },
+    });
+  }
+
+  for (const reason of [...doubleEntry.notCheckable, ...rollForward.notCheckable]) {
+    findings.push({
+      severity: 'not_checkable',
+      code: 'not_checkable',
+      subject: null,
+      company: companyArg ?? null,
+      message: reason,
+    });
+  }
+
+  // A currency that was not established is a finding, not a note: every
+  // figure in this response carries that label, so a reader needs it even
+  // in summary form.
+  if (!currency.comparable) {
+    for (const message of currencyWarnings) {
+      findings.push({
+        severity: 'not_checkable',
+        code: 'currency_not_established',
+        subject: companyArg ?? null,
+        company: companyArg ?? null,
+        message,
+        figures: { currency: currency.label, source: currency.source },
+      });
+    }
+  }
+
+  const payload: Record<string, unknown> = {
+    /**
+     * The gate. Spec §4 L5: a failure blocks output. This server
+     * cannot enforce that, so it states it plainly instead and the
+     * tool description tells Claude not to present figures over it.
+     */
+    passed,
+    period,
+    currency: currency.label,
+    /** False when the label was inferred or absent rather than established. */
+    currencyEstablished: currency.comparable,
+    checks: {
+      doubleEntry: {
+        description: 'Every voucher debits equal its credits.',
+        vouchersChecked: doubleEntry.checked,
+        exceptions: doubleEntry.imbalances.length,
+        ...(doubleEntry.imbalances.length === 0
+          ? {}
+          : {
+              totalOutBy: sumOf(
+                doubleEntry.imbalances.map((item) => item.outBy),
+                currency.label
+              ),
+            }),
+      },
+      balanceRollForward: {
+        description:
+          'Opening balance plus period movements equals the closing balance TallyPrime reports.',
+        accountsChecked: rollForward.checked,
+        exceptions: rollForward.exceptions.length,
+        ...(rollForward.exceptions.length === 0
+          ? {}
+          : {
+              totalDifference: sumOf(
+                rollForward.exceptions.map((item) => item.difference),
+                currency.label
+              ),
+            }),
+      },
+    },
+    unbalancedVouchers: doubleEntry.imbalances,
+    balanceExceptions: rollForward.exceptions,
+    /**
+     * Neither passed nor failed. Kept separate so the counts above are
+     * not read as covering the whole population when they do not.
+     */
+    notCheckable: [...doubleEntry.notCheckable, ...rollForward.notCheckable],
+  };
+
+  return {
+    company: companyArg ?? null,
+    passed,
+    period,
+    currency: currency.label,
+    payload,
+    findings,
+    exceptionCount: doubleEntry.imbalances.length + rollForward.exceptions.length,
+    informationalNotes: [
+      ...periodNotes,
+      ...ledgerWarnings,
+      ...groupWarnings,
+      ...voucherWarnings,
+      ...accounts.warnings,
+      ...adapted.warnings,
+      // Only when the currency WAS established — otherwise these are
+      // findings above and must not be duplicated here.
+      ...(currency.comparable ? currencyWarnings : []),
+    ],
+  };
+}
+
+/**
+ * Fold findings and notes into the response at the requested verbosity.
+ *
+ * Findings are NEVER dropped — only the informational notes are, and the
+ * count of what went is returned so the omission is visible.
+ */
+function applyVerbosity(
+  verbosity: 'full' | 'summary',
+  findings: readonly Finding[],
+  informationalNotes: readonly string[]
+): Record<string, unknown> {
+  const counts = summariseFindings(findings);
+  const shared = {
+    findings,
+    findingCounts: counts,
+    highestSeverity: highestSeverity(findings),
+  };
+
+  if (verbosity === 'summary') {
+    return {
+      ...shared,
+      verbosity,
+      /**
+       * Said as a count rather than silently: a reader must be able to tell
+       * that explanation was withheld, and how much, without guessing.
+       */
+      informationalNotesOmitted: informationalNotes.length,
+      ...(informationalNotes.length === 0
+        ? {}
+        : {
+            note:
+              `${String(informationalNotes.length)} informational note(s) about normal behaviour ` +
+              '(period defaulting, closing-balance timing, field coverage) were omitted. Nothing ' +
+              'indicating a problem was suppressed. Call again with verbosity "full" to read them.',
+          }),
+    };
+  }
+
+  return {
+    ...shared,
+    verbosity,
+    ...(informationalNotes.length > 0 ? { warnings: informationalNotes } : {}),
   };
 }
 
@@ -333,129 +675,112 @@ export function registerTieOutTools(server: McpServer, deps: ToolDeps): void {
       description: DESCRIPTION,
       inputSchema: z.object({
         company: companySchema,
+        companies: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(10)
+          .optional()
+          .describe(
+            'Check several companies in ONE call, each against its own books. Returns a ' +
+              'per-company result plus an overall verdict that passes only if every company ' +
+              'passes. Mutually exclusive with `company`. Each company is checked independently ' +
+              'and no figure is ever combined across them.'
+          ),
         ...dateRangeSchema,
+        verbosity: verbositySchema,
       }),
     },
     async (args) =>
       runTool('tally_check_tie_out', deps, async () => {
-        // Unlike every other tool, the default period here is the company's
-        // own financial year rather than the one containing today. The
-        // roll-forward compares against Tally's period-end closing balance, so
-        // a range that does not cover the company's period disagrees for
-        // reasons that are not errors — and this tool's whole value is that a
-        // disagreement means something.
-        const explicitDates = args.fromDate !== undefined || args.toDate !== undefined;
-        let period = resolvePeriod(args.fromDate, args.toDate);
-        const periodNotes: string[] = [];
+        const verbosity = args.verbosity ?? 'full';
+        const dates = { fromDate: args.fromDate, toDate: args.toDate };
 
-        if (!explicitDates) {
-          // By name where one was given. With several companies loaded and none
-          // named, this resolves to null and the note below fires — which is
-          // right: their book years differ, so picking the first company's year
-          // would check a period the company never closed against.
-          const company = await companyNamed(deps, args.company);
-          const startingFrom = company === null ? null : company.startingFrom;
-
-          if (company === null) {
-            // Several companies loaded and none named. Their book years differ
-            // — a German calendar year against two April years, live — so
-            // there is no "the company's year" to default to, and picking one
-            // would check a period that company never closed against.
-            periodNotes.push(
-              'No dates were given and TallyPrime has more than one company loaded, so whose book ' +
-                'year to use could not be determined. The period defaults to the financial year ' +
-                'containing today, which may not be any of their years — name a company to check ' +
-                'against its own. The roll-forward below will report differences that are not ' +
-                'errors if the period is wrong.'
-            );
-          } else if (startingFrom === null) {
-            periodNotes.push(
-              'TallyPrime did not report when this company books begin, so the period defaults to the financial year containing today. If that is not the company own year, the roll-forward check below will report differences that are not errors.'
-            );
-          } else {
-            // Anchored on the company's own start month, not on 1 April. A
-            // company whose books run January to December gets its January year;
-            // assuming April would pick a window that need not even contain the
-            // company's own data, and this tool's entire value rests on the
-            // period being the one Tally closed against.
-            period = bookYearFor(startingFrom, company.endingAt ?? startingFrom);
-            periodNotes.push(
-              `No dates were given, so this checked ${period.fromDate} to ${period.toDate} — the company's own book year, twelve months from the date its books begin.`
+        if (args.companies !== undefined) {
+          if (args.company !== undefined) {
+            throw new TallyError(
+              'INVALID_PARAMETERS',
+              'Give either `company` or `companies`, not both.',
+              {
+                suggestion:
+                  '`companies` already covers the single-company case — drop whichever you did ' +
+                  'not mean.',
+              }
             );
           }
-        } else {
-          periodNotes.push(
-            'Explicit dates were given. TallyPrime reported closing balances are as at its own period end, not the end of this range, so the balance roll-forward will show differences wherever the range does not cover the whole period. Those are not necessarily errors.'
+
+          const seen = new Set<string>();
+          for (const name of args.companies) {
+            const key = name.trim().toLowerCase();
+            if (seen.has(key)) {
+              throw new TallyError(
+                'INVALID_PARAMETERS',
+                `Company "${key}" is listed more than once.`,
+                {
+                  suggestion:
+                    'Checking one company twice would report the same exceptions twice and ' +
+                    'double the overall counts. Remove the repeat.',
+                }
+              );
+            }
+            seen.add(key);
+          }
+
+          // Resolved to Tally's own spelling BEFORE any work, so an unknown
+          // name fails fast rather than after several slow report fetches.
+          const canonical: string[] = [];
+          for (const name of args.companies) {
+            const resolved = await assertCompanyIsLoaded(deps, name);
+            if (resolved === undefined) {
+              throw new TallyError(
+                'TALLY_COMPANY_NOT_LOADED',
+                `Could not resolve the company "${name}".`
+              );
+            }
+            canonical.push(resolved);
+          }
+
+          // Sequential: Tally serves one request at a time, and awaiting in
+          // order keeps a failure attributable to the company that caused it.
+          const results: CompanyTieOut[] = [];
+          for (const company of canonical) {
+            results.push(await tieOutOneCompany(deps, company, dates));
+          }
+
+          const allFindings = results.flatMap((result) => result.findings);
+          const allNotes = results.flatMap((result) => result.informationalNotes);
+
+          // Passes only if EVERY company passes. A batch that reported a
+          // pass while one company was out would be worse than no gate.
+          const passed = results.every((result) => result.passed);
+
+          return whole(
+            {
+              passed,
+              companiesChecked: canonical,
+              /**
+               * Per company, never combined. Totals across separate legal
+               * entities are meaningless and, where currencies differ, wrong.
+               */
+              perCompany: results.map((result) => ({
+                company: result.company,
+                passed: result.passed,
+                exceptions: result.exceptionCount,
+                ...result.payload,
+              })),
+              ...applyVerbosity(verbosity, allFindings, allNotes),
+            },
+            results.reduce((total, result) => total + result.exceptionCount, 0)
           );
         }
 
-        const [{ ledgers, warnings: ledgerWarnings }, { groups, warnings: groupWarnings }] =
-          await Promise.all([fetchLedgers(deps, args.company), fetchGroups(deps, args.company)]);
-
-        const { vouchers, warnings: voucherWarnings } = await fetchVouchers(
-          deps,
-          args.company,
-          period
-        );
-
-        const entityId = args.company ?? 'loaded-company';
-        const accounts = adaptAccounts(groups, ledgers, { entityId });
-        const adapted = adaptVouchers(vouchers, { entityId });
-
-        const doubleEntry = checkDoubleEntry(adapted.data);
-        const rollForward = checkBalanceRollForward(accounts.data, adapted.data);
-
-        const passed = doubleEntry.imbalances.length === 0 && rollForward.exceptions.length === 0;
-
-        const warnings = [
-          ...periodNotes,
-          ...ledgerWarnings,
-          ...groupWarnings,
-          ...voucherWarnings,
-          ...accounts.warnings,
-          ...adapted.warnings,
-        ];
+        const result = await tieOutOneCompany(deps, args.company, dates);
 
         return whole(
           {
-            /**
-             * The gate. Spec §4 L5: a failure blocks output. This server
-             * cannot enforce that, so it states it plainly instead and the
-             * tool description tells Claude not to present figures over it.
-             */
-            passed,
-            period,
-            checks: {
-              doubleEntry: {
-                description: 'Every voucher debits equal its credits.',
-                vouchersChecked: doubleEntry.checked,
-                exceptions: doubleEntry.imbalances.length,
-                ...(doubleEntry.imbalances.length === 0
-                  ? {}
-                  : { totalOutBy: sumOf(doubleEntry.imbalances.map((item) => item.outBy)) }),
-              },
-              balanceRollForward: {
-                description:
-                  'Opening balance plus period movements equals the closing balance TallyPrime reports.',
-                accountsChecked: rollForward.checked,
-                exceptions: rollForward.exceptions.length,
-                ...(rollForward.exceptions.length === 0
-                  ? {}
-                  : {
-                      totalDifference: sumOf(rollForward.exceptions.map((item) => item.difference)),
-                    }),
-              },
-            },
-            unbalancedVouchers: doubleEntry.imbalances,
-            balanceExceptions: rollForward.exceptions,
-            /**
-             * Neither passed nor failed. Kept separate so the counts above are
-             * not read as covering the whole population when they do not.
-             */
-            notCheckable: [...doubleEntry.notCheckable, ...rollForward.notCheckable],
-            ...(warnings.length > 0 ? { warnings } : {}),
+            ...result.payload,
+            ...applyVerbosity(verbosity, result.findings, result.informationalNotes),
           },
-          doubleEntry.imbalances.length + rollForward.exceptions.length
+          result.exceptionCount
         );
       })
   );

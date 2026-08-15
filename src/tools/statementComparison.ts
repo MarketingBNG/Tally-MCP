@@ -49,6 +49,42 @@ export interface ComparisonAdapter {
   keyLabel: string;
 }
 
+/**
+ * True when every figure on this row is absent or zero.
+ *
+ * Used by `verbosity: "summary"` to leave nil rows out. A nil row carries no
+ * information a reader can act on — it is the chart of accounts showing
+ * through, not a fact about the period — and on a full chart these are usually
+ * most of the rows.
+ *
+ * A row is nil when every figure is absent or numerically zero, AND at least
+ * one of them is a real zero. Requiring one real zero is what stops a row from
+ * being dropped on the strength of nulls alone.
+ *
+ * ON NULLS. A null is usually just a column that does not apply — a trial
+ * balance row carries a debit or a credit, not both — but it is ALSO what an
+ * unparseable amount becomes. Treating those as nil is safe here only because
+ * the normaliser pushes a warning in both cases ("Could not read the amount…",
+ * "arrived with no amount block"), and summary mode keeps every warning it
+ * does not explicitly recognise as boilerplate. So the gap is disclosed
+ * whether or not the row itself is shown. If that ever stops being true, this
+ * function must stop treating null as nil.
+ */
+export function rowIsNil(figures: RowFigures): boolean {
+  const values = Object.values(figures);
+  if (values.length === 0) return false;
+
+  let sawRealZero = false;
+  for (const figure of values) {
+    if (figure === null) continue;
+    const parsed = Number(figure.amount);
+    if (!Number.isFinite(parsed) || parsed !== 0) return false;
+    sawRealZero = true;
+  }
+
+  return sawRealZero;
+}
+
 export interface FigureChange {
   /** The figure in the requested period. */
   current: Money | null;

@@ -12,6 +12,62 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.4.0 — unreleased
+**Read this first: "the books don't balance" could have been wrong.**
+
+Testing against three live companies on 15 Aug 2026 found a fault in the
+books-tie check itself. It is fixed, and it is the reason to update.
+
+- **The tie-out check reported books as OUT when they were fine.** Some supplier
+  and customer names come out of TallyPrime with a hidden line break in them —
+  a real German supplier is stored as "BUNDESANZEIGER VERLAG G⏎ MBH". The
+  connector was reading that name one way from the ledger list and a different
+  way from the transactions, so the two never lined up. It then saw **no
+  transactions at all** for those accounts, decided the closing balance could
+  not be explained, and reported the books as out of balance. On the company
+  tested it raised two failures against books that balance perfectly. If you
+  have run the books-tie check and it failed, **run it again** — the failure may
+  not have been real. Nothing was ever wrong with the figures themselves, only
+  with the verdict on them.
+
+- **Amounts now say which currency they are in.** Two of the three companies
+  tested had every figure labelled "unknown", because TallyPrime cannot send the
+  € or ₹ symbol — it substitutes a question mark. It turns out TallyPrime does
+  send the currency's full name ("European Euro", "INR") right alongside, and
+  the connector now reads that. Those companies' figures come back labelled EUR
+  and INR, taken from the company's own currency settings rather than guessed.
+  Where the currency genuinely cannot be established it still says "unknown"
+  rather than assuming.
+
+- **Figures from companies in different currencies are never subtracted.**
+  Comparing several companies side by side used to work out differences between
+  them whenever their currency labels matched — and while two companies were
+  both labelled "unknown", those labels matched. Euros could be subtracted from
+  rupees and presented as a difference. Now a difference is only worked out when
+  every currency is genuinely established, and the answer says so either way.
+
+- **The books-tie check labelled every amount as rupees.** It ignored the
+  company's own currency, so a euro company's exceptions were reported in INR.
+
+**New, and worth knowing about:**
+
+- **Check several companies in one go.** The books-tie check now accepts a list
+  of companies and checks each against its own books and its own financial year.
+  It only reports an overall pass if every company passes.
+
+- **Shorter answers when you want them.** Ask for a summary and you get the
+  findings without the standing explanation that accompanies every answer — on
+  the company tested that left out 538 explanatory notes. Anything reporting a
+  problem is always kept, whatever you ask for. A statement in summary form also
+  leaves out accounts that are nil, and says how many it left out.
+
+- **Findings now come with a severity.** Problems are tagged as a real exception,
+  as something that could not be checked, or as information — so a genuine
+  finding no longer has to be picked out of the notes by reading them.
+
+- **Stock movement warning was over-counting.** Asking about one stock item could
+  warn about delivery notes that concerned entirely different items.
+
 ## 0.3.1 — 2026-08-14
 **Read this first: three answers could be wrong, and one of them looked complete.**
 
