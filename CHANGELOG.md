@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-08-15
 **Read this first: "the books don't balance" could have been wrong.**
 
 Testing against three live companies on 15 Aug 2026 found a fault in the
