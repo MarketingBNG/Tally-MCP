@@ -68,18 +68,28 @@ $ZipPath = Join-Path $ReleaseDir "TallyPrime-for-Claude-$Version.zip"
 # --- Gate the release on the tests and the typechecker ---------------------
 # A broken release is far more expensive here than anywhere else: the audience
 # cannot diagnose it, and every copy has to be re-sent by hand.
-Write-Step 'Running typecheck, lint and tests'
+Write-Step 'Running typecheck and lint'
 npm run typecheck
 if ($LASTEXITCODE -ne 0) { throw 'Typecheck failed. Release stopped.' }
 npm run lint
 if ($LASTEXITCODE -ne 0) { throw 'Lint failed. Release stopped.' }
-npm test
-if ($LASTEXITCODE -ne 0) { throw 'Tests failed. Release stopped.' }
 
+# BUILD BEFORE TESTS. tests/integration/stdio.test.ts spawns dist\index.js to
+# exercise the real stdio transport, and it deliberately FAILS rather than
+# skips when dist\ is absent, so that end-to-end coverage cannot go quietly
+# missing. Nothing else creates dist\ — npm ci does not, and there is no
+# prepare script — so on a clean checkout, tests-then-build meant the release
+# died on that assertion while the integration tests never ran. Found when the
+# release workflow first built this on a fresh runner; it passed on developer
+# machines only because dist\ was already lying around from earlier work.
 Write-Step 'Building'
 npm run build
 if ($LASTEXITCODE -ne 0) { throw 'Build failed. Release stopped.' }
 if (-not (Test-Path (Join-Path $RepoRoot 'dist\index.js'))) { throw 'dist\index.js missing after build.' }
+
+Write-Step 'Running tests'
+npm test
+if ($LASTEXITCODE -ne 0) { throw 'Tests failed. Release stopped.' }
 
 # --- Clean staging ---------------------------------------------------------
 Write-Step 'Preparing staging folder'

@@ -50,11 +50,20 @@ jobs:
 
       - run: npm run lint
 
-      - run: npm test
-
-      # Last, because it writes dist/ and the checks above should fail on their
-      # own merits rather than on a build artefact.
+      # BEFORE the tests, not after.
+      #
+      # This used to run last, on the reasoning that the checks above should
+      # fail on their own merits rather than on a build artefact. That was
+      # wrong here: tests/integration/stdio.test.ts spawns `dist/index.js` to
+      # exercise the real stdio transport, and it deliberately FAILS rather
+      # than skips when dist/ is absent, so that the end-to-end coverage cannot
+      # go quietly missing. On a clean checkout nothing has built dist/ yet —
+      # `npm ci` does not, there is no prepare script — so running tests first
+      # meant this job failed on every push while the four integration tests it
+      # was meant to run never executed at all.
       - run: npm run build
+
+      - run: npm test
 
       # Assembles the real distributable, minus the bundled runtime download.
       #
