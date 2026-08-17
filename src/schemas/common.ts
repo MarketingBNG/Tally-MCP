@@ -139,8 +139,10 @@ export const nameSchema = z
   .min(1)
   .optional()
   .describe(
-    'Exact name to fetch a single record by, as it appears in TallyPrime. Mutually exclusive ' +
-      'in effect with `query` — when both are given, `name` wins. Omit to list/search instead.'
+    'Exact name to fetch a single record by, as it appears in TallyPrime. Returns that one ' +
+      'record, or fails if no record has that name. Mutually exclusive with `query` and ' +
+      '`conditions`: passing it alongside either fails with INVALID_PARAMETERS rather than ' +
+      'quietly ignoring one of them. Omit to list/search instead.'
   );
 
 /**

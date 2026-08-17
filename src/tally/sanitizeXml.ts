@@ -59,21 +59,33 @@ export interface SanitizeResult {
   repairs: string[];
 }
 
-/** Drop forbidden code points, reporting how many were removed. */
+/**
+ * Drop forbidden code points, reporting how many were removed.
+ *
+ * Scans UTF-16 code units rather than code points: every illegal code point is
+ * below 160, so it can never be half of a surrogate pair, and the two scans
+ * therefore agree — but the code-unit one does not have to decode the payload.
+ *
+ * The common case by far is a payload with nothing to strip, so that case
+ * returns the input itself and allocates nothing. When there is something to
+ * strip, the kept runs are sliced out whole and joined once; building the
+ * result a character at a time is what made this the slowest step in the
+ * pipeline on a multi-megabyte voucher register.
+ */
 function stripIllegalCharacters(input: string): { text: string; removed: number } {
-  let removed = 0;
-  let out = '';
+  const kept: string[] = [];
+  let runStart = 0;
 
-  for (const char of input) {
-    const code = char.codePointAt(0);
-    if (code !== undefined && isIllegalCodePoint(code)) {
-      removed += 1;
-      continue;
-    }
-    out += char;
+  for (let i = 0; i < input.length; i += 1) {
+    if (!isIllegalCodePoint(input.charCodeAt(i))) continue;
+    kept.push(input.slice(runStart, i));
+    runStart = i + 1;
   }
 
-  return { text: out, removed };
+  if (runStart === 0) return { text: input, removed: 0 };
+
+  kept.push(input.slice(runStart));
+  return { text: kept.join(''), removed: kept.length - 1 };
 }
 
 /**
@@ -113,9 +125,15 @@ export function sanitizeTallyXml(raw: string): SanitizeResult {
     repairs.push(`Removed ${String(stripped.removed)} raw control character(s) from the payload.`);
   }
 
-  const bareAmpersands = xml.match(BARE_AMPERSAND)?.length ?? 0;
+  // Counted in the replacement callback rather than by a separate `.match()`,
+  // so the payload is traversed once here instead of twice.
+  let bareAmpersands = 0;
+  const escaped = xml.replace(BARE_AMPERSAND, () => {
+    bareAmpersands += 1;
+    return '&amp;';
+  });
   if (bareAmpersands > 0) {
-    xml = xml.replace(BARE_AMPERSAND, '&amp;');
+    xml = escaped;
     repairs.push(`Escaped ${String(bareAmpersands)} unescaped ampersand(s) in text fields.`);
   }
 

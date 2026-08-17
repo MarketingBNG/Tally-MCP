@@ -17,9 +17,22 @@
     "exactOptionalPropertyTypes": true,
     "useUnknownInCatchVariables": true,
 
-    "declaration": true,
+    // No .d.ts: this package is not imported as a library. package.json
+    // declares no "types" and no "exports" — the only consumer is
+    // `node dist/index.js` through the `bin` entry — so emitting declarations
+    // was type-checking work and output nothing reads.
+    "declaration": false,
+    // Kept. A stack trace from an accountant's machine pointing at the
+    // TypeScript is worth more than the seconds this costs to emit.
     "sourceMap": true,
     "removeComments": false,
+
+    // NOT incremental, deliberately. It was tried and reverted: with a build
+    // info file present, `tsc` left dist/tools/reports.js stale after its source
+    // had changed, and the build reported success. That is precisely the failure
+    // this project has already been burned by — Claude Desktop runs dist/, so a
+    // stale build has NO symptom except that the server behaves like the last
+    // one. A full compile costs about a second more and cannot do that.
 
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,

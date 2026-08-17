@@ -115,22 +115,20 @@ const DESCRIPTION = [
   '- voucherNumber: fetch vouchers with that exact number (case-insensitive) in the period. ' +
     'Numbers are only unique per type and period, so ALL matches are returned rather than an ' +
     'arbitrary one. Fails with TALLY_COMPANY_NOT_FOUND if none match.',
+  // Each filter documents its own semantics on its own parameter, which is
+  // where Claude reads them when filling the call in. What stays here is what
+  // has no parameter to live on: which filter to REACH FOR, and the two
+  // consequences that are not properties of any one of them.
   '- any of family/query/voucherType/ledger/party/narration/fieldMatch/minAmount/maxAmount: ' +
     'search, applying every filter as an AND. All text matching is case-insensitive substring.',
-  '  - "family" resolves every company-specific type deriving from the built-in Sales or Purchase ' +
-    'type (e.g. "Tax Invoice" derives from Sales), so it catches renamed types that matching on ' +
-    'the name would miss. No total is returned for a family search: which entry represents "the ' +
-    'sale" — party side, revenue net of tax, or gross — is an interpretation, not a fact.',
-  '  - "query" is the broad one: voucher number, party, narration and entry ledger names.',
-  '  - "ledger" matches any entry account; "party" only the counterparty; "narration" the ' +
-    'narration alone.',
-  '  - "voucherType" is exact and case-insensitive. Prefer "family" where the company may have ' +
-    'renamed the built-in type.',
-  '  - "fieldMatch" searches the VALUE of every field including nested bank and tax structures. ' +
-    'Use it for reference, cheque or UTR numbers, where the field NAME differs between companies.',
-  '  - minAmount/maxAmount compare against the largest absolute entry amount on the voucher. Your ' +
-    'threshold — the server supplies none. A voucher whose amounts are all unreadable is KEPT ' +
-    'rather than scored as zero, so the population stays complete.',
+  '  - Breadth, widest first: "query" spans several fields, "ledger" any entry account, "party" ' +
+    'the counterparty alone, "narration" the narration alone. Reach for "fieldMatch" when the ' +
+    'field NAME differs between companies, and for "family" over "voucherType" wherever the ' +
+    'company may have renamed a built-in type.',
+  '  - No total is returned for a family search: which entry represents "the sale" — party side, ' +
+    'revenue net of tax, or gross — is an interpretation, not a fact.',
+  '  - A voucher whose amounts are all unreadable is KEPT rather than scored as zero, so the ' +
+    'population stays complete.',
   '- none given: list every voucher in the period.',
   '',
   'RETURNS: per voucher — date, type, number, party ledger, narration, cancelled/optional flags, ' +
@@ -410,6 +408,12 @@ export async function fetchVouchers(
     const hit = perClient.get(key);
     if (hit !== undefined && Date.now() - hit.at < ttl) {
       deps.logger.debug('voucher parse served from cache', { key });
+      // Re-insert to move this key to the end. Map iterates in insertion order,
+      // so deleting the FIRST key then evicts the least recently USED rather
+      // than the least recently fetched — which is the difference between
+      // keeping the period a conversation keeps returning to and dropping it.
+      perClient.delete(key);
+      perClient.set(key, hit);
       return hit.value;
     }
   }
@@ -458,13 +462,24 @@ export async function fetchVouchers(
     // It is still a bound rather than a cache policy: these are parses of an
     // 8.6–18.3MB payload, so it cannot grow freely.
     const MAX_PARSED_PERIODS = 6;
-    if (perClient.size >= MAX_PARSED_PERIODS) {
-      // Insertion order, which Map preserves — close enough to LRU for a bound
-      // whose only job is to stop unbounded growth.
-      const oldest = perClient.keys().next().value;
-      if (oldest !== undefined) perClient.delete(oldest);
+    const now = Date.now();
+
+    // Expired entries first. Nothing used to remove these: an entry that could
+    // no longer be served still occupied one of the six slots until the exact
+    // same key was requested again, so a cache nominally holding six periods
+    // could be holding one live entry and five parses of a payload it would
+    // refuse to hand back. Each is an 8.6-18.3MB parse, so the slots are worth
+    // reclaiming even though the correctness of a hit never depended on it.
+    for (const [entryKey, entry] of perClient) {
+      if (now - entry.at >= ttl) perClient.delete(entryKey);
     }
-    perClient.set(key, { at: Date.now(), value });
+
+    if (perClient.size >= MAX_PARSED_PERIODS) {
+      // The least recently USED key — see the re-insert on the hit path above.
+      const evictable = perClient.keys().next().value;
+      if (evictable !== undefined) perClient.delete(evictable);
+    }
+    perClient.set(key, { at: now, value });
   }
 
   return value;

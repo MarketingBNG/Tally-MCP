@@ -109,6 +109,54 @@ describe('sanitizeTallyXml', () => {
     expect(() => sanitizeTallyXml('')).not.toThrow();
     expect(() => sanitizeTallyXml('<<<>>>not xml at all&&&')).not.toThrow();
   });
+
+  /**
+   * Pins the exact output for a payload exercising all four repair classes at
+   * once, so the sanitiser can be reimplemented for speed without anyone having
+   * to reason about whether the result still comes out byte-for-byte the same.
+   * If this fails, the rewrite changed behaviour — that is the whole point.
+   */
+  it('produces byte-identical output for every repair class at once', () => {
+    const raw = [
+      String.fromCharCode(0xfeff),
+      '<?xml version="1.0"?>',
+      '<ENVELOPE>',
+      `<NARRATION>M/s Gupta & Co&#4; inv${String.fromCharCode(1)} 12&#x1F;3</NARRATION>`,
+      '<PARTYNAME>caf&#233; &amp; bar &lt;x&gt;</PARTYNAME>',
+      `<TAB>a&#9;b${String.fromCharCode(9)}c${String.fromCharCode(0x85)}</TAB>`,
+      `<HIGH>ÿ😀</HIGH>`,
+      '</ENVELOPE>',
+    ].join('');
+
+    const result = sanitizeTallyXml(raw);
+
+    expect(result.xml).toBe(
+      '<?xml version="1.0"?>' +
+        '<ENVELOPE>' +
+        '<NARRATION>M/s Gupta &amp; Co inv 123</NARRATION>' +
+        '<PARTYNAME>caf&#233; &amp; bar &lt;x&gt;</PARTYNAME>' +
+        `<TAB>a&#9;b${String.fromCharCode(9)}c</TAB>` +
+        '<HIGH>ÿ😀</HIGH>' +
+        '</ENVELOPE>'
+    );
+
+    expect(result.repairs).toEqual([
+      'Removed a byte-order mark preceding the XML declaration.',
+      'Removed 2 illegal control-character reference(s) from text fields.',
+      'Removed 2 raw control character(s) from the payload.',
+      'Escaped 1 unescaped ampersand(s) in text fields.',
+    ]);
+  });
+
+  it('leaves an astral-plane character intact', () => {
+    // Illegal code points are all below 160, so no surrogate pair can contain
+    // one — a code-unit scan must not mistake half a pair for a control byte.
+    const raw = '<A>😀𐀀</A>';
+    const result = sanitizeTallyXml(raw);
+
+    expect(result.xml).toBe(raw);
+    expect(result.repairs).toEqual([]);
+  });
 });
 
 describe('normalizeEncodingDeclaration', () => {

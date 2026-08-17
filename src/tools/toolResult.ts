@@ -490,16 +490,31 @@ export async function runTool(
 
   // Held outside the try so that a failure still reports the requests that
   // were sent before it — those are the ones worth seeing in a diagnosis.
-  const scope: QueryScope = { queries: [], oldestFetchAt: null };
+  // Shared by both scopes below, so the second does not re-send what the first
+  // already fetched. Held here rather than reached for through `scope` so the
+  // sharing is visible at the point it is decided.
+  const inFlight = new Map<string, Promise<unknown>>();
+  const scope: QueryScope = { queries: [], oldestFetchAt: null, inFlight };
   const queries = scope.queries;
 
   try {
     const result = await withQueryLog(scope, body);
 
-    // Resolved outside the query log on purpose: this is metadata about the
+    // Resolved outside the QUERY LOG on purpose: this is metadata about the
     // answer, not one of the queries that produced it, and recording it would
     // put a request in `source_query` that reproduces none of the figures.
-    const companyId = await resolveCompanyId(deps, queries);
+    //
+    // It does share the in-flight memo, though — those are separate concerns.
+    // Falling back to the sole loaded company re-sends the company-list request
+    // the body has almost certainly already sent, and there is no reason to pay
+    // for it twice to keep it out of the provenance. The throwaway scope is
+    // what keeps it out: its `queries` and `oldestFetchAt` are discarded, so
+    // this records exactly as much as it did when it ran outside a scope
+    // entirely, which is nothing.
+    const companyId = await withQueryLog(
+      { queries: [], oldestFetchAt: null, inFlight },
+      () => resolveCompanyId(deps, queries)
+    );
 
     const envelope: ToolEnvelope = {
       data: result.data,

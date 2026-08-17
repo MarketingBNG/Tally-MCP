@@ -212,7 +212,9 @@ const DESCRIPTION = [
   '- conditions given: combine several fields at once, all ANDed. An unknown field, or an op ' +
     "invalid for that field's type, fails with INVALID_PARAMETERS rather than being ignored.",
   '- none given: list everything of that type.',
-  'name, query and conditions may be combined; each narrows the result further.',
+  '`query` and `conditions` combine, each narrowing the result further. `name` does NOT combine ' +
+    'with either — it returns one record rather than a list — and passing it alongside them ' +
+    'fails with INVALID_PARAMETERS rather than silently dropping one.',
   '',
   'FILTERABLE FIELDS AND WHAT `query` SEARCHES, per type:',
   '- ledger: name (string), parent (string), gstin (string), openingBalance (money), ' +
@@ -308,6 +310,35 @@ export function registerMasterTools(server: McpServer, deps: ToolDeps): void {
               suggestion:
                 'Pass the name as `query` instead. That list is small enough that a substring ' +
                 'match is unambiguous in practice.',
+            }
+          );
+        }
+
+        // `name` is an exact single-record lookup and returns a different SHAPE
+        // from the list modes — one record, or TALLY_COMPANY_NOT_FOUND — so
+        // there is no coherent way to also apply a substring or a condition to
+        // it. "The ledger named X, but only if it contains Y" has no answer that
+        // is not either the record or an error.
+        //
+        // This used to resolve silently in `name`'s favour: the early return
+        // below meant a call carrying both returned the named record as though
+        // the `query` had been applied, and the tool description told Claude the
+        // two combined and each narrowed the result. A caller who passed a
+        // contradictory pair got a confident wrong answer with nothing to
+        // indicate half the request had been dropped. Raised before the fetch,
+        // so a malformed call costs no round trip.
+        if (
+          args.name !== undefined &&
+          (args.query !== undefined || (args.conditions !== undefined && args.conditions.length > 0))
+        ) {
+          throw new TallyError(
+            'INVALID_PARAMETERS',
+            'Give either `name` or `query`/`conditions`, not both.',
+            {
+              suggestion:
+                '`name` fetches the one record with that exact name; `query` and `conditions` ' +
+                'filter a list. To narrow a list, drop `name`. To test one record against a ' +
+                'condition, fetch it by `name` and read the field off the record returned.',
             }
           );
         }

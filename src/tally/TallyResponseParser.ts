@@ -283,9 +283,22 @@ export function findAll(nodes: readonly TallyNode[], tag: string): TallyNode[] {
   return found;
 }
 
-/** The first descendant with the given tag name, or null. */
+/**
+ * The first descendant with the given tag name, or null.
+ *
+ * Walks in the same document order as `findAll` and stops at the first hit,
+ * rather than collecting every match and discarding all but the first. Same
+ * node either way — but `dataScope` calls this on every response to find one
+ * `DATA` element near the top, and the collecting form paid a walk of the
+ * entire multi-megabyte tree to do it.
+ */
 export function findFirst(nodes: readonly TallyNode[], tag: string): TallyNode | null {
-  return findAll(nodes, tag)[0] ?? null;
+  for (const node of nodes) {
+    if (tagNameOf(node) === tag) return node;
+    const nested = findFirst(childrenOf(node), tag);
+    if (nested !== null) return nested;
+  }
+  return null;
 }
 
 /**

@@ -159,6 +159,47 @@ describe('tally_get_masters answers all four master questions', () => {
     expect(error.suggestion).toContain('query');
   });
 
+  /**
+   * `name` used to win silently over `query` and `conditions`.
+   *
+   * The handler returned early on `name`, so the other two were never applied —
+   * while the tool description told Claude that all three combined and each
+   * narrowed the result. A call carrying a contradictory pair therefore came
+   * back with the named record, looking exactly like a filtered answer that had
+   * been honoured. Nothing in the response said half the request was dropped,
+   * which is why this is asserted rather than left to the description.
+   */
+  it('refuses `name` together with `query`, instead of silently dropping the query', async () => {
+    const error = await callToolError(build(), 'tally_get_masters', {
+      type: 'ledger',
+      name: 'Accounting Charges',
+      query: 'nothing-like-cash',
+    });
+    expect(error.code).toBe('INVALID_PARAMETERS');
+    expect(error.message).toContain('not both');
+  });
+
+  it('refuses `name` together with `conditions` for the same reason', async () => {
+    const error = await callToolError(build(), 'tally_get_masters', {
+      type: 'ledger',
+      name: 'Accounting Charges',
+      conditions: [{ field: 'gstin', op: 'isNotNull' }],
+    });
+    expect(error.code).toBe('INVALID_PARAMETERS');
+    expect(error.message).toContain('not both');
+  });
+
+  it('still accepts `name` alone, and an empty conditions array alongside it', async () => {
+    // An empty array is not a condition. Rejecting it would break a caller that
+    // builds the argument list programmatically and passes [] for "no filters".
+    const result = await callToolOk(build(), 'tally_get_masters', {
+      type: 'ledger',
+      name: 'Accounting Charges',
+      conditions: [],
+    });
+    expect(result.ledger).toBeDefined();
+  });
+
   it('applies conditions per type with that type own fields', async () => {
     const result = await callToolOk(build(), 'tally_get_masters', {
       type: 'group',

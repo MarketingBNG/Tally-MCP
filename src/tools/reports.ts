@@ -110,50 +110,46 @@ const END_DATE_NOTE = [
     'or tally_summarise_movements, whose ranges are honoured to the day.',
 ].join('\n');
 
+/**
+ * What comes BACK from a multi-period or multi-company call.
+ *
+ * Deliberately says nothing about how to ASK for one. Each of `companies`,
+ * `periods` and `compareFromDate`/`compareToDate` documents its own limits on
+ * its own parameter, which is where Claude reads them when filling the call in;
+ * this note used to restate all of it a second time, and at roughly three
+ * thousand characters repeated on every request that was the single most
+ * expensive paragraph in the tool list. What survives is the part with no
+ * parameter to live on — the shape of the answer, and the two ways of
+ * misreading it that produce a confidently wrong figure.
+ */
 const COMPARISON_NOTE = [
-  'SEVERAL COMPANIES SIDE BY SIDE: pass `companies` — two to ten names, all already OPEN in ' +
-    'TallyPrime, which holds several at once. Each is read in turn and the rows are paired by ' +
-    'name. Requires explicit fromDate and toDate, because the companies keep DIFFERENT BOOK ' +
-    'YEARS and a defaulted period would compare different months under one heading. Differences ' +
-    'between companies are computed ONLY where every company reports the same currency; where ' +
-    'they do not, the columns are still shown but nothing is subtracted, because a dollar figure ' +
-    'minus a rupee one looks like a movement and means nothing. Nothing here converts between ' +
-    'currencies, ever. Read the columns; do not total the row.',
+  'MORE THAN ONE COLUMN: compareFromDate/compareToDate for a second period, `periods` for a ' +
+    'trend of two to twelve, `companies` for two to ten companies side by side. Mutually ' +
+    'exclusive; each parameter carries its own rules. What follows is how to READ the result.',
   '',
-  'A TREND ACROSS MANY PERIODS: pass `periods` — two to twelve {fromDate, toDate} pairs — and ' +
-    'every row is tracked through the series, with the movement between consecutive periods. ' +
-    'Periods stay in the order you give them and are NOT sorted. Rows pair by NAME and only when ' +
-    'unambiguous: a name appearing twice in any one period is excluded from the whole series ' +
-    'rather than tracked in some periods and not others. A row missing from a period is NULL, ' +
-    'never zero — read `presentIn` before treating a series as a shape, because a null read as ' +
-    'zero looks like a fall to nothing when TallyPrime simply did not report the row. EVERY ' +
-    'period end date must fall on a 31st, or the whole trend is refused; a single statement is ' +
-    'answered-with-caveats in that case, but a trend is not, because every period would ' +
-    'accumulate to the same endpoint and the movements would be differences between overlapping ' +
-    'accumulations rather than period-to-period change.',
+  'The response carries `rows`, plus `comparison` holding its own `rows`, a `changes` array and ' +
+    '`unpaired`.',
   '',
-  'COMPARING TWO PERIODS: pass compareFromDate and compareToDate to fetch the statement twice in ' +
-    'one call. Never defaulted — supply both or neither.',
+  'PAIRING is by NAME, and only where the name occurs exactly once on BOTH sides. A name ' +
+    'appearing twice in any one period is excluded from the whole series rather than tracked in ' +
+    'some periods and not others. Repeats land in `unpaired.ambiguous`; names present on one side ' +
+    'only land in `unpaired.currentOnly` / `comparisonOnly`.',
   '',
-  'REFUSED unless BOTH periods end on a 31st, because of the end-date behaviour above: two ' +
-    'periods that both got extended to the same year end would subtract to minus the whole ' +
-    'earlier period rather than the movement between them, so the call fails with ' +
-    'TALLY_UNSUPPORTED_OPERATION rather than return a wrong figure of plausible size. Shift each ' +
-    'end date to a 31st and the comparison works.',
+  'NULL IS NOT ZERO. A row missing from a period is null — TallyPrime reported nothing, which is ' +
+    'not the same as it reporting nil. Read `presentIn` before treating a series as a shape: a ' +
+    'null read as zero looks like a fall to nothing. A null on either side gives `change: null` ' +
+    'and a `basis` naming the missing side.',
   '',
-  'The response carries `rows` plus `comparison` holding its own `rows`, a `changes` array and ' +
-    '`unpaired`. `change` = current − previous in TallyPrime signs on BOTH sides, so a growing ' +
+  'DIRECTION: `change` = current − previous in TallyPrime signs on BOTH sides, so a growing ' +
     'DEBIT balance gives a MORE NEGATIVE change. Describe direction from the magnitudes and say ' +
     'which way you read it; never call a negative change a decrease without checking the side.',
   '',
-  'Two limits on `changes`:',
-  '- NULL in either period gives `change: null` and a `basis` naming the missing side. Null is ' +
-    'Tally reporting nothing, not zero — never report such a row as having fallen to nil.',
-  '- Rows pair by name, only where it occurs exactly once in BOTH periods. Repeats land in ' +
-    '`unpaired.ambiguous`; names in one period only land in `unpaired.currentOnly` / ' +
-    '`comparisonOnly` — an absent row, again not a zero.',
+  'CURRENCY: nothing here converts between currencies, ever. Where the companies compared do not ' +
+    'all report the same one, the columns are shown but nothing is subtracted — a dollar figure ' +
+    'minus a rupee one looks like a movement and means nothing. Read the columns; do not total ' +
+    'the row.',
   '',
-  'COST: two sequential report fetches, roughly double a single-period call.',
+  'COST: one report fetch per period per company, run in turn.',
 ].join('\n');
 
 const TRIAL_BALANCE_SUMMARY = [
@@ -870,7 +866,12 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
         compareToDate: isoDateSchema
           .optional()
           .describe(
-            'End of the comparison period, ISO YYYY-MM-DD. Must be on or after compareFromDate.'
+            'End of the comparison period, ISO YYYY-MM-DD. Must be on or after compareFromDate. ' +
+              'This AND toDate must both fall on the 31st of a month — see the end-date rule in ' +
+              'the description. Otherwise the call is refused with TALLY_UNSUPPORTED_OPERATION: ' +
+              'two periods both silently extended to the same year end would subtract to minus ' +
+              'the whole earlier period rather than the movement between them, which is a wrong ' +
+              'figure of entirely plausible size. Shift each end date to a 31st and it works.'
           ),
         companies: z
           .array(z.string().min(1))

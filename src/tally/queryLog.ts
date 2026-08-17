@@ -40,6 +40,13 @@ export interface QueryScope {
    * stalest thing in it.
    */
   oldestFetchAt: number | null;
+  /**
+   * Requests already issued during this call, so an identical one made again
+   * before the first has even returned shares that answer instead of queueing
+   * behind it. Created on first use; discarded with the scope when the call
+   * ends, so it can never serve data from an earlier question.
+   */
+  inFlight?: Map<string, Promise<unknown>>;
 }
 
 const storage = new AsyncLocalStorage<QueryScope>();
@@ -80,4 +87,47 @@ export function noteDataFetchedAt(fetchedAt: number): void {
  */
 export function noteQuery(body: string): void {
   storage.getStore()?.queries.push(body);
+}
+
+/**
+ * Run `produce` at most once per `key` for the duration of the current tool
+ * call, sharing its result with every later caller that asks for the same key.
+ *
+ * WHY: answering one question makes the same request several times over. A
+ * single statement call resolves the loaded company, then its book year, then
+ * its currency — three helpers that each send the identical company-list
+ * request, and a multi-company report multiplies that by the company count.
+ * The response cache already hides most of the cost, but it is TTL-gated, so
+ * with the TTL configured to zero every one of those becomes a real round trip
+ * through a queue that admits one request at a time.
+ *
+ * This is deliberately NOT a second cache. It is scoped to one call and cannot
+ * outlive it, so it never returns anything the call would not have accepted
+ * from a fresh send a moment later — within a single question, Tally's answer
+ * to the same request cannot have legitimately changed.
+ *
+ * Stores the promise rather than the resolved value, so concurrent callers
+ * (`Promise.all` over ledgers and groups, say) collapse onto one send instead
+ * of each starting their own.
+ *
+ * A rejection is memoised along with everything else, deliberately. Nothing
+ * beneath this retries, so an identical request repeated within the same call
+ * would fail in exactly the same way — releasing the key on failure would buy
+ * a second identical failure rather than a second chance. It matters more than
+ * it sounds: an optional lookup such as the currency list fails on companies
+ * that define none, and that is the ordinary case rather than the exception.
+ *
+ * Outside a scope it simply calls `produce`, like the rest of this module.
+ */
+export function memoizeWithinCall<T>(key: string, produce: () => Promise<T>): Promise<T> {
+  const scope = storage.getStore();
+  if (scope === undefined) return produce();
+
+  const inFlight = (scope.inFlight ??= new Map<string, Promise<unknown>>());
+  const existing = inFlight.get(key);
+  if (existing !== undefined) return existing as Promise<T>;
+
+  const started = produce();
+  inFlight.set(key, started);
+  return started;
 }

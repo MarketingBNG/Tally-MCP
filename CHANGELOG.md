@@ -12,6 +12,39 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.4.1 — unreleased
+**Read this first: one way of asking for a single ledger could give you the
+wrong record.**
+
+- **Asking for one ledger by name while also passing a search term returned the
+  named ledger and ignored the search.** If you asked for "the ledger named X"
+  and, in the same breath, narrowed it by a search word or a condition, only the
+  name was used — the rest of what you asked for was dropped, and nothing in the
+  answer said so. The reply looked exactly like a filtered one that had been
+  honoured. Asking that way now comes back as a clear error telling you to pick
+  one or the other, so a half-answered question can no longer look like a whole
+  one. Asking by name on its own is unchanged.
+
+- **Large voucher fetches are much faster.** Cleaning up what TallyPrime sends
+  took about 1.6 seconds on a big voucher register and now takes under a tenth of
+  a second. Nothing about the figures changed — this is the same work done a
+  better way.
+
+- **Fewer repeated requests to TallyPrime.** Answering one question used to ask
+  Tally the same thing up to three times over — which company is open, what its
+  year is, what currency it uses. It now asks once per question. Tally handles one
+  request at a time, so this is time back on every answer, and it matters most on
+  the slowest ones.
+
+- **Held-in-memory voucher data is managed better.** When the connector was
+  keeping several periods' vouchers to avoid re-reading them, out-of-date copies
+  could sit there occupying space that a period you were actually working in
+  needed. They are now cleared out properly.
+
+The speed work was checked by running the same twelve questions against a live
+TallyPrime before and after, and comparing the answers character by character:
+every one came back identical.
+
 ## 0.4.0 — 2026-08-15
 **Read this first: "the books don't balance" could have been wrong.**
 
