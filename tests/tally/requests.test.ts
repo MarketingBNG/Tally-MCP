@@ -80,6 +80,26 @@ describe('request builders', () => {
     expect(request).toContain('<NATIVEMETHOD>ClosingBalance</NATIVEMETHOD>');
   });
 
+  it('asks for ClosingBalance even in allFields mode, because FETCH * omits it', () => {
+    // Verified live 2026-08-17: `*` does NOT carry ClosingBalance, so the
+    // "everything" path returned null for the one number that matters most on
+    // a party account — and null means "unreadable" everywhere else in this
+    // server. Naming it alongside the wildcard is what makes the two modes
+    // agree.
+    const request = buildLedgerListRequest({}, true);
+    expect(request).toContain('<FETCH>*</FETCH>');
+    expect(request).toContain('<NATIVEMETHOD>ClosingBalance</NATIVEMETHOD>');
+    expect(request).toContain('<NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>');
+  });
+
+  it('returns the same curated fields in both modes, so a mode switch loses nothing', () => {
+    const curated = buildLedgerListRequest();
+    const everything = buildLedgerListRequest({}, true);
+    for (const method of curated.match(/<NATIVEMETHOD>[^<]+<\/NATIVEMETHOD>/g) ?? []) {
+      expect(everything).toContain(method);
+    }
+  });
+
   it('produces a balanced envelope', () => {
     const request = buildLedgerListRequest({ company: 'Acme' });
     expect(request.startsWith('<ENVELOPE>')).toBe(true);

@@ -122,10 +122,20 @@ export function buildCollectionRequest(
   nativeMethods: readonly string[] | '*',
   options: TallyRequestOptions = {}
 ): string {
+  // `*` may arrive on its own or inside the list. Inside the list it means
+  // "everything, AND these by name" — which is not redundant, because Tally's
+  // wildcard is not a superset: it omits ClosingBalance on a Ledger and every
+  // entry list on a Voucher. Both of those were live-verified data losses, so
+  // the wildcard always emits as <FETCH> and the named fields as NATIVEMETHODs
+  // alongside it, rather than one being expressed in terms of the other.
+  const requested = nativeMethods === '*' ? ['*'] : nativeMethods;
+  const wildcard = requested.includes('*') ? '<FETCH>*</FETCH>' : '';
   const methods =
-    nativeMethods === '*'
-      ? '<FETCH>*</FETCH>'
-      : nativeMethods.map((method) => `<NATIVEMETHOD>${escapeXml(method)}</NATIVEMETHOD>`).join('');
+    wildcard +
+    requested
+      .filter((method) => method !== '*')
+      .map((method) => `<NATIVEMETHOD>${escapeXml(method)}</NATIVEMETHOD>`)
+      .join('');
 
   return [
     '<ENVELOPE>',
@@ -203,30 +213,51 @@ export function buildLedgerListRequest(
   return buildCollectionRequest(
     'Ledgers',
     'Ledger',
-    allFields
-      ? '*'
-      : [
-          'Name',
-          'Parent',
-          'OpeningBalance',
-          'ClosingBalance',
-          'LedgerPhone',
-          'LedgerContact',
-          'PartyGSTIN',
-          'GSTRegistrationType',
-          'IsBillWiseOn',
-          'IsCostCentresOn',
-          // Tally's own related-party flag. Verified live 2026-08-14: a real
-          // ledger master field, returned populated on 330 of 330 ledgers. It
-          // corrects earlier research for this project which concluded that
-          // TallyPrime holds no related-party marking at all — it does, and it
-          // is the right SEED for related-party screening even though it is not
-          // by itself a complete list.
-          'IsRelatedParty',
-        ],
+    // Order matters for `allFields`, exactly as it does for vouchers: `*` first,
+    // then the curated names, because the wildcard does not imply them.
+    allFields ? ['*', ...LEDGER_FIELDS] : LEDGER_FIELDS,
     options
   );
 }
+
+/**
+ * The curated ledger fields, named once because `allFields` must ALSO request
+ * them rather than relying on `*`.
+ *
+ * WHY. `<FETCH>*</FETCH>` does not include `ClosingBalance`. Verified live
+ * 2026-08-17 against MUDALS TECHNOLOGIES: listing ledgers returned ADP India
+ * Pvt. Ltd. with a closing balance of -14,822,831, while fetching that same
+ * ledger BY NAME — which takes the `allFields` path — returned `null` for it.
+ * The wildcard is not the superset its name implies; it is a different set.
+ *
+ * That made the failure worse than a missing field. Rule 1 of the model is
+ * that `null` means unreadable, so the most complete request available was
+ * reporting the most important number on the account as unavailable when Tally
+ * would have sent it for the asking. An accountant opening one party's detail
+ * would read a blank balance as nothing to see.
+ *
+ * The cost of naming them alongside `*` is a duplicated tag or two in a
+ * response already carrying ninety fields.
+ */
+const LEDGER_FIELDS = [
+  'Name',
+  'Parent',
+  'OpeningBalance',
+  'ClosingBalance',
+  'LedgerPhone',
+  'LedgerContact',
+  'PartyGSTIN',
+  'GSTRegistrationType',
+  'IsBillWiseOn',
+  'IsCostCentresOn',
+  // Tally's own related-party flag. Verified live 2026-08-14: a real
+  // ledger master field, returned populated on 330 of 330 ledgers. It
+  // corrects earlier research for this project which concluded that
+  // TallyPrime holds no related-party marking at all — it does, and it
+  // is the right SEED for related-party screening even though it is not
+  // by itself a complete list.
+  'IsRelatedParty',
+] as const;
 
 /**
  * Ledger groups — the chart of accounts hierarchy itself, as distinct from

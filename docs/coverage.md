@@ -70,7 +70,7 @@ three did not resolve them, because all three lack the same features.
 | Data | Status | Route | Evidence / reason |
 |---|---|---|---|
 | Companies (name, start date) | reachable | `Company` collection | production |
-| Company `EndingAt` | **blocked (ours)** | `Company` collection | Tally returns `20260728`; **no tool surfaces it.** Needed for the fiscal-year fix |
+| Company `EndingAt` | reachable | `Company` collection | **Row corrected 17 Aug 2026** — was recorded as blocked-ours. `tally_list_companies` surfaces it as `endingAt` for all four loaded companies |
 | Ledgers | reachable | `Ledger` collection | 331 records live |
 | Groups | reachable | `Group` collection | production |
 | Voucher types | reachable | `VoucherType` collection | production |
@@ -78,6 +78,9 @@ three did not resolve them, because all three lack the same features.
 | Stock items | reachable-shape-unverified | `StockItem` collection | 0 items on this company |
 | Chart of accounts | reachable | `List of Accounts` report | 7.5 MB live |
 | `ISRELATEDPARTY` flag | reachable | ledger field | 330/330 populated. Corrects an earlier plan assumption |
+| TDS / TCS applicability | reachable | ledger fields | **Verified live 17 Aug 2026.** `ISTDSAPPLICABLE`, `ISTCSAPPLICABLE`, `ISTDSEXPENSE`, `IGNORETDSEXEMPT`, `TDSDEDUCTEEISSPECIALRATE`, `TDSDEDUCTEESPECIALRATE`, `TAXTYPE` all present on a live ledger master, carrying explicit negatives where the feature is off. Surfaced by `tally_get_tds` |
+| TDS section / nature of payment | unknown | separate master | Not observed populated — no probed company deducts tax. Passed through where it appears; never claimed complete. Direct TYPE probing ruled out by the safety rule |
+| MSME / Udyam registration | unknown | ledger field, unconfirmed | **Row corrected 17 Aug 2026** — briefly recorded as blocked, which one company cannot support. Absent across all 472 ledgers of MUDALS TECHNOLOGIES, and Tally does emit unpopulated fields, so this company genuinely does not record it. TallyPrime DOES offer MSME details on the party ledger in recent releases; whether they transport over HTTP is **untested** for want of a company that uses them. Same class as cost centres and bill-wise: waiting on books, not on code |
 | `ALTERID` / `UPDATEDDATETIME` | reachable | ledger fields | 367/367 populated |
 | Cost centres (masters) | unknown | `CostCentre` collection | **not sent** — collection probing stopped after two hangs |
 | Cost categories (masters) | unknown | `CostCategory` collection | not sent |
@@ -111,13 +114,28 @@ three did not resolve them, because all three lack the same features.
 | Statement for a **mid-year** period | **blocked** | — | End date binds only on a 31st; otherwise accumulates to a fixed endpoint. Format-independent — four wire encodings tested |
 | Negative ledgers (exception) | reachable | `Negative Ledgers` | 20,909 B live. **New capability** |
 | Negative stock (exception) | reachable-shape-unverified | `Negative Stock` | valid but empty; no inventory |
-| Ratio analysis | reachable | `Ratio Analysis` | 1,676 B live |
+| Ratio analysis | **reachable but empty** | `Ratio Analysis` | **Re-measured 17 Aug 2026: 0 rows** on MUDALS for 1-Apr-26 to 28-Jul-26, where an earlier probe recorded 1,676 B. Accepted by Tally, returns nothing. A first-class ratio tool was therefore NOT built on it — it would have been built on sand |
 | Sales / purchase / journal registers | reachable | three report IDs | live |
 | Stock summary / godown summary | reachable-shape-unverified | production builders | no inventory |
 | Bills receivable / payable | reachable-shape-unverified | both IDs valid | empty; no bill-wise tracking |
 | Cost centre break-up | **blocked** | — | report ID rejected; use the nested fetch path instead |
 | Day book | **blocked (useless)** | `Day Book` | Valid, but ignores its date range entirely — byte-identical output for two different years |
 | Licence / edition (Educational check) | **blocked** | — | six candidate report IDs all rejected |
+
+## Audit procedures built on top of Layer 1
+
+These compute nothing Tally holds; they arrange what it holds into the shape an
+audit needs. Listed here because "reachable" says nothing about whether a
+procedure exists to use the data.
+
+| Procedure | Tool | Note |
+|---|---|---|
+| Monetary-unit (PPS) sampling | `tally_test_vouchers` → `sampleMethod: "monetary_unit"` | Value-weighted, certainty stratum flagged separately, interval and value tested disclosed. Directed at OVERSTATEMENT and says so |
+| Related-party disclosure table | `tally_test_vouchers` → `test: "related_party"`, `byParty` | AS 18 / Ind AS 24 shape. Not netted, and a voucher between two related parties counts under both, so rows do not sum to a company total |
+| Fixed asset movement schedule | `tally_get_fixed_assets` | Opening + additions − disposals vs closing, from two independent sources. Ties on all 10 readable ledgers of MUDALS, live 17 Aug 2026. Depreciation reported, never recomputed |
+| Balance confirmation selection | `tally_get_confirmation_list` | Uncontactable parties retained and flagged rather than dropped. No default cut-off — that is a judgement |
+| Workpaper rendering | `tally_make_workpaper` | Re-runs the procedure rather than formatting figures from the conversation. Refuses to write the conclusion |
+| TDS / TCS configuration | `tally_get_tds` | Affirmative values only — Tally stamps the negatives onto every ledger |
 
 ## Layer 2 — caller-supplied
 
@@ -127,6 +145,7 @@ three did not resolve them, because all three lack the same features.
 | Form 26AS / TDS | not built | one side only |
 | Bank statement | not built | would turn the item list into a real reconciliation |
 | Credit terms | **built** | `tally_get_outstanding` → `creditTerms`; per party or per group, party wins. Bills past their credit period are reported as `overdue`, and `overdue` is **absent** rather than zero when no terms were supplied |
+| MSME party list | **deliberately not built** | Needed for the 45-day test under Sec 43B(h). NOT built on purpose: if Tally turns out to transport its own MSME fields, a caller-supplied list would make accountants retype data the books already hold. Decide only after probing a company that records MSME |
 | Related-party list | **built** | `tally_test_vouchers` → `test: "related_party"`, `relatedParties`. **Extends** `ISRELATEDPARTY` rather than replacing it |
 | Currency, where Tally sent `?` | **built** | `TALLY_CURRENCY_LABEL`. Used ONLY where Tally's symbol was untransportable, and the response says the label came from configuration |
 

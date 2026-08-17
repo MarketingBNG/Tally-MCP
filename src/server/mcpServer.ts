@@ -16,6 +16,10 @@ import { registerInventoryTools } from '../tools/inventory.js';
 import { registerClosingStockTools } from '../tools/closingStock.js';
 import { registerOutstandingTools } from '../tools/outstanding.js';
 import { registerGstTools } from '../tools/gst.js';
+import { registerTdsTools } from '../tools/tds.js';
+import { registerWorkpaperTools } from '../tools/workpaper.js';
+import { registerFixedAssetTools } from '../tools/fixedAssets.js';
+import { registerConfirmationTools } from '../tools/confirmations.js';
 import { registerSearchTools } from '../tools/search.js';
 import { registerPartyStatementTools } from '../tools/partyStatement.js';
 import { registerTieOutTools } from '../tools/tieOut.js';
@@ -66,11 +70,15 @@ export function createMcpServer(deps: ServerDeps): McpServer {
   registerClosingStockTools(server, toolDeps);
   registerOutstandingTools(server, toolDeps);
   registerGstTools(server, toolDeps);
+  registerTdsTools(server, toolDeps);
   registerSearchTools(server, toolDeps);
   registerPartyStatementTools(server, toolDeps);
   registerTieOutTools(server, toolDeps);
   registerMaterialityTools(server, toolDeps);
   registerVoucherTestTools(server, toolDeps);
+  registerWorkpaperTools(server, toolDeps);
+  registerFixedAssetTools(server, toolDeps);
+  registerConfirmationTools(server, toolDeps);
   registerGenericReportTools(server, toolDeps);
 
   registerResources(server, toolDeps);

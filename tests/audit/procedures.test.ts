@@ -8,6 +8,7 @@ import {
   findWeekendDated,
   sampleVouchers,
   screenJournals,
+  summariseRelatedParties,
   voucherMagnitude,
   weekdayOf,
 } from '../../src/audit/procedures.js';
@@ -302,6 +303,230 @@ describe('sampling', () => {
     const result = sampleVouchers([], 10, 'seed-a', 'random');
     expect(result.selected).toHaveLength(0);
     expect(result.populationSize).toBe(0);
+  });
+});
+
+describe('monetary-unit sampling', () => {
+  const population = Array.from({ length: 100 }, (_, i) =>
+    withAmount(String(1000 + i), { voucherNumber: `V-${String(i)}`, guid: `g-${String(i)}` })
+  );
+
+  it('reproduces the same sample from the same seed', () => {
+    const first = sampleVouchers(population, 10, 'seed-a', 'monetary_unit');
+    const second = sampleVouchers(population, 10, 'seed-a', 'monetary_unit');
+    expect(second.selected.map((s) => s.guid)).toEqual(first.selected.map((s) => s.guid));
+  });
+
+  it('discloses the interval and the value tested, so the selection is checkable', () => {
+    // Without these two figures a reviewer cannot re-perform the selection or
+    // project an error, which is the only reason to choose PPS over random.
+    const result = sampleVouchers(population, 10, 'seed-a', 'monetary_unit');
+    const total = population.length * 1000 + (99 * 100) / 2;
+    expect(result.monetaryUnit?.totalValue).toBe(String(total));
+    expect(Number(result.monetaryUnit?.interval)).toBeCloseTo(total / 10, 6);
+  });
+
+  it('selects every item at or above the interval with certainty', () => {
+    // The defining property of the method. A single sweep with a fixed
+    // interval cannot step over a run of monetary units longer than itself.
+    const whale = withAmount('500000', { voucherNumber: 'V-BIG', guid: 'g-big' });
+    const result = sampleVouchers([...population, whale], 10, 'seed-a', 'monetary_unit');
+    expect(result.selected.map((s) => s.guid)).toContain('g-big');
+    expect(result.monetaryUnit?.certaintySelections).toBe(1);
+    expect(result.selected.find((s) => s.guid === 'g-big')?.reasons.join(' ')).toContain(
+      'CERTAINTY selection'
+    );
+  });
+
+  it('favours large vouchers over small ones across seeds', () => {
+    // Probability proportional to size, stated as a property rather than a
+    // fixed expected sample: a 100x voucher should dominate the selections.
+    const mixed = [
+      ...Array.from({ length: 50 }, (_, i) =>
+        withAmount('100', { voucherNumber: `S-${String(i)}`, guid: `small-${String(i)}` })
+      ),
+      ...Array.from({ length: 5 }, (_, i) =>
+        withAmount('10000', { voucherNumber: `L-${String(i)}`, guid: `large-${String(i)}` })
+      ),
+    ];
+    let large = 0;
+    let small = 0;
+    for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) {
+      for (const picked of sampleVouchers(mixed, 5, seed, 'monetary_unit').selected) {
+        if (picked.guid?.startsWith('large')) large += 1;
+        else small += 1;
+      }
+    }
+    expect(large).toBeGreaterThan(small);
+  });
+
+  it('puts zero and unreadable amounts outside the population rather than dropping them', () => {
+    // "Not selected" and "not selectable" support different conclusions, so
+    // the count has to survive into the result.
+    const unreadable = voucher({
+      guid: 'g-null',
+      entries: [{ ledgerName: 'X', amount: null, side: 'debit' }],
+    });
+    const zero = withAmount('0', { guid: 'g-zero' });
+    const result = sampleVouchers(
+      [...population, unreadable, zero],
+      10,
+      'seed-a',
+      'monetary_unit'
+    );
+    expect(result.monetaryUnit?.unreadableAmount).toBe(1);
+    expect(result.monetaryUnit?.zeroValue).toBe(1);
+    expect(result.selected.map((s) => s.guid)).not.toContain('g-null');
+    expect(result.selected.map((s) => s.guid)).not.toContain('g-zero');
+    expect(result.warnings.join(' ')).toContain('outside the tested population');
+  });
+
+  it('discloses that the method is directed at overstatement', () => {
+    // The one caveat that decides whether the sample answers the question
+    // asked. A completeness conclusion drawn off a PPS sample is wrong.
+    const result = sampleVouchers(population, 10, 'seed-a', 'monetary_unit');
+    expect(result.warnings.join(' ')).toContain('directed at overstatement');
+  });
+
+  it('never selects the same voucher twice even when it absorbs several hits', () => {
+    const whale = withAmount('5000000', { guid: 'g-big' });
+    const result = sampleVouchers([...population, whale], 10, 'seed-a', 'monetary_unit');
+    const guids = result.selected.map((s) => s.guid);
+    expect(new Set(guids).size).toBe(guids.length);
+    expect(result.warnings.join(' ')).toContain('absorbs more than');
+  });
+
+  it('returns nothing from an empty population instead of failing', () => {
+    const result = sampleVouchers([], 10, 'seed-a', 'monetary_unit');
+    expect(result.selected).toHaveLength(0);
+    expect(result.monetaryUnit?.interval).toBe('0');
+  });
+});
+
+describe('related-party summarisation', () => {
+  const related = new Map([
+    ['acme holdings', { display: 'Acme Holdings', source: 'tally_flag' as const }],
+    ['zenith llp', { display: 'Zenith LLP', source: 'supplied' as const }],
+  ]);
+  const balances = new Map([
+    ['acme holdings', '-250000'],
+    ['zenith llp', null],
+  ]);
+
+  /** A voucher posting `amount` against `ledger`, plus a balancing sales line. */
+  function against(ledger: string, amount: string, overrides: Partial<Voucher> = {}): Voucher {
+    return voucher({
+      partyLedgerName: ledger,
+      entries: [
+        { ledgerName: ledger, amount: { amount: `-${amount}`, currency: 'INR' }, side: 'debit' },
+        { ledgerName: 'Sales', amount: { amount, currency: 'INR' }, side: 'credit' },
+      ],
+      ...overrides,
+    });
+  }
+
+  it('totals what was posted against the party ledger, not the voucher total', () => {
+    // A three-line voucher also carries tax and freight, which are dealings
+    // with nobody. Using the voucher total would overstate the disclosure.
+    const v = voucher({
+      partyLedgerName: 'Acme Holdings',
+      entries: [
+        { ledgerName: 'Acme Holdings', amount: { amount: '-118000', currency: 'INR' }, side: 'debit' },
+        { ledgerName: 'Sales', amount: { amount: '100000', currency: 'INR' }, side: 'credit' },
+        { ledgerName: 'Output IGST', amount: { amount: '18000', currency: 'INR' }, side: 'credit' },
+      ],
+    });
+    const [row] = summariseRelatedParties([v], related, balances);
+    expect(row?.total).toBe('118000');
+    expect(row?.amountsInferredFromVoucher).toBe(0);
+  });
+
+  it('does not net a payment against a purchase', () => {
+    // Netting would report nil transacted where 20 lakh changed hands. The
+    // disclosure asks for volume.
+    const rows = summariseRelatedParties(
+      [against('Acme Holdings', '1000000'), against('Acme Holdings', '1000000')],
+      related,
+      balances
+    );
+    expect(rows[0]?.total).toBe('2000000');
+    expect(rows[0]?.transactionCount).toBe(2);
+  });
+
+  it('splits the dealings by voucher type, which is the nature disclosed', () => {
+    const rows = summariseRelatedParties(
+      [
+        against('Acme Holdings', '500', { voucherType: 'Sales' }),
+        against('Acme Holdings', '300', { voucherType: 'Payment' }),
+        against('Acme Holdings', '200', { voucherType: 'Payment' }),
+      ],
+      related,
+      balances
+    );
+    expect(rows[0]?.byVoucherType).toEqual([
+      { voucherType: 'Payment', count: 2, total: '500' },
+      { voucherType: 'Sales', count: 1, total: '500' },
+    ]);
+  });
+
+  it('counts a voucher between two related parties under both', () => {
+    // A real dealing with each. The consequence — that the column no longer
+    // sums to a company total — is disclosed rather than adjusted away.
+    const v = voucher({
+      partyLedgerName: 'Acme Holdings',
+      voucherType: 'Journal',
+      entries: [
+        { ledgerName: 'Acme Holdings', amount: { amount: '-75000', currency: 'INR' }, side: 'debit' },
+        { ledgerName: 'Zenith LLP', amount: { amount: '75000', currency: 'INR' }, side: 'credit' },
+      ],
+    });
+    const rows = summariseRelatedParties([v], related, balances);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.transactionCount === 1)).toBe(true);
+  });
+
+  it('counts a party matched with no entry line naming it, and says the amount is inferred', () => {
+    const v = voucher({
+      partyLedgerName: 'Acme Holdings',
+      entries: [
+        { ledgerName: 'Bank', amount: { amount: '-4000', currency: 'INR' }, side: 'debit' },
+        { ledgerName: 'Sales', amount: { amount: '4000', currency: 'INR' }, side: 'credit' },
+      ],
+    });
+    const [row] = summariseRelatedParties([v], related, balances);
+    expect(row?.total).toBe('4000');
+    expect(row?.amountsInferredFromVoucher).toBe(1);
+  });
+
+  it('carries a null closing balance through as null, never as zero', () => {
+    // Zero reads as settled. Unknown is not settled.
+    const rows = summariseRelatedParties([against('Zenith LLP', '900')], related, balances);
+    expect(rows[0]?.closingBalance).toBeNull();
+  });
+
+  it('records how each party was identified', () => {
+    const rows = summariseRelatedParties(
+      [against('Acme Holdings', '100'), against('Zenith LLP', '100')],
+      related,
+      balances
+    );
+    expect(rows.find((r) => r.party === 'Acme Holdings')?.source).toBe('tally_flag');
+    expect(rows.find((r) => r.party === 'Zenith LLP')?.source).toBe('supplied');
+  });
+
+  it('orders the table by size, so the material parties are read first', () => {
+    const rows = summariseRelatedParties(
+      [against('Zenith LLP', '10'), against('Acme Holdings', '9000')],
+      related,
+      balances
+    );
+    expect(rows.map((r) => r.party)).toEqual(['Acme Holdings', 'Zenith LLP']);
+  });
+
+  it('ignores vouchers touching no related party', () => {
+    expect(summariseRelatedParties([against('Northwind Retail', '500')], related, balances)).toEqual(
+      []
+    );
   });
 });
 

@@ -14,7 +14,9 @@ import {
   findWeekendDated,
   sampleVouchers,
   screenJournals,
+  summariseRelatedParties,
 } from '../audit/procedures.js';
+import type { RelatedPartySource, SampleMethod } from '../audit/procedures.js';
 import {
   companySchema,
   dateRangeSchema,
@@ -67,7 +69,7 @@ interface Population {
   };
 }
 
-const TEST_VALUES = [
+export const TEST_VALUES = [
   'journal_screen',
   'benford',
   'sample',
@@ -78,7 +80,7 @@ const TEST_VALUES = [
   'related_party',
 ] as const;
 
-type TestName = (typeof TEST_VALUES)[number];
+export type TestName = (typeof TEST_VALUES)[number];
 
 const DESCRIPTION = [
   'Run one audit procedure over the vouchers in a period. Screening and analytical tests only — ' +
@@ -106,7 +108,12 @@ const DESCRIPTION = [
   '- sample: a reproducible sample. Returns the seed, so the same sample can be drawn again — ' +
     'which is what makes it usable as a workpaper. `sampleMethod: random` (default) gives every ' +
     'voucher an equal chance; `systematic` takes every kth in date order, which is cheaper to ' +
-    'explain but biased against anything periodic in the data.',
+    'explain but biased against anything periodic in the data; `monetary_unit` selects with ' +
+    'probability proportional to amount, so large vouchers are near-certain to be picked and ' +
+    'the effort goes where the value is. Monetary-unit is the usual choice for SUBSTANTIVE ' +
+    'testing of overstatement, and the wrong choice for completeness — an omitted or ' +
+    'understated item carries fewer monetary units and is correspondingly less likely to be ' +
+    'reached. It also reports the sampling interval and which selections were certainties.',
   '- duplicates: groups sharing party, amount AND date exactly. All three are required, because ' +
     'two invoices to one party for one amount on two different days is ordinary trade. Vouchers ' +
     'missing a party, amount or date are not grouped and their count is reported — an unknown ' +
@@ -123,7 +130,12 @@ const DESCRIPTION = [
     'a related party" — relatedness under AS 18 / Ind AS 24 is a legal determination about ' +
     'directors, relatives, key management personnel and common control, and a company that has ' +
     'never ticked the box has every ledger reading false. So an empty result with no ' +
-    '`relatedParties` supplied is evidence about the flag, not about the company.',
+    '`relatedParties` supplied is evidence about the flag, not about the company. Returns TWO ' +
+    'things: `candidates`, the matching vouchers, and `byParty`, the AS 18 / Ind AS 24 ' +
+    'disclosure table — one row per party with the nature of dealings by voucher type, the ' +
+    'aggregate transacted, and the balance outstanding at period end. The party rows do NOT sum ' +
+    'to a company total and are not netted; both are deliberate and both are stated in the ' +
+    'output.',
   '- weekend: vouchers DATED on a Saturday or Sunday. Read the two limits in the output: this is ' +
     'the voucher date, not the date it was keyed in, so it is NOT the out-of-hours posting test ' +
     'an auditor wants — that needs the Edit Log, which this connector cannot currently reach. ' +
@@ -345,7 +357,7 @@ export function registerVoucherTestTools(server: McpServer, deps: ToolDeps): voi
               'is still reproducible; there is no unseeded randomness anywhere in this tool.'
           ),
         sampleMethod: z
-          .enum(['random', 'systematic'])
+          .enum(['random', 'systematic', 'monetary_unit'])
           .optional()
           .describe('sample only: default "random". See the tool description for the tradeoff.'),
         benfordDigits: z
@@ -367,97 +379,163 @@ export function registerVoucherTestTools(server: McpServer, deps: ToolDeps): voi
     },
     async (args) =>
       runTool('tally_test_vouchers', deps, async () => {
-        const test: TestName = args.test;
-        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
-
-        // Cut-off and weekend ask about DATES, so a stock-only voucher belongs
-        // in them; every other test reads an amount, which a stock-only
-        // voucher does not have.
-        const amountBased = test !== 'cutoff' && test !== 'weekend';
-
-        const population = await buildPopulation(
-          deps,
-          {
-            ...(args.company === undefined ? {} : { company: args.company }),
-            ...(args.voucherType === undefined ? {} : { voucherType: args.voucherType }),
-            ...(args.ledger === undefined ? {} : { ledger: args.ledger }),
-            ...(args.party === undefined ? {} : { party: args.party }),
-            ...(args.query === undefined ? {} : { query: args.query }),
-            ...(args.minAmount === undefined ? {} : { minAmount: args.minAmount }),
-            ...(args.maxAmount === undefined ? {} : { maxAmount: args.maxAmount }),
-          },
-          period,
-          amountBased
-        );
-        const warnings = [
-          ...population.warnings,
-          ...describeExclusions(population, amountBased),
-          // An empty population on a period nobody chose is usually the
-          // company's book year not being the current one, not missing data.
-          ...(await noteEmptyDefaultedPeriod(
-            deps,
-            period,
-            periodWasDefaulted(args.fromDate, args.toDate),
-            population.vouchers.length,
-            args.company
-          )),
-        ];
-
-        // Only fetched for the one test that needs it: the ledger list is a
-        // second Tally request, and paying for it on a Benford run would be a
-        // cost with no answer attached.
-        let flaggedInTally: string[] = [];
-        if (test === 'related_party') {
-          const { ledgers, warnings: ledgerWarnings } = await fetchLedgers(deps, args.company);
-          flaggedInTally = ledgers
-            .filter((ledger) => ledger.isRelatedParty)
-            .map((ledger) => ledger.name);
-          warnings.push(...ledgerWarnings);
-        }
-
-        const roundMultipleOf = args.roundMultipleOf ?? 1000;
-        const result = runProcedure(test, population.vouchers, period, {
-          roundMultipleOf,
-          ...(args.threshold === undefined ? {} : { threshold: args.threshold }),
-          cutoffDays: args.cutoffDays ?? 7,
-          sampleSize: args.sampleSize ?? 25,
-          sampleSeed: args.sampleSeed ?? 'tally-mcp',
-          sampleMethod: args.sampleMethod ?? 'random',
-          benfordDigits: args.benfordDigits ?? 2,
-          relatedParties: args.relatedParties ?? [],
-          flaggedInTally,
-        });
-
+        const executed = await executeVoucherTest(deps, args);
         return whole(
           {
-            test,
-            period,
-            population: {
-              tested: population.vouchers.length,
-              excluded: population.excluded,
-            },
-            ...result.payload,
+            test: executed.test,
+            period: executed.period,
+            population: executed.population,
+            ...executed.payload,
             candidateNote: CANDIDATE_NOTE,
-            warnings: [...warnings, ...result.warnings],
+            warnings: executed.warnings,
           },
-          result.rows
+          executed.rows
         );
       })
   );
 }
 
-interface ProcedureOptions {
+/** Everything a run of one procedure produced, before it is shaped for output. */
+export interface ExecutedVoucherTest {
+  test: TestName;
+  period: { fromDate: string; toDate: string };
+  population: { tested: number; excluded: Population['excluded'] };
+  payload: object;
+  rows: number;
+  warnings: string[];
+  /** The options actually used, defaults resolved. This is what reproduces the run. */
+  resolvedOptions: ProcedureOptions;
+}
+
+/** The arguments a voucher test accepts, shared by the test tool and the workpaper. */
+export interface VoucherTestArgs {
+  test: TestName;
+  company?: string | undefined;
+  fromDate?: string | undefined;
+  toDate?: string | undefined;
+  voucherType?: string | undefined;
+  ledger?: string | undefined;
+  party?: string | undefined;
+  query?: string | undefined;
+  minAmount?: number | undefined;
+  maxAmount?: number | undefined;
+  threshold?: string | undefined;
+  roundMultipleOf?: number | undefined;
+  cutoffDays?: number | undefined;
+  sampleSize?: number | undefined;
+  sampleSeed?: string | undefined;
+  sampleMethod?: SampleMethod | undefined;
+  benfordDigits?: 1 | 2 | undefined;
+  relatedParties?: string[] | undefined;
+}
+
+/**
+ * Run one procedure end to end: resolve the period, build the population, run
+ * the test.
+ *
+ * EXPORTED so the workpaper tool runs THIS code rather than its own copy. That
+ * is the whole basis on which a workpaper can claim to be reproducible — if the
+ * document were assembled from figures passed back in by the caller, it would
+ * be a transcription of whatever the conversation happened to contain, and a
+ * transcription that looks like evidence is worse than no evidence at all.
+ * Two code paths would drift, and the document would then disagree with the
+ * tool while both claimed the same period.
+ */
+export async function executeVoucherTest(
+  deps: ToolDeps,
+  args: VoucherTestArgs
+): Promise<ExecutedVoucherTest> {
+  const test: TestName = args.test;
+  const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
+
+  // Cut-off and weekend ask about DATES, so a stock-only voucher belongs
+  // in them; every other test reads an amount, which a stock-only
+  // voucher does not have.
+  const amountBased = test !== 'cutoff' && test !== 'weekend';
+
+  const population = await buildPopulation(
+    deps,
+    {
+      ...(args.company === undefined ? {} : { company: args.company }),
+      ...(args.voucherType === undefined ? {} : { voucherType: args.voucherType }),
+      ...(args.ledger === undefined ? {} : { ledger: args.ledger }),
+      ...(args.party === undefined ? {} : { party: args.party }),
+      ...(args.query === undefined ? {} : { query: args.query }),
+      ...(args.minAmount === undefined ? {} : { minAmount: args.minAmount }),
+      ...(args.maxAmount === undefined ? {} : { maxAmount: args.maxAmount }),
+    },
+    period,
+    amountBased
+  );
+  const warnings = [
+    ...population.warnings,
+    ...describeExclusions(population, amountBased),
+    // An empty population on a period nobody chose is usually the
+    // company's book year not being the current one, not missing data.
+    ...(await noteEmptyDefaultedPeriod(
+      deps,
+      period,
+      periodWasDefaulted(args.fromDate, args.toDate),
+      population.vouchers.length,
+      args.company
+    )),
+  ];
+
+  // Only fetched for the one test that needs it: the ledger list is a
+  // second Tally request, and paying for it on a Benford run would be a
+  // cost with no answer attached.
+  let flaggedInTally: string[] = [];
+  // Closing balances for EVERY ledger, keyed lower-case: the summary needs
+  // the year-end balance for any party the caller supplied as well as for
+  // the ones Tally flagged, and which of those exist is not known here.
+  const ledgerBalances = new Map<string, string | null>();
+  if (test === 'related_party') {
+    const { ledgers, warnings: ledgerWarnings } = await fetchLedgers(deps, args.company);
+    flaggedInTally = ledgers.filter((ledger) => ledger.isRelatedParty).map((ledger) => ledger.name);
+    for (const ledger of ledgers) {
+      ledgerBalances.set(ledger.name.toLowerCase(), ledger.closingBalance?.amount ?? null);
+    }
+    warnings.push(...ledgerWarnings);
+  }
+
+  const resolvedOptions: ProcedureOptions = {
+    roundMultipleOf: args.roundMultipleOf ?? 1000,
+    ...(args.threshold === undefined ? {} : { threshold: args.threshold }),
+    cutoffDays: args.cutoffDays ?? 7,
+    sampleSize: args.sampleSize ?? 25,
+    sampleSeed: args.sampleSeed ?? 'tally-mcp',
+    sampleMethod: args.sampleMethod ?? 'random',
+    benfordDigits: args.benfordDigits ?? 2,
+    relatedParties: args.relatedParties ?? [],
+    flaggedInTally,
+    ledgerBalances,
+  };
+  const result = runProcedure(test, population.vouchers, period, resolvedOptions);
+
+  return {
+    test,
+    period,
+    population: { tested: population.vouchers.length, excluded: population.excluded },
+    payload: result.payload,
+    rows: result.rows,
+    warnings: [...warnings, ...result.warnings],
+    resolvedOptions,
+  };
+}
+
+export interface ProcedureOptions {
   roundMultipleOf: number;
   threshold?: string;
   cutoffDays: number;
   sampleSize: number;
   sampleSeed: string;
-  sampleMethod: 'random' | 'systematic';
+  sampleMethod: SampleMethod;
   benfordDigits: 1 | 2;
   /** Names the caller determined to be related parties. */
   relatedParties: string[];
   /** Names TallyPrime own IsRelatedParty flag marks. */
   flaggedInTally: string[];
+  ledgerBalances: ReadonlyMap<string, string | null>;
 }
 
 /** Dispatch to the procedure and shape its result. Pure apart from the inputs. */
@@ -649,10 +727,44 @@ function runProcedure(
             'transactions.'
         );
       }
+      // The AS 18 / Ind AS 24 disclosure table, alongside the candidates. The
+      // display name comes from whichever source named the party, preferring
+      // Tally's spelling because that is what the ledger is called.
+      const identified = new Map<string, { display: string; source: RelatedPartySource }>();
+      for (const name of options.relatedParties) {
+        identified.set(name.toLowerCase(), { display: name, source: 'supplied' });
+      }
+      for (const name of options.flaggedInTally) {
+        const key = name.toLowerCase();
+        identified.set(key, {
+          display: name,
+          source: identified.has(key) ? 'both' : 'tally_flag',
+        });
+      }
+      const summary = summariseRelatedParties(vouchers, identified, options.ledgerBalances);
+
+      if (summary.some((row) => row.amountsInferredFromVoucher > 0)) {
+        warnings.push(
+          'ON SOME VOUCHERS the related party matched but no entry line named its ledger, so the ' +
+            "voucher's largest entry stood in for the amount. Those rows carry a non-zero " +
+            '`amountsInferredFromVoucher` and their totals are approximate — check them before ' +
+            'the figure goes into a disclosure.'
+        );
+      }
+      if (summary.length > 1) {
+        warnings.push(
+          'THE PARTY TOTALS DO NOT SUM TO A COMPANY TOTAL. A voucher between two related parties ' +
+            'is a real dealing with each and is counted in both rows. Amounts are also absolute ' +
+            'rather than netted, so a purchase and its payment report as volume transacted, not ' +
+            'as nil — which is what the disclosure asks for.'
+        );
+      }
+
       return {
         payload: {
           relatedPartiesFlaggedInTally: options.flaggedInTally,
           relatedPartiesSupplied: options.relatedParties,
+          byParty: summary,
           candidates,
         },
         rows: candidates.length,

@@ -12,6 +12,71 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.5.0 — unreleased
+**Read this first: a single ledger fetched by name was showing a blank closing
+balance.**
+
+- **Asking for one ledger by name returned no closing balance at all.** The
+  balance showed as empty, which everywhere else in this connection means "we
+  could not read it" — so a party account with 1.48 crore outstanding looked
+  like an account with nothing to see. Listing the same ledger showed the
+  balance correctly, so the two ways of asking disagreed. The cause was that
+  TallyPrime's "give me everything" request quietly leaves the closing balance
+  out. Both ways of asking now return the same figures. **If you looked up a
+  single ledger by name and read the balance as blank, look again.**
+
+- **New: TDS and TCS.** Ask "which ledgers are set up for TDS?" and you get the
+  tax ledgers, the parties tax is deducted from, the expenses flagged as
+  TDS-bearing, anything set to a special (206AA) rate, and anything set to
+  ignore the exemption limit — with counts, so "3 of 330" is visible. Nothing
+  is calculated: no rate is applied and no shortfall or disallowance is worked
+  out, because those depend on the section, PAN status, 197 certificates and
+  per-payee thresholds that the books do not hold. The useful finding is
+  usually an expense that *should* be flagged and is not.
+
+- **New: related-party disclosure table.** The related-party test now returns a
+  row per party alongside the list of vouchers — what was transacted, split by
+  the nature of the dealing, and the balance outstanding at period end. That is
+  the shape AS 18 / Ind AS 24 asks for. Amounts are not netted, and a
+  transaction between two related parties counts under both, so the rows do not
+  add up to a company total; the output says both of these plainly.
+
+- **New: value-weighted sampling.** Sampling can now select in proportion to
+  amount, so large vouchers are near-certain to be picked and the testing goes
+  where the money is. It reports the sampling interval and flags which items
+  were certainties. It is the right choice for testing overstatement and the
+  wrong one for testing completeness — it says so, because a conclusion about
+  missing entries drawn from this method would be wrong.
+
+- **New: workpapers.** Ask for a procedure as a workpaper and you get a
+  document ready for the audit file — objective, population tested and what was
+  excluded, the method with its parameters, the results, the limitations in
+  full, and the exact call that reproduces it. It **re-runs the procedure
+  against Tally** rather than tidying up figures from the conversation, so every
+  number on the page came out of the books. It will **not** write your
+  conclusion: leave it out and the paper says the conclusion was not recorded,
+  because an unsigned working paper should look unsigned.
+
+- **New: fixed asset schedule.** Opening, additions, disposals and closing for
+  each asset ledger, with every addition and disposal traced back to the
+  voucher that caused it. It checks that the movements actually explain the
+  change in balance and tells you which ledgers do not add up — the balances and
+  the movements come from two different places, so agreement is real evidence.
+  Depreciation is reported as charged and never recalculated: Tally holds no
+  asset register, so there is no acquisition date or useful life to work from.
+
+- **New: confirmation list.** The parties you could circularise, largest first,
+  with the balance per the books and the contact details Tally holds. Parties
+  with no phone, contact or email are **kept in the list** and marked
+  uncontactable, because a large balance owed by someone unreachable is a
+  finding, not a row to hide. No default cut-off is applied — which parties to
+  confirm is your judgement.
+
+- **Known gap, now confirmed rather than assumed:** TallyPrime does not record
+  whether a supplier is an MSME. The 45-day test under Section 43B(h) therefore
+  cannot be done from the books alone and needs a supplier list from you, the
+  same way credit terms already work.
+
 ## 0.4.1 — 2026-08-17
 **Read this first: one way of asking for a single ledger could give you the
 wrong record.**
