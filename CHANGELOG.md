@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.4.1 — unreleased
+## 0.4.1 — 2026-08-17
 **Read this first: one way of asking for a single ledger could give you the
 wrong record.**
 
