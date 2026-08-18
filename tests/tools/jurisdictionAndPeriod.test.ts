@@ -560,3 +560,94 @@ describe('checkStockTieOut', () => {
     expect(result.exceptions).toHaveLength(0);
   });
 });
+
+describe('profit_loss flags cost recoveries grouped under revenue', () => {
+  function statementRegistry(): ToolRegistry {
+    const registry = createToolRegistry();
+    registerReportTools(registry.server, makeDeps(port));
+    return registry;
+  }
+
+  /** Ledgers with a parent group, which is where the grouping is visible. */
+  function grouped(rows: readonly { name: string; parent: string; closing: string }[]): string {
+    const ledgers = rows
+      .map(
+        (row) =>
+          `<LEDGER NAME="${row.name}">` +
+          `<NAME TYPE="String">${row.name}</NAME>` +
+          `<PARENT TYPE="String">${row.parent}</PARENT>` +
+          `<CLOSINGBALANCE TYPE="Amount">${row.closing}</CLOSINGBALANCE>` +
+          `</LEDGER>`
+      )
+      .join('');
+    return `<ENVELOPE><BODY><DATA><COLLECTION>${ledgers}</COLLECTION></DATA></BODY></ENVELOPE>`;
+  }
+
+  beforeEach(() => {
+    mock.onBodyContaining('<ID>Profit and Loss</ID>', { body: PROFIT_LOSS_MOVED_STOCK });
+    mock.onBodyContaining('<ID>Stock Summary</ID>', { body: STOCK_SUMMARY });
+  });
+
+  it('names a freight ledger sitting under Sales Accounts', async () => {
+    // The live AgEx shape: Transport Cost, parent Sales Accounts, 805.
+    mock.onBodyContaining('<ID>Ledgers</ID>', {
+      body: grouped([
+        { name: 'Transport Cost', parent: 'Sales Accounts', closing: '805' },
+        { name: 'Export Sales', parent: 'Sales Accounts', closing: '50033.50' },
+      ]),
+    });
+
+    const warnings = warningsOf(
+      await callToolOk(statementRegistry(), 'tally_get_statement', {
+        statement: 'profit_loss',
+        company: USA,
+        fromDate: '2026-04-01',
+        toDate: '2027-03-31',
+      })
+    );
+
+    expect(warnings).toContain('COST RECOVERIES');
+    expect(warnings).toContain('Transport Cost');
+    expect(warnings).toContain('805.00');
+    // Must not assert the accounting answer — that needs ASC 606 control analysis.
+    expect(warnings).toContain('cannot settle');
+  });
+
+  it('ignores the same name when it sits under expenses', async () => {
+    mock.onBodyContaining('<ID>Ledgers</ID>', {
+      body: grouped([
+        { name: 'Transport Cost', parent: 'Direct Expenses', closing: '805' },
+        { name: 'Export Sales', parent: 'Sales Accounts', closing: '50033.50' },
+      ]),
+    });
+
+    const warnings = warningsOf(
+      await callToolOk(statementRegistry(), 'tally_get_statement', {
+        statement: 'profit_loss',
+        company: USA,
+        fromDate: '2026-04-01',
+        toDate: '2027-03-31',
+      })
+    );
+
+    // Freight booked as a cost is the correct treatment, not a finding.
+    expect(warnings).not.toContain('COST RECOVERIES');
+  });
+
+  it('says nothing on a clean revenue grouping', async () => {
+    mock.onBodyContaining('<ID>Ledgers</ID>', {
+      body: grouped([{ name: 'Export Sales', parent: 'Sales Accounts', closing: '50033.50' }]),
+    });
+
+    const warnings = warningsOf(
+      await callToolOk(statementRegistry(), 'tally_get_statement', {
+        statement: 'profit_loss',
+        company: USA,
+        fromDate: '2026-04-01',
+        toDate: '2027-03-31',
+      })
+    );
+
+    expect(warnings).not.toContain('COST RECOVERIES');
+  });
+});

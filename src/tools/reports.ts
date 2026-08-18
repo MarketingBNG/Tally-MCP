@@ -512,6 +512,92 @@ async function noteStaleClosingStock(
   }
 }
 
+/**
+ * Ledger-name fragments that mark a COST RECOVERY rather than a sale.
+ *
+ * Freight, packing and insurance recharged to a customer are recoveries of a
+ * cost, not revenue from the entity's ordinary activities. Presented gross
+ * inside sales they overstate both revenue and margin.
+ *
+ * Deliberately conservative. Only terms whose ordinary accounting meaning is a
+ * delivery or handling cost, so a genuine revenue stream — "Freight Income" at
+ * a haulier, say — is a false positive this ACCEPTS rather than one it hides.
+ * The note says the classification is a judgement and never adjusts a figure.
+ */
+const COST_RECOVERY_HINTS = [
+  'freight',
+  'transport',
+  'carriage',
+  'packing',
+  'courier',
+  'delivery',
+  'shipping',
+  'insurance',
+];
+
+/** Group names whose contents are revenue for this purpose. */
+const REVENUE_GROUP_HINTS = ['sales account', 'direct income', 'indirect income', 'revenue'];
+
+/**
+ * Cost recoveries sitting inside revenue — found on the masters, not the rows.
+ *
+ * WHY THE MASTERS. A profit and loss reports GROUPS: "Sales Accounts" is one
+ * row and the ledgers inside it are invisible, so nothing on the statement
+ * itself can show that part of the figure is recovered freight. The ledger
+ * masters carry the parent group, which is where it is visible.
+ *
+ * Found live 2026-08-18 on AgEx Pharma LLC: `Transport Cost`, parent
+ * `Sales Accounts`, closing 805.00, credited into the revenue side of
+ * invoice AgEx/INV/02 alongside the goods.
+ *
+ * NOTHING IS RECLASSIFIED and no figure moves. Whether a recovery is revenue
+ * (ASC 606-10-32 / Ind AS 115) depends on whether the entity controls the
+ * shipping service before transfer, which no ledger name settles. This names
+ * the ledgers and their size so the judgement can be made, and says plainly
+ * that it is a judgement.
+ *
+ * Never throws.
+ */
+async function noteCostRecoveriesInRevenue(
+  deps: ToolDeps,
+  company: string | undefined
+): Promise<string[]> {
+  try {
+    const { ledgers } = await fetchLedgers(deps, company);
+
+    const suspects = ledgers.filter((ledger) => {
+      const parent = (ledger.parent ?? '').trim().toLowerCase();
+      if (!REVENUE_GROUP_HINTS.some((hint) => parent.includes(hint))) return false;
+      const name = ledger.name.toLowerCase();
+      return COST_RECOVERY_HINTS.some((hint) => name.includes(hint));
+    });
+
+    if (suspects.length === 0) return [];
+
+    const listed = suspects
+      .map((ledger) => {
+        const amount = ledger.closingBalance?.amount;
+        return `"${ledger.name}" (under "${ledger.parent ?? 'unknown'}"${
+          amount === undefined || amount === null ? '' : `, ${new Decimal(amount).abs().toFixed(2)}`
+        })`;
+      })
+      .join(', ');
+
+    return [
+      `${String(suspects.length)} ledger(s) grouped under revenue are named as COST RECOVERIES ` +
+        `rather than sales: ${listed}. Freight, packing and insurance recharged to a customer ` +
+        'are recoveries of a cost; presented gross inside sales they overstate both revenue and ' +
+        'gross margin by their amount. Nothing here has been reclassified and no figure has ' +
+        'moved — whether a recovery is revenue depends on whether the entity controls the ' +
+        'service before it transfers to the customer, which a ledger name cannot settle. Verified ' +
+        'live: one such ledger was credited into the revenue side of a sales invoice alongside ' +
+        'the goods. Check the grouping before quoting revenue or margin from this statement.',
+    ];
+  } catch {
+    return [];
+  }
+}
+
 async function noteMastersDivergence(
   deps: ToolDeps,
   company: string | undefined,
@@ -1191,7 +1277,10 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
           args.statement === 'trial_balance'
             ? await noteMastersDivergence(deps, args.company, current.rows)
             : args.statement === 'profit_loss'
-              ? await noteStaleClosingStock(deps, args.company, current.rows)
+              ? [
+                  ...(await noteStaleClosingStock(deps, args.company, current.rows)),
+                  ...(await noteCostRecoveriesInRevenue(deps, args.company)),
+                ]
               : [];
 
         // Only where the end date bound. Where it did not, the figures already
