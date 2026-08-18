@@ -181,10 +181,29 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
             ? DEFAULT_CURRENCY
             : company.currency.trim();
 
+        /**
+         * Every request below is scoped to the company RESOLVED above, not to
+         * `args.company`, and the difference is the whole bug this prevents.
+         *
+         * An unscoped request omits `<SVCURRENTCOMPANY>` entirely, so it is
+         * byte-identical no matter which company was asked for. That is wrong
+         * twice over: Tally answers for whichever company it has current, and
+         * the response cache is keyed on the request body, so the second
+         * company's call is then served the first company's ledgers from memory
+         * — same count, same GUID, no error. Verified as a real defect: a call
+         * naming a second company reported the first one's 472 ledgers.
+         *
+         * Using `company.name` rather than `args.company` scopes the
+         * single-loaded-company path as well, which `args.company` leaves
+         * undefined. Belt and braces: it is also what makes the cache key
+         * distinct per company instead of shared across all of them.
+         */
+        const companyOption = { company: company.name };
+
         // Full-field ledger fetch: the field names that come back ARE the
         // answer to "what does this company record".
         const ledgerRequest = buildLedgerListRequest(
-          { format: deps.config.tallyPreferredFormat },
+          { ...companyOption, format: deps.config.tallyPreferredFormat },
           true
         );
         const ledgerResponse = await deps.client.send(ledgerRequest, 'report');
@@ -264,7 +283,6 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
 
         let features: unknown;
         if (args.includeFeatures === true) {
-          const companyOption = args.company === undefined ? {} : { company: args.company };
           const stockResponse = await deps.client.send(
             buildStockItemListRequest({
               ...companyOption,

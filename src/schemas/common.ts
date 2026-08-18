@@ -89,6 +89,34 @@ export const UNTRUSTED_CONTENT_NOTICE =
 export const READ_ONLY_NOTICE = 'Read-only: nothing here can modify TallyPrime.';
 
 /**
+ * The qualifier every "an empty result is a real answer" claim must carry.
+ *
+ * ## Why a standing reassurance needs a precondition
+ *
+ * Several tools tell the caller, in their description, that returning nothing
+ * is a genuine answer rather than a failure — and on its own that is true and
+ * worth saying: a company with no GST configured really does return nothing.
+ *
+ * But the claim was stated UNCONDITIONALLY, and that is how it came to launder a
+ * defect. `tally_get_report` could not read three of TallyPrime's row layouts
+ * and returned zero rows for reports carrying real figures; the standing note
+ * then explained that an empty result was fine. The reassurance was not merely
+ * present alongside the bug, it was the sentence that made the bug persuasive.
+ *
+ * So the claim is now subordinate to evidence. Every normaliser compares the
+ * payload size against TallyPrime's empty-result envelope and emits an
+ * `UNREAD PAYLOAD` warning when bytes arrived but nothing parsed. This text
+ * points at that signal, so "empty means empty" is conditional on it being
+ * absent rather than assumed.
+ */
+export const EMPTY_RESULT_CAVEAT =
+  'BUT CHECK THE WARNINGS FIRST: an empty result is only a real answer when the response carries ' +
+  'no "UNREAD PAYLOAD" warning. That warning means TallyPrime sent data this server could not ' +
+  'parse, so nothing came back for a reason that has nothing to do with the books. Where it ' +
+  'appears, do not report "none found" — say the data could not be read and check the same view ' +
+  'on screen in TallyPrime.';
+
+/**
  * How much explanatory material to return alongside the figures.
  *
  * WHY: these tools carry a great deal of standing explanation — why a period

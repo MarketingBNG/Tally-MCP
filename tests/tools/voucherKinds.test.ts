@@ -101,8 +101,12 @@ describe('the voucher request asks for the flags', () => {
   it('names both flags in the fetch list', async () => {
     // The parse above is useless if the request never asks. Tally sends the field
     // superset anyway, so adding them costs nothing — but they must be named.
-    const { buildVoucherCollectionRequest } = await import('../../src/tally/requests.js');
-    const body = buildVoucherCollectionRequest({ fromDate: '2026-04-01', toDate: '2026-07-31' });
+    const { buildVoucherCollectionRequest, UNSCOPED } = await import('../../src/tally/requests.js');
+    const body = buildVoucherCollectionRequest({
+      company: UNSCOPED,
+      fromDate: '2026-04-01',
+      toDate: '2026-07-31',
+    });
 
     expect(body).toContain('IsOrderVoucher');
     expect(body).toContain('IsInventoryVoucher');

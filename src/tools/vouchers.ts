@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { buildVoucherCollectionRequest, buildVoucherTypeListRequest } from '../tally/requests.js';
+import {
+  buildVoucherCollectionRequest,
+  buildVoucherRegisterRequest,
+  buildVoucherTypeListRequest,
+  UNSCOPED,
+} from '../tally/requests.js';
+import { addDaysIso, bookYearFor, type DateRange } from '../utils/dates.js';
 import { normalizeVouchers, normalizeVoucherTypes, type Voucher } from '../tally/normalize.js';
 import { matchesVoucherFilters } from './voucherFilters.js';
 import { TallyError } from '../tally/TallyError.js';
@@ -12,6 +18,7 @@ import {
   periodNote,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
+  EMPTY_RESULT_CAVEAT,
 } from '../schemas/common.js';
 import {
   DEFAULT_PAGE_SIZE,
@@ -23,6 +30,7 @@ import { foldUniformFields, uniformFieldsNote } from '../utils/uniformFields.js'
 import {
   assertCompanyIsLoaded,
   assertResultSetFits,
+  companyNamed,
   fromPage,
   noteEmptyDefaultedPeriod,
   periodWasDefaulted,
@@ -38,16 +46,24 @@ import {
  * — one tool, since a list is a search with no filters and a get-by-number is
  * a search that happens to be unambiguous.
  *
- * These read a `Voucher` COLLECTION, not the `Voucher Register` report and not
- * `DayBook`. The register returns voucher headers with no ledger entries at all
- * — see `buildVoucherCollectionRequest`, which records the live verification —
- * so it cannot support any figure derived from movements.
+ * SOURCES, one per book year. The CURRENT financial year comes from a `Voucher`
+ * COLLECTION; any earlier year comes from the `Voucher Register` REPORT. Never
+ * `DayBook`, which returns 617 bytes and no vouchers at all.
  *
- * EVERYTHING is filtered client-side over a full fetch of the book, dates
- * included: Tally applies neither filtering nor date scoping to a collection.
- * So no parameter here makes the query cheaper, the date range included. That
- * is a real cost, accepted because the alternative request shape returns no
- * entries and therefore no correct answer.
+ * The split is forced by Tally: a collection cannot be moved off the current
+ * financial year by any static variable, so prior years were entirely
+ * unreachable through it, while the report honours a date range. It is safe to
+ * mix them because they were verified to agree — over one common period both
+ * returned 284 vouchers, 985 entries, identical GUIDs and the same total to the
+ * paisa. See `fetchAcrossBookYears` and `buildVoucherRegisterRequest`.
+ *
+ * (An earlier note here said the register returns headers with no entries. That
+ * was measured without a date range; with one it carries the full entry lists.)
+ *
+ * EVERYTHING is filtered client-side over a full fetch of each year, dates
+ * included: Tally applies no filtering, and a collection applies no date scoping
+ * either. So no parameter here makes the query cheaper within a year — though a
+ * range confined to fewer book years does mean fewer, smaller fetches.
  */
 
 const NARROW_HINT =
@@ -149,7 +165,8 @@ const DESCRIPTION = [
     'call cheap.',
   '',
   'A family search returns nothing if the company records no vouchers of that family in the ' +
-    'period. That is a real answer, not a failure.',
+    'period. That is a real answer, not a failure. ' +
+    EMPTY_RESULT_CAVEAT,
   '',
   UNTRUSTED_CONTENT_NOTICE,
   '',
@@ -168,7 +185,7 @@ async function resolveFamilyTypes(
   family: string
 ): Promise<{ types: Set<string>; warnings: string[] }> {
   const response = await deps.client.send(
-    buildVoucherTypeListRequest(company === undefined ? {} : { company }),
+    buildVoucherTypeListRequest({ company: company ?? UNSCOPED }),
     'standard'
   );
   const { data, warnings } = normalizeVoucherTypes(response.body);
@@ -247,6 +264,216 @@ function filterByPeriod(
   }
 
   return kept;
+}
+
+/**
+ * Fetch vouchers across however many book years the requested period spans.
+ *
+ * ## The problem
+ *
+ * A Voucher collection is pinned to the company's CURRENT financial year and
+ * cannot be moved off it — `SVFROMDATE`/`SVTODATE`, `SVCURRENTDATE` and
+ * `SVCURRENTPERIOD` were each measured live and every one returned the same
+ * current-year vouchers. So asking for FY2023-24 returned FY2026-27's data, the
+ * local period filter then discarded all of it, and the caller received an empty
+ * list. For an auditor that reads as "this year had no transactions".
+ *
+ * ## The route
+ *
+ * `Voucher Register` is a report, and reports DO honour the range. It carries
+ * full ledger entries and parses with the same normaliser, and over a common
+ * period the two sources were verified identical — same vouchers, same entries,
+ * same total to the paisa. See `buildVoucherRegisterRequest`.
+ *
+ * ## Why one request per book year
+ *
+ * The report is roughly 50x the payload of the collection. Measured on MUDALS:
+ * 880KB for a sparse year, 39MB for the next, 79MB and 103 seconds for the one
+ * after — and a single request for the whole five-year span TIMED OUT. So the
+ * span is split on book-year boundaries and fetched a year at a time, which also
+ * lets each year be cached, retried and reported on independently.
+ *
+ * The CURRENT year still comes from the collection: it is the cheaper source for
+ * identical data, and it is the long-proven path.
+ *
+ * ## Partial failure is reported, never hidden
+ *
+ * A year that fails does not fail the call — the other years are real data and an
+ * auditor should have them. But the answer then says exactly which years are
+ * missing and that totals exclude them. Silently returning the years that
+ * happened to load would be a complete-looking answer over an incomplete
+ * population, which is the failure this connector treats as the serious one.
+ */
+async function fetchAcrossBookYears(
+  deps: ToolDeps,
+  input: {
+    canonicalCompany: string | undefined;
+    period: DateRange;
+    allFields: boolean;
+    nested: boolean;
+    currency: string;
+  }
+): Promise<{ data: Voucher[]; warnings: string[]; repairs: string[] }> {
+  const { canonicalCompany, period, allFields, nested, currency } = input;
+
+  const company = await companyNamed(deps, canonicalCompany);
+  const currentYear =
+    company?.startingFrom == null
+      ? null
+      : bookYearFor(company.startingFrom, company.endingAt ?? company.startingFrom);
+
+  const years = bookYearsSpanning(period, company?.startingFrom ?? null, currentYear);
+
+  const warnings: string[] = [];
+  const repairs: string[] = [];
+  const collected: Voucher[] = [];
+  const failed: string[] = [];
+  let priorYearsFetched = 0;
+
+  for (const year of years) {
+    /*
+     * The report is for years strictly BEFORE the current one, and nothing else.
+     *
+     * Deliberately not "the year that equals the current one". A period may sit
+     * AFTER the company's last recorded date — a caller asking about the year in
+     * progress on books that stop in July, or simply the defaulted period on a
+     * dormant company. Tally serves those from the collection exactly as it
+     * always has, and routing them to a 50x-larger report would be a large
+     * regression to fix nothing.
+     *
+     * So the collection stays the default and the report is the exception, which
+     * also keeps every existing path byte-identical to what it was.
+     */
+    const usesCollection = currentYear === null || year.toDate >= currentYear.fromDate;
+
+    const request = usesCollection
+      ? buildVoucherCollectionRequest(
+          {
+            company: canonicalCompany ?? UNSCOPED,
+            fromDate: year.fromDate,
+            toDate: year.toDate,
+            format: deps.config.tallyPreferredFormat,
+          },
+          allFields
+        )
+      : buildVoucherRegisterRequest({
+          company: canonicalCompany ?? UNSCOPED,
+          fromDate: year.fromDate,
+          toDate: year.toDate,
+          // XML only. The report path has never been observed under the JSON
+          // export switch, and a wire format whose shape has not been seen is
+          // not something to discover on a prior-year audit fetch.
+          format: 'xml',
+        });
+
+    try {
+      const response = await deps.client.send(request, 'report');
+      const parsed = normalizeVouchers(response.body, allFields, currency, nested);
+      collected.push(...parsed.data);
+      warnings.push(...parsed.warnings);
+      repairs.push(...response.repairs);
+      if (!usesCollection) priorYearsFetched += 1;
+    } catch (error) {
+      // One year failing must not lose the others, but it must not be silent.
+      failed.push(`${year.fromDate}..${year.toDate}`);
+      deps.logger.warn('a book year could not be fetched', {
+        year: year.fromDate,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (failed.length > 0) {
+    warnings.unshift(
+      `INCOMPLETE POPULATION: ${String(failed.length)} of the ${String(years.length)} book year(s) ` +
+        `your period covers could not be fetched (${failed.join(', ')}). Every figure here ` +
+        'EXCLUDES those years, so totals, counts and any test run over this population are ' +
+        'understated by an unknown amount — do not present them as covering the period you ' +
+        'asked for. A prior year is read from a large report (tens of megabytes) and a timeout ' +
+        'is the usual cause; retry that year on its own, or raise TALLY_REPORT_TIMEOUT_MS.'
+    );
+  }
+
+  if (priorYearsFetched > 0) {
+    const scope =
+      years.length === 1
+        ? 'this period lies in a book year outside the one TallyPrime serves directly'
+        : `this period spans ${String(years.length)} book years, ` +
+          `${String(priorYearsFetched)} of them outside the year TallyPrime serves directly`;
+
+    warnings.push(
+      `PRIOR YEARS INCLUDED: ${scope}. ` +
+        "Those were read from TallyPrime's Voucher Register report, one year per request, " +
+        'because a voucher collection cannot leave the current financial year. The two sources ' +
+        'were verified to return identical vouchers, entries and totals over a common period, ' +
+        'so the figures are comparable across years.'
+    );
+  }
+
+  return { data: dedupeVouchers(collected), warnings, repairs };
+}
+
+/**
+ * The book years a period touches, oldest first.
+ *
+ * Anchored on the company's own book-year start, so a calendar-year company
+ * splits on 1 January and an Indian one on 1 April. Falls back to the current
+ * year alone when the anchor is unknown, which keeps the previous behaviour
+ * rather than inventing a split.
+ */
+function bookYearsSpanning(
+  period: DateRange,
+  startingFrom: string | null,
+  currentYear: DateRange | null
+): DateRange[] {
+  if (startingFrom === null || currentYear === null) {
+    return [currentYear ?? period];
+  }
+
+  const years: DateRange[] = [];
+  let cursor = bookYearFor(startingFrom, period.fromDate);
+
+  // Bounded rather than `while (true)`: a malformed period must not spin. Fifty
+  // years is far past any real set of books and still terminates immediately.
+  for (let guard = 0; guard < 50; guard++) {
+    years.push(cursor);
+    if (cursor.toDate >= period.toDate) break;
+    // One day past this year's end lands in the next year.
+    const next = bookYearFor(startingFrom, addDaysIso(cursor.toDate, 1));
+    if (next.fromDate <= cursor.fromDate) break;
+    cursor = next;
+    // Never fetch beyond the year Tally itself is sitting in.
+    if (cursor.fromDate > currentYear.fromDate) break;
+  }
+
+  return years;
+}
+
+/**
+ * Drop vouchers seen twice, keeping the first.
+ *
+ * Book-year windows do not overlap, so in principle nothing repeats. This is
+ * here because the consequence of being wrong is a DOUBLE-COUNTED voucher in a
+ * total, which is both plausible-looking and exactly the sort of error an
+ * auditor would carry into a file. Keyed on GUID, which Tally supplies per
+ * voucher; anything without one is kept as-is rather than merged on a weaker key.
+ */
+function dedupeVouchers(vouchers: readonly Voucher[]): Voucher[] {
+  const seen = new Set<string>();
+  const out: Voucher[] = [];
+
+  for (const voucher of vouchers) {
+    const guid = voucher.guid;
+    if (guid === null || guid === undefined || guid === '') {
+      out.push(voucher);
+      continue;
+    }
+    if (seen.has(guid)) continue;
+    seen.add(guid);
+    out.push(voucher);
+  }
+
+  return out;
 }
 
 /**
@@ -418,21 +645,17 @@ export async function fetchVouchers(
     }
   }
 
-  const request = buildVoucherCollectionRequest(
-    {
-      ...(canonicalCompany === undefined ? {} : { company: canonicalCompany }),
-      fromDate: period.fromDate,
-      toDate: period.toDate,
-      format: deps.config.tallyPreferredFormat,
-    },
-    allFields
-  );
-
   // Report-class: a wide voucher range is one of the slowest things Tally does.
   const currencyWarnings: string[] = [];
   const currency = await resolveCompanyCurrency(deps, canonicalCompany, currencyWarnings);
-  const response = await deps.client.send(request, 'report');
-  const { data, warnings } = normalizeVouchers(response.body, allFields, currency, nested);
+
+  const { data, warnings, repairs } = await fetchAcrossBookYears(deps, {
+    canonicalCompany,
+    period,
+    allFields,
+    nested,
+    currency,
+  });
 
   // Measured against `data` — everything Tally sent — and therefore BEFORE the
   // local period filter below, which is what would otherwise turn a truncated
@@ -444,7 +667,7 @@ export async function fetchVouchers(
   const inPeriod = filterByPeriod(data, period, warnings);
   const value = {
     vouchers: inPeriod,
-    warnings: [...response.repairs, ...currencyWarnings, ...warnings],
+    warnings: [...repairs, ...currencyWarnings, ...warnings],
   };
 
   if (ttl > 0) {

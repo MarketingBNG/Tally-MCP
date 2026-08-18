@@ -64,6 +64,46 @@ export function withQueryLog<T>(scope: QueryScope, fn: () => Promise<T>): Promis
 }
 
 /**
+ * Run `fn` with provenance capture SUPPRESSED, sharing the caller's in-flight memo.
+ *
+ * ## What this is for
+ *
+ * `source_query` exists so a figure can be re-derived months later. A request
+ * that produced no figure therefore does not belong in it — it is noise that
+ * makes the record longer without making anything more reproducible.
+ *
+ * The clearest case is the company-list probe. Resolving "which company did the
+ * caller mean, and how does TallyPrime spell it" sends `List of Companies`, and
+ * it does so from several helpers on nearly every call. Measured across a short
+ * audit sequence it was the single most repeated request in `source_query` —
+ * sent on 4 of 4 calls at 649 bytes each — while contributing to no number in
+ * any of them.
+ *
+ * `resolveCompanyId` already did exactly this with a hand-rolled throwaway
+ * scope; this makes the pattern reusable rather than a one-off.
+ *
+ * ## What must NOT use this
+ *
+ * Anything whose answer reaches a figure or its LABEL. The currency lookup is
+ * the live example: it produces no number, but it decides the currency every
+ * amount is labelled with, and this project has already shipped dollar balances
+ * labelled INR once. That request stays in the record.
+ *
+ * The in-flight memo is shared deliberately, so suppressing provenance does not
+ * also cost an extra round trip. `queries` and `oldestFetchAt` are discarded:
+ * a request that contributes no figure should not date the answer either.
+ */
+export function withoutQueryLog<T>(fn: () => Promise<T>): Promise<T> {
+  const current = storage.getStore();
+  const throwaway: QueryScope = {
+    queries: [],
+    oldestFetchAt: null,
+    ...(current?.inFlight === undefined ? {} : { inFlight: current.inFlight }),
+  };
+  return storage.run(throwaway, fn);
+}
+
+/**
  * Record when data contributing to the current answer was read from Tally.
  *
  * Called with the original fetch time on a cache hit, not the time of the hit —

@@ -221,3 +221,20 @@ export function todayIso(now: Date = new Date()): string {
   const day = String(now.getDate()).padStart(2, '0');
   return `${String(year)}-${month}-${day}`;
 }
+
+/**
+ * A date shifted by whole days, in ISO form.
+ *
+ * Used to step from the last day of one book year into the first of the next.
+ * Goes through `Date.UTC` so month and year boundaries — and leap days — are
+ * handled by the calendar rather than by arithmetic on the parts.
+ */
+export function addDaysIso(iso: string, days: number): string {
+  const shifted = new Date(
+    Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) +
+      days * 86_400_000
+  );
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${String(shifted.getUTCFullYear())}-${month}-${day}`;
+}

@@ -131,6 +131,46 @@ const configSchema = z.object({
     .default(300_000),
 
   /**
+   * How much of the request provenance to put in every response's `source_query`.
+   *
+   * `full` emits every request body verbatim on every call. `dedupe` (the
+   * default) emits each DISTINCT body verbatim the first time it appears in the
+   * session and a one-line descriptor on later calls. `compact` never emits a
+   * body, only descriptors.
+   *
+   * `dedupe` is the default because it costs nothing that matters. Measured over
+   * a seven-call audit sequence, `source_query` was 31% of everything returned,
+   * and the bulk of that was the SAME two requests — the company list and the
+   * currency list — reprinted verbatim on all seven calls. Every distinct
+   * request is still shown in full once, so nothing becomes unreplayable; only
+   * the repetition goes.
+   *
+   * It is also safe for the audit-file path: `tally_make_workpaper` reproduces a
+   * paper from its TOOL PARAMETERS, not from these request bodies, so a
+   * deduplicated transcript cannot weaken a workpaper.
+   *
+   * WHY THIS IS A KNOB AND NOT A CHANGE. Measured on this server's own output:
+   * the XML transcript runs 2-4KB per call and is frequently the largest single
+   * thing in a response, ahead of the accounting data. On a long audit that is
+   * most of the cost. But it is also the reproducibility claim this connector
+   * makes, and a workpaper that cites a query nobody can replay is weaker
+   * evidence than one that does.
+   *
+   * The one thing `dedupe` assumes is that the earlier response is still
+   * readable. In a long session that gets summarised, the first occurrence may
+   * be gone and a reader is left with a descriptor and no body. Set `full` when
+   * that matters — an engagement where the transcript itself is the record.
+   * `compact` remains for exploratory browsing, and gives up replayability
+   * outright.
+   *
+   * Nothing else about the response changes at any setting — no warning, figure
+   * or caveat is affected, and there is a test asserting exactly that.
+   */
+  tallySourceQueryMode: z
+    .enum(['full', 'dedupe', 'compact'])
+    .default('dedupe'),
+
+  /**
    * The currency label to use when TallyPrime's own symbol cannot be transported.
    *
    * Verified live: TallyPrime replaces `₹`, `€` and other characters outside its
@@ -249,6 +289,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tallyMaxRecords: env.TALLY_MAX_RECORDS,
     tallyMaxResponseBytes: env.TALLY_MAX_RESPONSE_BYTES,
     tallyCacheTtlMs: env.TALLY_CACHE_TTL_MS,
+    tallySourceQueryMode: env.TALLY_SOURCE_QUERY_MODE,
     tallyCurrencyLabel: env.TALLY_CURRENCY_LABEL,
     logLevel: env.LOG_LEVEL,
   });

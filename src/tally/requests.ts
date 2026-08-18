@@ -23,12 +23,51 @@ export const FORBIDDEN_WRITE_VERBS = ['Import', 'Alter', 'Delete', 'Create'] as 
 
 export type TallyWireFormat = 'xml' | 'json';
 
+/**
+ * Deliberately not scoped to any company.
+ *
+ * A unique symbol rather than `undefined`, and that is the entire point — see
+ * `CompanyScope` below.
+ */
+export const UNSCOPED: unique symbol = Symbol('UNSCOPED');
+
+/**
+ * Which company a request is for, as an explicit choice that cannot be skipped.
+ *
+ * ## The bug this shape exists to make unwriteable
+ *
+ * `company` used to be optional, and every builder defaulted its whole options
+ * object to `{}`. So `buildLedgerListRequest({ format })` compiled, sent no
+ * `SVCURRENTCOMPANY`, and TallyPrime answered from whichever company it had
+ * current. That is exactly how `tally_get_company` came to report one company's
+ * 472 ledgers under another company's name (TEMP.md §2.8) — the call site did
+ * not decide to be unscoped, it simply forgot to say.
+ *
+ * Worse, an unscoped request body is byte-identical whichever company was
+ * asked about, so the response cache — keyed on the body — then served the
+ * second company the first one's data. The wrong answer was reproducible.
+ *
+ * An optional field cannot express the difference between "no company, on
+ * purpose" and "I forgot". This type can: every scopable builder now REQUIRES
+ * `company`, and passing `UNSCOPED` is how a caller states that global scope is
+ * intended. Forgetting is a compile error rather than a silent wrong answer.
+ *
+ * Only two requests are legitimately unscoped — the company list itself and the
+ * connection probe — and both say so in their own code below.
+ */
+export type CompanyScope = string | typeof UNSCOPED;
+
 export interface TallyRequestOptions {
   /**
-   * Company to scope the request to. When omitted, Tally uses whichever
-   * company is currently loaded — see PROJECT_SPEC.md "Company selection".
+   * Company to scope the request to, or `UNSCOPED` to state that no scope is
+   * intended. REQUIRED — see `CompanyScope` for why this is not optional.
+   *
+   * Must be TallyPrime's own spelling of the name. Tally matches
+   * `SVCURRENTCOMPANY` exactly and answers from the loaded company on a
+   * mismatch rather than erroring, so pass what `assertCompanyIsLoaded`
+   * returned, never the caller's own string.
    */
-  company?: string;
+  company: CompanyScope;
   /** ISO YYYY-MM-DD. Converted to Tally's YYYYMMDD internally. */
   fromDate?: string;
   /** ISO YYYY-MM-DD. */
@@ -65,7 +104,33 @@ function staticVariables(options: TallyRequestOptions): string {
       : '<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>'
   );
 
-  if (options.company !== undefined && options.company !== '') {
+  /*
+   * A missing company is a PROGRAMMING error and is raised as one.
+   *
+   * The type makes `company` required, so this is unreachable from TypeScript.
+   * It is here because of what the alternative would do: with `company`
+   * undefined, the template below would emit the literal
+   * `<SVCURRENTCOMPANY>undefined</SVCURRENTCOMPANY>`, TallyPrime would find no
+   * company by that name, and — verified behaviour — it answers from whichever
+   * company is loaded rather than erroring. That is precisely the silent
+   * wrong-company read this whole type exists to prevent, reintroduced through
+   * an untyped call site.
+   *
+   * Failing loudly here is the conservative choice: a thrown error is caught by
+   * `runTool` and surfaced as a typed refusal, which is strictly better than a
+   * plausible figure attributed to the wrong entity.
+   */
+  if (options.company === undefined || options.company === null) {
+    throw new Error(
+      'A Tally request was built with no company scope. Pass the resolved company name, or ' +
+        'UNSCOPED to state that global scope is intended — see CompanyScope in requests.ts.'
+    );
+  }
+
+  // UNSCOPED is the only way to omit the tag, and it has to be said out loud.
+  // An empty string is treated as unscoped too rather than emitted as an empty
+  // tag, which TallyPrime rejects in a way that cannot be diagnosed remotely.
+  if (options.company !== UNSCOPED && options.company !== '') {
     parts.push(`<SVCURRENTCOMPANY>${escapeXml(options.company)}</SVCURRENTCOMPANY>`);
   }
   if (options.fromDate !== undefined) {
@@ -82,7 +147,7 @@ function staticVariables(options: TallyRequestOptions): string {
  * A raw export envelope for a named report (TYPE=Data).
  * Used for day book, trial balance, balance sheet, P&L and similar.
  */
-export function buildReportRequest(reportId: string, options: TallyRequestOptions = {}): string {
+export function buildReportRequest(reportId: string, options: TallyRequestOptions): string {
   return [
     '<ENVELOPE>',
     '<HEADER>',
@@ -120,7 +185,7 @@ export function buildCollectionRequest(
    * choice is explicit at the call site rather than a default.
    */
   nativeMethods: readonly string[] | '*',
-  options: TallyRequestOptions = {}
+  options: TallyRequestOptions
 ): string {
   // `*` may arrive on its own or inside the list. Inside the list it means
   // "everything, AND these by name" — which is not redundant, because Tally's
@@ -170,7 +235,9 @@ export function buildConnectionProbeRequest(): string {
     'List of Companies',
     'Company',
     ['Name', 'StartingFrom', 'EndingAt'],
-    {}
+    // Genuinely global: this asks whether Tally is answering at all, which is
+    // not a question about any company's books.
+    { company: UNSCOPED }
   );
 }
 
@@ -188,7 +255,12 @@ export function buildConnectionProbeRequest(): string {
  * than erroring, which is worth knowing — an unsupported native method here fails
  * open, so a missing field means "not served", never "not set".
  */
-export function buildCompanyListRequest(options: TallyRequestOptions = {}): string {
+export function buildCompanyListRequest(
+  // Defaulted to UNSCOPED, and this is the one builder where a default is
+  // right: "which companies are open" is not a question about a company, so
+  // there is nothing to scope it to and no way to forget one.
+  options: TallyRequestOptions = { company: UNSCOPED }
+): string {
   return buildCollectionRequest(
     'List of Companies',
     'Company',
@@ -207,7 +279,7 @@ export function buildCompanyListRequest(options: TallyRequestOptions = {}): stri
  * 37x the payload, so it is opt-in.
  */
 export function buildLedgerListRequest(
-  options: TallyRequestOptions = {},
+  options: TallyRequestOptions,
   allFields = false
 ): string {
   return buildCollectionRequest(
@@ -265,7 +337,7 @@ const LEDGER_FIELDS = [
  * (empty for a primary group), and `IsRevenue`/`IsDeemedPositive` classify it
  * as P&L vs balance sheet and debit vs credit respectively.
  */
-export function buildGroupListRequest(options: TallyRequestOptions = {}): string {
+export function buildGroupListRequest(options: TallyRequestOptions): string {
   return buildCollectionRequest(
     'Groups',
     'Group',
@@ -302,7 +374,7 @@ export function buildGroupListRequest(options: TallyRequestOptions = {}): string
  * every family query.
  */
 export function buildVoucherTypeListRequest(
-  options: TallyRequestOptions = {},
+  options: TallyRequestOptions,
   allFields = false
 ): string {
   return buildCollectionRequest(
@@ -327,7 +399,7 @@ export function buildVoucherTypeListRequest(
  * fail-open behaviour as `BaseCurrencySymbol` on the company collection. The base
  * currency therefore comes from the company's own `CurrencyName`, not from here.
  */
-export function buildCurrencyListRequest(options: TallyRequestOptions = {}): string {
+export function buildCurrencyListRequest(options: TallyRequestOptions): string {
   return buildCollectionRequest(
     'Currencies',
     'Currency',
@@ -348,7 +420,7 @@ export function buildCurrencyListRequest(options: TallyRequestOptions = {}): str
  * rather than a guessed mapping. See docs/known-limitations.md.
  */
 export function buildStockItemListRequest(
-  options: TallyRequestOptions = {},
+  options: TallyRequestOptions,
   allFields = false
 ): string {
   return buildCollectionRequest(
@@ -399,7 +471,7 @@ export function buildStockItemListRequest(
  * nothing may rely on them having been applied.
  */
 export function buildVoucherCollectionRequest(
-  options: TallyRequestOptions = {},
+  options: TallyRequestOptions,
   allFields = false
 ): string {
   // Order matters for `allFields`: `*` first, then the entry lists, because the
@@ -472,7 +544,7 @@ export function buildVoucherCollectionRequest(
  * The shape is defined here rather than in the script so that the Export-only
  * guarantee this file carries covers it too.
  */
-export function buildVoucherAlterIdRequest(options: TallyRequestOptions = {}): string {
+export function buildVoucherAlterIdRequest(options: TallyRequestOptions): string {
   return [
     '<ENVELOPE>',
     '<HEADER>',
@@ -492,6 +564,46 @@ export function buildVoucherAlterIdRequest(options: TallyRequestOptions = {}): s
     '</DESC></BODY>',
     '</ENVELOPE>',
   ].join('');
+}
+
+/**
+ * Vouchers WITH their entries, for a period a collection cannot reach.
+ *
+ * ## Why this exists when a Voucher collection already returns vouchers
+ *
+ * A Voucher collection is pinned to the company's CURRENT financial year and
+ * cannot be moved off it. Measured live 2026-08-17 against MUDALS (books
+ * 2021-04-01 to 2026-07-28): `SVFROMDATE`/`SVTODATE`, `SVCURRENTDATE` and
+ * `SVCURRENTPERIOD` were each tried, alone and combined, and every one returned
+ * the same 284 current-year vouchers dated 2026-04-01 to 2026-07-28 — byte for
+ * byte the same response. Five years of real history were unreachable.
+ *
+ * `Voucher Register` is a REPORT, and reports honour the date range. The same
+ * probe returned 14 vouchers for FY2023-24 with 50 ledger entries, and 788 and
+ * 1,534 vouchers for the two years after.
+ *
+ * ## This corrects an earlier finding in this codebase
+ *
+ * `buildVoucherCollectionRequest` above records that Voucher Register returns
+ * "zero ledger entries". That was measured WITHOUT an explicit date range. With
+ * one, the report carries full `ALLLEDGERENTRIES.LIST` data and the existing
+ * `normalizeVouchers` reads it unchanged.
+ *
+ * Equivalence was checked rather than assumed, because mixing two sources in one
+ * answer is only safe if they agree: over the same period the collection and this
+ * report returned **284 vouchers, 985 entries, identical GUID sets and the same
+ * total to the paisa**.
+ *
+ * ## Cost, which is the reason this is not simply used everywhere
+ *
+ * For the same 284 vouchers the collection sent 336KB and this report 17MB —
+ * about 50x. Per financial year, measured: FY2023-24 880KB/0.3s, FY2024-25
+ * 39MB/27s, FY2025-26 79MB/103s. One request for the whole five-year span TIMED
+ * OUT at 120s. So callers fetch ONE FINANCIAL YEAR PER CALL and keep the
+ * collection for the current year.
+ */
+export function buildVoucherRegisterRequest(options: TallyRequestOptions): string {
+  return buildReportRequest('Voucher Register', options);
 }
 
 /** Trial balance for a date range. */
@@ -545,7 +657,7 @@ export function buildFundsFlowRequest(options: TallyRequestOptions): string {
  * Shape: alternating DSPACCNAME/DSPSTKINFO siblings, one pair per stock item,
  * carrying closing quantity, rate and value. See `normalizeClosingStock`.
  */
-export function buildStockSummaryRequest(options: TallyRequestOptions = {}): string {
+export function buildStockSummaryRequest(options: TallyRequestOptions): string {
   return buildReportRequest('Stock Summary', options);
 }
 
@@ -556,6 +668,6 @@ export function buildStockSummaryRequest(options: TallyRequestOptions = {}): str
  * names; verified live 2026-08-14 against a company with one godown ("Main
  * Location"). This is the only path in the server to location-wise stock.
  */
-export function buildGodownSummaryRequest(options: TallyRequestOptions = {}): string {
+export function buildGodownSummaryRequest(options: TallyRequestOptions): string {
   return buildReportRequest('Godown Summary', options);
 }

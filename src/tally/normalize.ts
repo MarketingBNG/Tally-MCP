@@ -208,6 +208,10 @@ export function normalizeCompanies(xml: string): Normalized<Company[]> {
       };
     });
 
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the company list');
+  if (unread !== undefined) warnings.push(unread);
+
   return { data, warnings };
 }
 
@@ -236,6 +240,10 @@ export function normalizeCurrencies(xml: string): Normalized<Currency[]> {
       formalName: childText(node, 'MAILINGNAME'),
       decimalPlaces: childText(node, 'DECIMALPLACES'),
     }));
+
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the currency list');
+  if (unread !== undefined) warnings.push(unread);
 
   return { data, warnings };
 }
@@ -326,6 +334,10 @@ export function normalizeLedgers(
       };
     });
 
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the ledger masters');
+  if (unread !== undefined) warnings.push(unread);
+
   return { data, warnings };
 }
 
@@ -361,6 +373,10 @@ export function normalizeGroups(xml: string): Normalized<Group[]> {
         source: sourceRef('group', childText(node, 'GUID') ?? name),
       };
     });
+
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the group masters');
+  if (unread !== undefined) warnings.push(unread);
 
   return { data, warnings };
 }
@@ -453,6 +469,10 @@ export function normalizeVoucherTypes(xml: string): Normalized<VoucherType[]> {
       isDeemedPositive: isYes(childText(node, 'ISDEEMEDPOSITIVE')),
     }));
 
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the voucher type masters');
+  if (unread !== undefined) warnings.push(unread);
+
   return { data, warnings };
 }
 
@@ -535,6 +555,10 @@ export function normalizeStockItems(
         ...(Object.keys(nested).length === 0 ? {} : { nested }),
       };
     });
+
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the stock item masters');
+  if (unread !== undefined) warnings.push(unread);
 
   return { data, warnings };
 }
@@ -623,6 +647,10 @@ export function normalizeClosingStock(
     };
   });
 
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the closing stock report');
+  if (unread !== undefined) warnings.push(unread);
+
   return { data, warnings };
 }
 
@@ -670,6 +698,10 @@ export function normalizeTrialBalance(
       ),
     };
   });
+
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the trial balance');
+  if (unread !== undefined) warnings.push(unread);
 
   return { data, warnings };
 }
@@ -745,6 +777,10 @@ export function normalizeMonthlyFlow(
       ),
     };
   });
+
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'this monthly flow report');
+  if (unread !== undefined) warnings.push(unread);
 
   return { data, warnings };
 }
@@ -836,6 +872,10 @@ function normalizeStatement(
       ),
     };
   });
+
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'this statement');
+  if (unread !== undefined) warnings.push(unread);
 
   return { data, warnings };
 }
@@ -1047,6 +1087,10 @@ export function normalizeVouchers(
       };
     });
 
+  // A payload that carried content must never read as an empty result.
+  const unread = unreadablePayloadWarning(xml, data.length, 'the voucher register');
+  if (unread !== undefined) warnings.push(unread);
+
   return { data, warnings };
 }
 
@@ -1137,14 +1181,68 @@ export function normalizeGenericReport(
 ): Normalized<GenericReportRow[]> {
   const warnings: string[] = [];
   const container = reportContainer(openDocument(xml));
-  const rows = pairReportRows(container, 'DSPACCNAME', 'DSPACCINFO');
+
+  /*
+   * THREE ROW SHAPES, not one — and reading only the first is silent data loss.
+   *
+   * This function used to pair `DSPACCNAME` with `DSPACCINFO` and nothing else.
+   * That is the shape `Negative Ledgers` uses, and it was the report the
+   * allowlist was verified against, so the code looked right.
+   *
+   * Measured live 2026-08-17 against MUDALS TECHNOLOGIES (284 vouchers, 155 of
+   * them journals), the other reports do NOT use it:
+   *   - `Journal Register`  2,098 bytes of DSPPERIOD / DSPACCINFO
+   *   - `Sales Register`    2,817 bytes of the same
+   *   - `Ratio Analysis`    1,677 bytes of RATIONAME / RATIOVALUE
+   * Every one of those parsed to ZERO rows. TallyPrime sent real figures and
+   * this server reported "no rows" — then appended the note below explaining
+   * that an empty result is a real answer on an exception report. So the output
+   * did not merely lose the data, it argued that the loss was a clean result.
+   * On a register that reads as "this company records no sales".
+   *
+   * The shapes are tried in order and the first that yields rows wins. They are
+   * mutually exclusive in practice — a report emits one vocabulary — so this
+   * cannot mix two together. A report matching none still returns no rows, but
+   * now says so as an unrecognised LAYOUT rather than as an empty report, which
+   * is a different claim and the honest one.
+   */
+  let layout = 'DSPACCNAME/DSPACCINFO';
+  let rows = pairReportRows(container, 'DSPACCNAME', 'DSPACCINFO');
+
+  if (rows.length === 0) {
+    // Register reports: one row per PERIOD rather than per account.
+    const byPeriod = pairReportRows(container, 'DSPPERIOD', 'DSPACCINFO');
+    if (byPeriod.length > 0) {
+      layout = 'DSPPERIOD/DSPACCINFO';
+      rows = byPeriod;
+    }
+  }
+
+  if (rows.length === 0) {
+    // Ratio Analysis: flat name/value pairs, no amount block at all.
+    const ratios = pairReportRows(container, 'RATIONAME', 'RATIOVALUE');
+    if (ratios.length > 0) {
+      layout = 'RATIONAME/RATIOVALUE';
+      rows = ratios;
+    }
+  }
 
   const data: GenericReportRow[] = [];
   for (const row of rows) {
     // Amounts nest one level deeper than the info block on every report
     // observed, so a shallow scalar read would come back empty. The descendant
     // walk finds them wherever the particular report puts them.
-    const amounts = row.value === null ? {} : descendantScalars(row.value);
+    //
+    // RATIOVALUE is a scalar rather than a block, so it has no descendants to
+    // walk; its own text IS the value and is reported under its own tag name,
+    // keeping the "columns are TallyPrime's tag names" contract intact.
+    const amounts =
+      row.value === null
+        ? {}
+        : layout === 'RATIONAME/RATIOVALUE'
+          ? { RATIOVALUE: (textOf(row.value) ?? '').trim() }
+          : descendantScalars(row.value);
+
     if (row.value === null) {
       warnings.push(
         `The "${reportName}" row "${row.name}" arrived with no amount block; it is reported with ` +
@@ -1154,15 +1252,91 @@ export function normalizeGenericReport(
     data.push({ name: row.name, amounts });
   }
 
-  if (data.length === 0) {
+  if (data.length > 0 && layout !== 'DSPACCNAME/DSPACCINFO') {
     warnings.push(
-      `TallyPrime accepted "${reportName}" and returned no rows. On this report that is a real ` +
-        'answer, not a failure — but it is also what an unpopulated feature looks like, so ' +
-        'check whether this company uses the feature before reading it as "nothing to report".'
+      `"${reportName}" uses TallyPrime's ${layout} row layout rather than the per-account one. ` +
+        (layout === 'DSPPERIOD/DSPACCINFO'
+          ? 'Each row is a PERIOD (a month), not an account, so the "name" is a date range and ' +
+            'the figures are that period\'s totals. Do not read these rows as ledger balances.'
+          : 'Each row is a named ratio and its value, so there are no debit/credit columns to ' +
+            'read; the value is reported under TallyPrime\'s own RATIOVALUE tag.')
+    );
+  }
+
+  if (data.length === 0) {
+    // Distinguish "Tally sent nothing" from "Tally sent something this parser
+    // does not recognise". Reporting the second as the first is what produced
+    // the silent loss described above, and the byte count is the evidence.
+    const bytes = xml.length;
+    const looksPopulated = bytes > EMPTY_ENVELOPE_BYTES;
+    warnings.push(
+      looksPopulated
+        ? `UNRECOGNISED ROW LAYOUT: TallyPrime returned ${String(bytes)} bytes for ` +
+          `"${reportName}", so it is NOT an empty report — but none of the row layouts this ` +
+          'server knows (DSPACCNAME/DSPACCINFO, DSPPERIOD/DSPACCINFO, RATIONAME/RATIOVALUE) ' +
+          'matched it, so no rows could be read. Do NOT report this as "nothing to report": ' +
+          'there is data here that this server could not parse. Open the report in TallyPrime ' +
+          'to read it, and treat this as a gap in this server rather than in the books.'
+        : `TallyPrime accepted "${reportName}" and returned no rows. On this report that is a ` +
+          'real answer, not a failure — but it is also what an unpopulated feature looks like, ' +
+          'so check whether this company uses the feature before reading it as "nothing to ' +
+          'report".'
     );
   }
 
   return { data, warnings };
+}
+
+/**
+ * Size of TallyPrime's empty-result envelope, plus room for whitespace.
+ *
+ * Measured at 23 bytes on a live install (see genericReport.ts). Anything
+ * meaningfully larger carried content, which is what separates "no rows" from
+ * "rows this parser could not read".
+ */
+const EMPTY_ENVELOPE_BYTES = 64;
+
+/**
+ * The invariant every normaliser is held to: a payload that carried content
+ * must never be reported as an empty result.
+ *
+ * ## Why this is a shared rule and not a per-parser detail
+ *
+ * `normalizeGenericReport` read one row shape and returned zero rows for three
+ * reports that use others. TallyPrime had sent 2,098 bytes of Journal Register
+ * and 1,677 of Ratio Analysis; the tool answered "no rows" and appended its
+ * standing note that an empty result is a real answer on an exception report.
+ * The output did not merely lose the figures, it argued the loss was clean.
+ *
+ * That was one parser's bug, but it is a shape EVERY parser here can take: each
+ * one matches specific tag names against a payload whose shape TallyPrime does
+ * not document, and each returns an array that is empty both when there is
+ * nothing and when nothing matched. Those two cases are indistinguishable from
+ * the outside and mean opposite things.
+ *
+ * So the distinction is drawn once, from the only evidence available — the byte
+ * count. Above the empty-envelope size, content arrived; zero rows then means
+ * this server failed to read it, and says so in those words.
+ *
+ * Returns the warning to push, or undefined when there is nothing to say.
+ * Callers append it; nothing is suppressed or rewritten.
+ */
+export function unreadablePayloadWarning(
+  xml: string,
+  rowsParsed: number,
+  /** What was being parsed, named as the caller would describe it. */
+  what: string
+): string | undefined {
+  if (rowsParsed > 0) return undefined;
+  if (xml.length <= EMPTY_ENVELOPE_BYTES) return undefined;
+
+  return (
+    `UNREAD PAYLOAD: TallyPrime returned ${String(xml.length)} bytes for ${what}, so this is NOT ` +
+    'an empty result — but no rows could be read from it. Something in the response did not ' +
+    'match the layout this server expects. Do NOT report this as "none found" or "nothing to ' +
+    'report": there is data here that was not parsed. Check the same view on screen in ' +
+    'TallyPrime, and treat this as a gap in this server rather than in the books.'
+  );
 }
 
 /** Every scalar tag at any depth below a node, first occurrence winning. */

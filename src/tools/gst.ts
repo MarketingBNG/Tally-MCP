@@ -7,6 +7,7 @@ import {
   PERIOD_NOTE,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
+  EMPTY_RESULT_CAVEAT,
 } from '../schemas/common.js';
 import { FIELD_HEAVY_PAGE_SIZE, paginate, resolvePagination } from '../utils/pagination.js';
 import {
@@ -55,7 +56,8 @@ const NO_CALCULATION_NOTICE =
 const NOT_CONFIGURED_NOTICE =
   'IF EMPTY: a company without GST configured returns nothing here, and that is a real answer ' +
   'rather than a failure. Check tally_get_company — if GSTREGISTRATIONTYPE and related fields ' +
-  'are absent from distinguishingFields, this company does not record GST.';
+  'are absent from distinguishingFields, this company does not record GST. ' +
+  EMPTY_RESULT_CAVEAT;
 
 const viewSchema = z
   .enum(['summary', 'transactions'])

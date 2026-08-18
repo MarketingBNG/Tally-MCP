@@ -7,6 +7,7 @@ import { TallyError } from '../tally/TallyError.js';
 import {
   buildCompanyListRequest,
   buildCurrencyListRequest,
+  UNSCOPED,
   type TallyRequestOptions,
 } from '../tally/requests.js';
 import {
@@ -16,9 +17,10 @@ import {
   type Currency,
   type Normalized,
 } from '../tally/normalize.js';
-import { withQueryLog, type QueryScope } from '../tally/queryLog.js';
+import { withoutQueryLog, withQueryLog, type QueryScope } from '../tally/queryLog.js';
 import {
   bookYearFor,
+  daysBetween,
   financialYearFor,
   todayIso,
   validateDateRange,
@@ -187,14 +189,22 @@ function companyFromSentRequests(bodies: readonly string[]): string | null {
  * from is not knowable from the company list.
  */
 async function soleLoadedCompany(deps: ToolDeps): Promise<Company | null> {
-  const response = await deps.client.send(buildCompanyListRequest(), 'standard');
+  // Name resolution only — this contributes to no figure, so it is kept out
+  // of `source_query`. See withoutQueryLog.
+  const response = await withoutQueryLog(() =>
+    deps.client.send(buildCompanyListRequest(), 'standard')
+  );
   const companies = normalizeCompanies(response.body).data;
   return companies.length === 1 ? (companies[0] ?? null) : null;
 }
 
 /** The company record a name refers to, or null. Never guesses. */
 export async function companyNamed(deps: ToolDeps, name: string | undefined): Promise<Company | null> {
-  const response = await deps.client.send(buildCompanyListRequest(), 'standard');
+  // Name resolution only — this contributes to no figure, so it is kept out
+  // of `source_query`. See withoutQueryLog.
+  const response = await withoutQueryLog(() =>
+    deps.client.send(buildCompanyListRequest(), 'standard')
+  );
   const companies = normalizeCompanies(response.body).data;
   if (name === undefined || name === '') {
     return companies.length === 1 ? (companies[0] ?? null) : null;
@@ -378,6 +388,74 @@ export async function noteEmptyDefaultedPeriod(
 }
 
 /**
+ * Say when the period runs past the last date the company holds data for.
+ *
+ * `companyBookYear` is CORRECT and this does not change it: it returns the book
+ * year CONTAINING `endingAt`, which is why a German calendar-year company gets
+ * January-December and an Indian April-year company gets April-March. The gap
+ * was never the arithmetic — it was that the resulting window can be almost
+ * entirely empty and nothing said so.
+ *
+ * Found live 2026-08-18 on AgEx Pharma LLC, whose books end 2026-04-14. The
+ * defaulted period resolved to 2026-04-01 – 2027-03-31: a full year, of which
+ * FOURTEEN DAYS contain data. Every figure computed on it — a 100% gross
+ * margin, a 1.08:1 current ratio, 1,131 receivable days — read as an annual
+ * result and was quoted as one. None of them were wrong; all of them were
+ * about a fortnight.
+ *
+ * Distinct from noteEmptyDefaultedPeriod, which fires only when the result is
+ * EMPTY. This is the harder case: the result is full, plausible, and covers a
+ * fraction of the window it claims. An empty answer prompts a second look; a
+ * confident partial one does not.
+ *
+ * Fires whether or not the caller supplied the dates. An explicit period
+ * running past the books is the same misreading — the caller may simply not
+ * know where the books stop — and a warning is cheap next to an annualised
+ * figure struck over two weeks.
+ *
+ * Never throws.
+ */
+export async function notePeriodBeyondBooks(
+  deps: ToolDeps,
+  period: DateRange,
+  forCompany?: string
+): Promise<string[]> {
+  let company: Company | null;
+  try {
+    company = await companyNamed(deps, forCompany);
+  } catch {
+    return [];
+  }
+
+  if (company === null) return [];
+  const endingAt = company.endingAt;
+  if (endingAt === null) return [];
+
+  // The books reach the end of the window: nothing to say.
+  if (endingAt >= period.toDate) return [];
+  // The window starts after the books stop. noteEmptyDefaultedPeriod owns the
+  // empty case, and saying "0 of 365 days" alongside it would be noise.
+  if (endingAt < period.fromDate) return [];
+
+  const span = daysBetween(period.fromDate, period.toDate) + 1;
+  const covered = daysBetween(period.fromDate, endingAt) + 1;
+  if (span <= 0 || covered <= 0 || covered >= span) return [];
+
+  const percent = ((covered / span) * 100).toFixed(0);
+
+  return [
+    `PARTIAL PERIOD. This period runs ${period.fromDate} to ${period.toDate}, but "${company.name}" ` +
+      `holds no data after ${endingAt} — so only ${String(covered)} of ${String(span)} days ` +
+      `(${percent}%) contain any transactions. The figures are real, and they are NOT a full ` +
+      'period: any rate, ratio, margin or turnover struck on them describes the covered span ' +
+      'only and must not be quoted as an annual result. Verified live on a company whose ' +
+      'defaulted year contained fourteen days of trading and reported a 100% gross margin as a ' +
+      `consequence. Either quote the figures as covering ${period.fromDate} to ${endingAt}, or ` +
+      'check whether a later company holds the rest of the books.',
+  ];
+}
+
+/**
  * Serialise a payload for the MCP boundary.
  *
  * Compact, not pretty-printed. Indentation is pure overhead here — the reader
@@ -520,7 +598,7 @@ export async function runTool(
       data: result.data,
       company_id: companyId,
       as_of_timestamp: new Date().toISOString(),
-      source_query: distinct(queries),
+      source_query: renderProvenance(distinct(queries), deps.config.tallySourceQueryMode, deps.client),
       data_fetched_at:
         scope.oldestFetchAt === null ? null : new Date(scope.oldestFetchAt).toISOString(),
       row_count: result.rows,
@@ -559,7 +637,7 @@ export async function runTool(
             ...tallyError.toClientPayload(),
             company_id: await resolveCompanyId(deps, scope.queries),
             as_of_timestamp: new Date().toISOString(),
-            source_query: distinct(queries),
+            source_query: renderProvenance(distinct(queries), deps.config.tallySourceQueryMode, deps.client),
             data_fetched_at:
               scope.oldestFetchAt === null ? null : new Date(scope.oldestFetchAt).toISOString(),
           }),
@@ -595,6 +673,122 @@ export function fromPage<T>(page: PaginatedResult<T>, extra: object = {}): ToolB
  */
 export function whole(data: unknown, rows: number): ToolBodyResult {
   return { data, rows, truncated: false };
+}
+
+/**
+ * Reduce each request body to a one-line descriptor, when configured to.
+ *
+ * At `full` — the default — this returns the bodies untouched, so every
+ * existing caller sees exactly what it saw before.
+ *
+ * At `compact` it emits `TYPE ID [company] [from..to]`, pulled straight out of
+ * the request rather than reconstructed from the tool's arguments: the point of
+ * provenance is to describe what was actually sent, and a descriptor built from
+ * the inputs would agree with the caller's intent rather than with the wire.
+ *
+ * What is deliberately KEPT at compact: the report or collection ID, the
+ * company scope and the date range. Those are what identify which query a
+ * figure came from, and the company scope in particular is the thing a reader
+ * checks when two companies are open. What is dropped is the field list and the
+ * TDL envelope — bulk that never varies with the question asked.
+ *
+ * The trade-off is real and belongs to the operator: a compact descriptor
+ * cannot be replayed verbatim. See TALLY_SOURCE_QUERY_MODE in config.ts.
+ */
+/**
+ * Distinct request bodies already shown in full during this session, per client.
+ *
+ * Keyed on the TallyClient because that is what a session owns — one server
+ * process, one client, one conversation's worth of provenance. A WeakMap so a
+ * discarded client takes its history with it.
+ */
+const QUERIES_SHOWN_IN_FULL = new WeakMap<object, Set<string>>();
+
+/**
+ * Upper bound on remembered bodies, so a long session cannot grow this without
+ * limit. On eviction the body is simply shown in full again — the failure mode
+ * is a longer response, never a missing one.
+ */
+const MAX_REMEMBERED_QUERIES = 300;
+
+/** A one-line summary of what a request asked for, read back off the wire. */
+function describeQuery(body: string): string {
+  const pick = (tag: string): string | undefined =>
+    new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(body)?.[1];
+
+  const type = pick('TYPE') ?? 'Request';
+  const id = pick('ID') ?? 'unknown';
+  const company = pick('SVCURRENTCOMPANY');
+  const from = pick('SVFROMDATE');
+  const to = pick('SVTODATE');
+
+  return (
+    `${type} "${id}"` +
+    (company === undefined ? '' : ` company="${company}"`) +
+    (from === undefined || to === undefined ? '' : ` ${from}..${to}`)
+  );
+}
+
+/**
+ * Render the provenance for one answer, at the configured level of detail.
+ *
+ * At `full` the bodies are returned untouched.
+ *
+ * At `dedupe` — the default — a body is returned VERBATIM the first time it is
+ * seen this session and replaced by a descriptor on every later call. What this
+ * removes is repetition, not information: measured across a seven-call audit
+ * sequence, `source_query` was 31% of everything returned and most of it was the
+ * same company-list and currency-list requests reprinted on all seven calls.
+ * Each distinct request is still shown in full once, so every figure remains
+ * reproducible from the transcript as a whole.
+ *
+ * The descriptor is deliberately self-identifying — type, ID, company, dates —
+ * rather than a numeric back-reference, because the first occurrence is emitted
+ * byte-for-byte with no marker added. Adding an index to it would have made the
+ * verbatim body no longer verbatim, and something a consumer replays must not
+ * carry annotations of ours.
+ *
+ * At `compact` nothing is ever emitted in full.
+ */
+function renderProvenance(
+  bodies: readonly string[],
+  mode: 'full' | 'dedupe' | 'compact',
+  /** Session identity — the client this answer was fetched through. */
+  sessionKey: object
+): string[] {
+  if (mode === 'full') return [...bodies];
+
+  if (mode === 'compact') {
+    return bodies.map(
+      (body) =>
+        `${describeQuery(body)} [compact: set TALLY_SOURCE_QUERY_MODE=full for the replayable request body]`
+    );
+  }
+
+  let shown = QUERIES_SHOWN_IN_FULL.get(sessionKey);
+  if (shown === undefined) {
+    shown = new Set<string>();
+    QUERIES_SHOWN_IN_FULL.set(sessionKey, shown);
+  }
+
+  return bodies.map((body) => {
+    if (shown.has(body)) {
+      // Kept short on purpose. This line is re-read on every call, and the
+      // config hint that explains it belongs in the docs rather than in each
+      // repeat — spelling it out here cost more than the repetition it saved.
+      return `${describeQuery(body)} [body shown in full earlier this session]`;
+    }
+
+    if (shown.size >= MAX_REMEMBERED_QUERIES) {
+      // Oldest insertion first — Set preserves it. Evicting means that body is
+      // shown in full again next time, which is safe in the only direction
+      // that matters.
+      const oldest = shown.values().next().value;
+      if (oldest !== undefined) shown.delete(oldest);
+    }
+    shown.add(body);
+    return body;
+  });
 }
 
 /** Preserve first-sent order while dropping repeats of the same request. */
@@ -685,7 +879,11 @@ export async function assertCompanyIsLoaded(
   const requested = company.trim();
   if (requested === '') return undefined;
 
-  const response = await deps.client.send(buildCompanyListRequest(), 'standard');
+  // Name resolution only — this contributes to no figure, so it is kept out
+  // of `source_query`. See withoutQueryLog.
+  const response = await withoutQueryLog(() =>
+    deps.client.send(buildCompanyListRequest(), 'standard')
+  );
   const loaded = normalizeCompanies(response.body).data.map((entry) => entry.name);
 
   // Return Tally's spelling, never the caller's — see the note above.
@@ -756,7 +954,7 @@ async function noteMultiCurrency(
 ): Promise<void> {
   try {
     const response = await deps.client.send(
-      buildCurrencyListRequest(company === undefined || company === '' ? {} : { company }),
+      buildCurrencyListRequest({ company: company === undefined || company === '' ? UNSCOPED : company }),
       'standard'
     );
     const currencies = normalizeCurrencies(response.body).data;
@@ -805,7 +1003,7 @@ async function listDefinedCurrencies(
 ): Promise<Currency[] | null> {
   try {
     const response = await deps.client.send(
-      buildCurrencyListRequest(company === undefined || company === '' ? {} : { company }),
+      buildCurrencyListRequest({ company: company === undefined || company === '' ? UNSCOPED : company }),
       'standard'
     );
     return normalizeCurrencies(response.body).data;
@@ -1110,7 +1308,7 @@ export async function fetchCollection<T>(
   const canonicalCompany = await assertCompanyIsLoaded(deps, company);
 
   const request = spec.build({
-    ...(canonicalCompany === undefined ? {} : { company: canonicalCompany }),
+    company: canonicalCompany ?? UNSCOPED,
     format: deps.config.tallyPreferredFormat,
   });
 

@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import { Decimal } from 'decimal.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import {
   buildGodownSummaryRequest,
   buildStockSummaryRequest,
+  UNSCOPED,
   type TallyRequestOptions,
 } from '../tally/requests.js';
 import {
@@ -80,7 +82,10 @@ const REPORTS = {
 } satisfies Record<
   string,
   {
-    build: (options?: TallyRequestOptions) => string;
+    // NOT optional. An `options?` here would let a report be fetched with no
+    // company scope at all through this indirection, which is the hole that
+    // produced TEMP.md §2.8 one layer up. See CompanyScope in requests.ts.
+    build: (options: TallyRequestOptions) => string;
     reportName: string;
     entityKind: 'stockItem' | 'godown';
     rowLabel: string;
@@ -134,6 +139,59 @@ const DESCRIPTION = [
   READ_ONLY_NOTICE,
 ].join('\n');
 
+/**
+ * Total closing stock value per TallyPrime's own Stock Summary, or null.
+ *
+ * Exists so `profit_loss` can check its stock line against the report that
+ * carries the CLOSING position, rather than leaving the caller to notice the
+ * difference by running two tools and subtracting. See noteStaleClosingStock
+ * in reports.ts for why that check is worth a request.
+ *
+ * SIGNS ARE PRESERVED. `closingValue` arrives negative for stock in hand and is
+ * summed as it arrives — the comparison in reports.ts is made on magnitudes, so
+ * nothing here needs to normalise a sign it would only get wrong.
+ *
+ * A null closingValue is Tally reporting nothing, which is NOT a zero, so a row
+ * carrying one makes the total unusable rather than merely smaller: the caller
+ * gets null and says nothing, instead of comparing against a figure that is
+ * short by an unknown amount.
+ *
+ * Never throws. This backs a diagnostic, and a diagnostic that turns a correct
+ * statement into an error is worse than the inconsistency it reports.
+ */
+export async function fetchClosingStockTotal(
+  deps: ToolDeps,
+  company: string | undefined
+): Promise<Decimal | null> {
+  try {
+    const scope = await assertCompanyIsLoaded(deps, company);
+    const response = await deps.client.send(
+      REPORTS.item.build({ company: scope ?? UNSCOPED }),
+      'report'
+    );
+    const { data }: Normalized<ClosingStockRow[]> = normalizeClosingStock(
+      response.body,
+      REPORTS.item.reportName,
+      REPORTS.item.entityKind,
+      // No currency label: this total is compared against another figure and
+      // never shown, so resolving one would spend a request to decorate a
+      // number nobody reads.
+      undefined
+    );
+    if (data.length === 0) return null;
+
+    let total = new Decimal(0);
+    for (const row of data) {
+      const amount = row.closingValue?.amount;
+      if (amount === undefined || amount === null) return null;
+      total = total.plus(new Decimal(amount));
+    }
+    return total;
+  } catch {
+    return null;
+  }
+}
+
 export function registerClosingStockTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     'tally_get_closing_stock',
@@ -154,7 +212,7 @@ export function registerClosingStockTools(server: McpServer, deps: ToolDeps): vo
         const currency = await resolveCompanyCurrency(deps, company, currencyWarnings);
 
         const response = await deps.client.send(
-          spec.build(company === undefined ? {} : { company }),
+          spec.build({ company: company ?? UNSCOPED }),
           // Report-class: these get the longer timeout, like the statements.
           'report'
         );

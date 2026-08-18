@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { buildReportRequest } from '../tally/requests.js';
+import { buildReportRequest, UNSCOPED } from '../tally/requests.js';
 import { normalizeGenericReport } from '../tally/normalize.js';
 import {
   companySchema,
@@ -15,6 +15,7 @@ import { isoToTallyDate } from '../utils/dates.js';
 import {
   assertCompanyIsLoaded,
   fromPage,
+  notePeriodBeyondBooks,
   resolvePeriodForCompany,
   runTool,
   type ToolDeps,
@@ -135,9 +136,9 @@ const REPORTS = {
   },
 } as const satisfies Record<string, ReportSpec>;
 
-type ReportKey = keyof typeof REPORTS;
+export type ReportKey = keyof typeof REPORTS;
 
-const REPORT_KEYS = Object.keys(REPORTS) as [ReportKey, ...ReportKey[]];
+export const REPORT_KEYS = Object.keys(REPORTS) as [ReportKey, ...ReportKey[]];
 
 /** Reports whose row shape has never been observed, listed for the description. */
 const UNVERIFIED_KEYS = REPORT_KEYS.filter((key) => REPORTS[key].verified === 'empty');
@@ -188,6 +189,92 @@ const DESCRIPTION = [
   READ_ONLY_NOTICE,
 ].join('\n');
 
+/** What a report view returned, plus the metadata needed to document it. */
+export interface ExecutedReport {
+  key: ReportKey;
+  /** TallyPrime's own report ID, as sent on the wire. */
+  reportId: string;
+  /** What this report is, in words — reused as a workpaper's method note. */
+  what: string;
+  /** Whether the row shape has ever been observed against a live install. */
+  verified: 'content' | 'empty';
+  company: string | undefined;
+  period: { fromDate: string; toDate: string };
+  rows: unknown[];
+  warnings: string[];
+}
+
+/**
+ * Fetch one built-in report view.
+ *
+ * Extracted from the tool handler so `tally_make_workpaper` can document a
+ * report view without reimplementing the fetch — the alternative being a model
+ * copying rows out of one tool's output and into another's, which is the
+ * transcription risk the workpaper tool exists to remove.
+ */
+export async function executeGenericReport(
+  deps: ToolDeps,
+  args: {
+    report: ReportKey;
+    company?: string | undefined;
+    fromDate?: string | undefined;
+    toDate?: string | undefined;
+  }
+): Promise<ExecutedReport> {
+  const key: ReportKey = args.report;
+  const spec = REPORTS[key];
+
+  // Tally's own spelling, never the caller's. An unmatched SVCURRENTCOMPANY
+  // returns an EMPTY report (measured 14 Aug 2026), which reads as "nothing to
+  // report" on an exception report — so the name is checked against the loaded
+  // list before the request rather than after.
+  const company = await assertCompanyIsLoaded(deps, args.company);
+  const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
+
+  const response = await deps.client.send(
+    buildReportRequest(spec.id, {
+      company: company ?? UNSCOPED,
+      fromDate: isoToTallyDate(period.fromDate),
+      toDate: isoToTallyDate(period.toDate),
+    }),
+    'report'
+  );
+
+  const { data, warnings } = normalizeGenericReport(response.body, spec.id);
+
+  // Only where the report is period-scoped at all: a Stock Summary describes a
+  // position rather than a span, so "14 of 365 days" would be meaningless on it.
+  const partialPeriod = spec.periodApplies
+    ? await notePeriodBeyondBooks(deps, period, args.company)
+    : [];
+
+  const allWarnings = [...response.repairs, ...warnings, ...partialPeriod];
+  if (spec.verified === 'empty') {
+    allWarnings.unshift(
+      `ROW SHAPE UNVERIFIED: TallyPrime accepts "${spec.id}", but on the company this ` +
+        'server was tested against it returned no rows, so its row layout has never been ' +
+        'observed. Check these figures against the report on screen in TallyPrime before ' +
+        'relying on them.'
+    );
+  }
+  allWarnings.push(
+    `The "amounts" keys are TallyPrime's own tag names, not renamed columns. This report's ` +
+      'column meanings have not been verified, so say which tag a figure came from rather ' +
+      'than calling it a debit or a credit.'
+  );
+
+  return {
+    key,
+    reportId: spec.id,
+    what: spec.what,
+    verified: spec.verified,
+    company,
+    period,
+    rows: data,
+    warnings: allWarnings,
+  };
+}
+
 export function registerGenericReportTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     'tally_get_report',
@@ -207,41 +294,10 @@ export function registerGenericReportTools(server: McpServer, deps: ToolDeps): v
     },
     async (args) =>
       runTool('tally_get_report', deps, async () => {
-        const key: ReportKey = args.report;
+        const executed = await executeGenericReport(deps, args);
+        const { key, rows: data, period } = executed;
         const spec = REPORTS[key];
-
-        // Tally's own spelling, never the caller's. An unmatched SVCURRENTCOMPANY
-        // returns an EMPTY report (measured 14 Aug 2026), which reads as "nothing to
-        // report" on an exception report — so the name is checked against the loaded
-        // list before the request rather than after.
-        const company = await assertCompanyIsLoaded(deps, args.company);
-        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
-
-        const response = await deps.client.send(
-          buildReportRequest(spec.id, {
-            ...(company === undefined ? {} : { company }),
-            fromDate: isoToTallyDate(period.fromDate),
-            toDate: isoToTallyDate(period.toDate),
-          }),
-          'report'
-        );
-
-        const { data, warnings } = normalizeGenericReport(response.body, spec.id);
-
-        const allWarnings = [...response.repairs, ...warnings];
-        if (spec.verified === 'empty') {
-          allWarnings.unshift(
-            `ROW SHAPE UNVERIFIED: TallyPrime accepts "${spec.id}", but on the company this ` +
-              'server was tested against it returned no rows, so its row layout has never been ' +
-              'observed. Check these figures against the report on screen in TallyPrime before ' +
-              'relying on them.'
-          );
-        }
-        allWarnings.push(
-          `The "amounts" keys are TallyPrime's own tag names, not renamed columns. This report's ` +
-            'column meanings have not been verified, so say which tag a figure came from rather ' +
-            'than calling it a debit or a credit.'
-        );
+        const allWarnings = executed.warnings;
 
         const pagination = resolvePagination(args.page, args.pageSize);
         return fromPage(paginate(data, pagination, allWarnings), {

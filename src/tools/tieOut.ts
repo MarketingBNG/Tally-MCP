@@ -27,6 +27,8 @@ import { TallyError } from '../tally/TallyError.js';
 import { fetchLedgers } from './ledgers.js';
 import { fetchGroups } from './groups.js';
 import { fetchVouchers } from './vouchers.js';
+import { fetchStockItems } from './inventory.js';
+import type { StockItem } from '../tally/normalize.js';
 
 /**
  * Tie-out: does the arithmetic in these books actually hold?
@@ -62,17 +64,31 @@ import { fetchVouchers } from './vouchers.js';
  */
 
 const DESCRIPTION = [
-  'Check that the books tie: every voucher balances, and every ledger closing balance equals ' +
-    'its opening balance plus the movements in the period.',
+  'Check that the books tie: every voucher balances, every ledger closing balance equals its ' +
+    'opening balance plus the movements in the period, and the stock figure in the accounts ' +
+    'agrees with the stock records.',
   '',
   'WHEN TO USE: before relying on ANY figure from these books for a report, a workpaper or a ' +
     'client deliverable. Run it first and quote the result. If it fails, the numbers from every ' +
     'other tool are suspect and should not be presented until the exceptions are explained.',
   '',
   'RETURNS: a pass/fail verdict, then counts of what was checked, then the exceptions ' +
-    'themselves — unbalanced vouchers with the amount they are out by, and ledgers whose ' +
-    'computed closing balance disagrees with the one TallyPrime reports, showing both figures ' +
-    'and the difference.',
+    'themselves — unbalanced vouchers with the amount they are out by, ledgers whose ' +
+    'computed closing balance disagrees with the one TallyPrime reports, and any date at which ' +
+    'stock per the general ledger disagrees with stock per the stock records, each showing both ' +
+    'figures and the difference.',
+  '',
+  'THE STOCK TIE-OUT IS CHECKED AT BOTH ENDS of the period, and the two mean different things. ' +
+    'A difference at OPENING was already wrong before the period began — an opening-balance or ' +
+    'conversion error. A difference at CLOSING only means stock moved in the stock records ' +
+    'without a matching entry reaching the general ledger, which makes cost of sales wrong by ' +
+    'that amount. Reporting only the closing gap would merge the two into one figure and hide ' +
+    'both causes. Where nothing could be tied, `checks.stockTieOut.applicable` is false and ' +
+    '`notApplicableReason` says WHICH of three states it is — the company keeps no inventory, ' +
+    'or it holds stock records but no stock ledger to tie them against, or a stock ledger with ' +
+    'no stock records behind it. Only the first is benign: the second means inventory is ' +
+    'unconstrained by double entry and an error in it would reach the accounts unchallenged. ' +
+    'Report which one rather than calling any of them a pass.',
   '',
   'HOW THE COMPARISON WORKS, and its one real limitation: the closing balance TallyPrime ' +
     'reports for a ledger is as at TALLY OWN CURRENT PERIOD END, not the end of the range asked ' +
@@ -153,6 +169,214 @@ export interface BalanceException {
   difference: SignedAmount;
   movementCount: number;
 }
+
+/**
+ * Inventory per the general ledger against inventory per the stock records.
+ *
+ * Reported at BOTH ends of the period, because the two ends mean different
+ * things and a single closing comparison conflates them — which is exactly how
+ * this was first mis-diagnosed.
+ */
+export interface StockTieOutException {
+  /** 'opening' or 'closing' — which end of the period disagrees. */
+  at: 'opening' | 'closing';
+  /** The stock ledger(s) in the general ledger, and their total. */
+  perGeneralLedger: SignedAmount;
+  /** The stock item masters, and their total. */
+  perStockRecords: SignedAmount;
+  difference: SignedAmount;
+  ledgersIncluded: string[];
+  stockItemsIncluded: number;
+}
+
+/**
+ * Does the stock figure in the accounts agree with the stock records?
+ *
+ * WHY THIS IS A TIE-OUT AND NOT A WARNING. Inventory is the one balance that
+ * exists twice in every set of books: once as a general-ledger account, and
+ * once as the sum of the stock ledger. In an integrated system they are the
+ * same number by construction. Where they are not, the accounts carry a stock
+ * figure that ties to nothing countable, and every margin drawn from them is
+ * wrong by the difference. That is an arithmetic control, which is what this
+ * tool is for — not a caveat on one report.
+ *
+ * BOTH ENDS, DELIBERATELY. Found live 2026-08-18 on AgEx Pharma LLC, and the
+ * decomposition is the whole point:
+ *
+ *   stock records   273,909.89 opening -> 239,687.94 closing  (34,221.95 used)
+ *   general ledger  304,588.00 opening -> 304,588.00 closing  (no movement)
+ *
+ * A closing-only check reports one number, 64,900.06, and invites the reading
+ * "closing stock is stale". Checking both ends splits it into two unrelated
+ * faults: 30,678.11 was ALREADY wrong before the period began, and 34,221.95
+ * is stock consumed in the period that never reached the general ledger. The
+ * first is an opening-balance error, the second an integration failure, and
+ * they have different owners and different fixes. Reporting their sum as one
+ * figure would have hidden both.
+ *
+ * NOTHING IS ADJUSTED and neither side is preferred. Both are the accounting
+ * system's own figures; which one is right is a judgement that needs the
+ * stock count, and this says so rather than picking.
+ *
+ * A company with no stock ledgers and no stock items is not an exception — it
+ * keeps no inventory, and there is nothing to tie. It returns no exceptions
+ * and a `checked` of zero, which the caller reports as "not applicable"
+ * rather than as a pass.
+ */
+export function checkStockTieOut(
+  /** Postable accounts whose group marks them as stock in hand. */
+  stockAccounts: readonly Account[],
+  /** Stock item masters, carrying their own opening and closing values. */
+  stockItems: readonly { name: string; openingValue: Money | null; closingValue: Money | null }[],
+  fallbackCurrency: string = DEFAULT_CURRENCY
+): {
+  exceptions: StockTieOutException[];
+  checked: number;
+  notCheckable: string[];
+  /**
+   * Why nothing was tied, when nothing was. Null when the check ran.
+   *
+   * THREE STATES HIDE BEHIND "checked: 0", and reporting one answer for all
+   * of them is the same fault this file's stock check exists to catch. Found
+   * live 2026-08-18: MUDALS keeps no inventory, while AGBV Nutrition GmbH
+   * holds 13 stock items with real movement (MCT Oil 17,100 -> 9,500 Kg) and
+   * has NO stock ledger in its general ledger at all. Both returned "not
+   * applicable", which reads as "nothing to see" on a company where inventory
+   * is simply absent from the accounts.
+   */
+  notApplicableReason: string | null;
+} {
+  const notCheckable: string[] = [];
+
+  if (stockItems.length === 0 && stockAccounts.length === 0) {
+    return {
+      exceptions: [],
+      checked: 0,
+      notCheckable,
+      notApplicableReason:
+        'This company records no stock items and carries no stock ledger, so it keeps no ' +
+        'inventory and there is nothing to tie. This is neither a pass nor a failure.',
+    };
+  }
+
+  if (stockAccounts.length === 0) {
+    return {
+      exceptions: [],
+      checked: 0,
+      notCheckable,
+      notApplicableReason:
+        `This company holds ${String(stockItems.length)} stock item(s) but has NO stock ledger ` +
+        'in its general ledger, so there is no independent general-ledger figure to tie the ' +
+        'stock records against. TallyPrime still shows a Stock-in-Hand total on the balance ' +
+        'sheet, but it derives that from the inventory valuation rather than from a posted ' +
+        'balance — the two cannot disagree because they are the same number. Inventory is ' +
+        'therefore UNTIED here, not verified: the stock records are unconstrained by double ' +
+        'entry, and an error in them would reach the accounts unchallenged.',
+    };
+  }
+
+  if (stockItems.length === 0) {
+    return {
+      exceptions: [],
+      checked: 0,
+      notCheckable,
+      notApplicableReason:
+        `The general ledger carries ${String(stockAccounts.length)} stock ledger(s) but this ` +
+        'company records NO stock items, so the accounts assert a stock figure that no stock ' +
+        'record supports. Establish what the balance represents before relying on it.',
+    };
+  }
+
+  /**
+   * THE TWO SIDES ARRIVE IN DIFFERENT SIGN CONVENTIONS, and comparing them
+   * raw would produce a difference of roughly twice the balance on books that
+   * actually agree.
+   *
+   * - Accounts come through the model adapter, whose `SignedAmount` carries an
+   *   explicit side; `asDecimal` renders that debit-positive.
+   * - Stock item masters are passed through from TallyPrime untouched, and
+   *   Tally encodes a debit NEGATIVE — verified live, stock in hand arrives as
+   *   -20000.00 and similar.
+   *
+   * Both describe the same thing: stock held, an asset, a debit. So both are
+   * reduced to a MAGNITUDE and compared as magnitudes. Nothing is re-signed,
+   * and no sign is corrected in either source.
+   */
+  const glMagnitude = (amount: SignedAmount | null): Decimal | null => {
+    const value = asDecimal(amount);
+    return value === null ? null : value.abs();
+  };
+
+  /**
+   * Sum one side, refusing to total a set with a hole in it.
+   *
+   * A null is the accounting system reporting nothing, which is not a zero —
+   * §6 rule 1. Skipping it would produce a total short by an unknown amount
+   * and then compare it, manufacturing a difference that is an artefact of the
+   * missing value rather than a fact about the books.
+   */
+  const totalOf = (values: readonly (Decimal | null)[], label: string): Decimal | null => {
+    let total = new Decimal(0);
+    for (const value of values) {
+      if (value === null) {
+        notCheckable.push(
+          `${label} could not be totalled: at least one value was absent, and a missing figure ` +
+            'is not a zero. The stock tie-out was not performed at this date.'
+        );
+        return null;
+      }
+      total = total.plus(value);
+    }
+    return total;
+  };
+
+  // The currency to label results with. Taken from the accounts, which have
+  // been through the currency resolution the rest of this tool uses.
+  const currency =
+    stockAccounts[0]?.openingBalance?.magnitude.currency ??
+    stockAccounts[0]?.closingBalance?.magnitude.currency ??
+    fallbackCurrency;
+
+  const exceptions: StockTieOutException[] = [];
+  let checked = 0;
+
+  for (const at of ['opening', 'closing'] as const) {
+    const gl = totalOf(
+      stockAccounts.map((account) =>
+        glMagnitude(at === 'opening' ? account.openingBalance : account.closingBalance)
+      ),
+      `The general-ledger stock ${at} balance`
+    );
+    const records = totalOf(
+      stockItems.map((item) => {
+        const value = at === 'opening' ? item.openingValue : item.closingValue;
+        if (value === null || value.amount === null) return null;
+        return new Decimal(value.amount).abs();
+      }),
+      `The stock records ${at} value`
+    );
+    if (gl === null || records === null) continue;
+
+    checked += 1;
+    const difference = gl.minus(records);
+    // Below a rounding floor the two are the same figure, not a finding.
+    if (difference.abs().lessThanOrEqualTo(new Decimal(TIE_OUT_TOLERANCE))) continue;
+
+    exceptions.push({
+      at,
+      perGeneralLedger: toSigned(gl, currency),
+      perStockRecords: toSigned(records, currency),
+      difference: toSigned(difference, currency),
+      ledgersIncluded: stockAccounts.map((account) => account.name),
+      stockItemsIncluded: stockItems.length,
+    });
+  }
+
+  return { exceptions, checked, notCheckable, notApplicableReason: null };
+}
+
+/** Rounding floor for the stock tie-out, in currency units. */
+const TIE_OUT_TOLERANCE = '0.01';
 
 /**
  * Check every voucher balances.
@@ -471,6 +695,44 @@ async function tieOutOneCompany(
 
   const { vouchers, warnings: voucherWarnings } = await fetchVouchers(deps, companyArg, period);
 
+  // Stock items are the second half of the inventory tie-out. Fetched
+  // unconditionally rather than only where a stock ledger exists, because
+  // "the general ledger carries no stock account but the stock records hold
+  // 240,000" is itself the finding, and a conditional fetch could never see it.
+  /**
+   * Never allowed to fail the tie-out.
+   *
+   * The double-entry and roll-forward checks stand on their own and are the
+   * blocking control (§4 L5). If the stock fetch errors — an older TallyPrime,
+   * a company with inventory switched off, a transport fault — losing those
+   * two results as well would turn a partial answer into no answer, which is
+   * the opposite of what a gate should do. A failure here degrades to "not
+   * checkable" and is reported as such, matching how this file already treats
+   * a ledger it cannot roll forward.
+   */
+  const stock = await (async (): Promise<{ items: StockItem[]; warnings: string[]; note: string | null }> => {
+    try {
+      const { items, warnings } = await fetchStockItems(
+        deps,
+        companyArg,
+        // Curated fields only: this needs opening and closing value, both of
+        // which are named properties. All-fields is several times the payload.
+        false
+      );
+      return { items, warnings, note: null };
+    } catch (error) {
+      return {
+        items: [],
+        warnings: [],
+        note:
+          'The stock records could not be read, so inventory was not tied out. The other checks ' +
+          `below are unaffected. Reason: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  })();
+  const stockItems = stock.items;
+  const stockWarnings = stock.warnings;
+
   const entityId = companyArg ?? 'loaded-company';
   const accounts = adaptAccounts(groups, ledgers, { entityId });
   const adapted = adaptVouchers(vouchers, { entityId });
@@ -478,7 +740,21 @@ async function tieOutOneCompany(
   const doubleEntry = checkDoubleEntry(adapted.data, currency.label);
   const rollForward = checkBalanceRollForward(accounts.data, adapted.data, currency.label);
 
-  const passed = doubleEntry.imbalances.length === 0 && rollForward.exceptions.length === 0;
+  // Stock-in-hand accounts, by the group TallyPrime files them under. Matched
+  // on the PATH rather than the immediate parent so a company that nests its
+  // stock ledgers a level deeper is still caught.
+  const stockAccounts = accounts.data.filter(
+    (account) =>
+      account.isPostable &&
+      account.path.some((step) => step.trim().toLowerCase() === 'stock-in-hand')
+  );
+  const stockTieOut = checkStockTieOut(stockAccounts, stockItems, currency.label);
+  if (stock.note !== null) stockTieOut.notCheckable.push(stock.note);
+
+  const passed =
+    doubleEntry.imbalances.length === 0 &&
+    rollForward.exceptions.length === 0 &&
+    stockTieOut.exceptions.length === 0;
 
   // Every exception becomes a typed finding as well as staying in its own
   // list. The lists keep the full record; the findings make severity
@@ -526,7 +802,66 @@ async function tieOutOneCompany(
     });
   }
 
-  for (const reason of [...doubleEntry.notCheckable, ...rollForward.notCheckable]) {
+  for (const item of stockTieOut.exceptions) {
+    const movement =
+      item.at === 'opening'
+        ? 'This is an OPENING position, so it was already wrong before the period began — an ' +
+          'opening-balance or conversion error, not something this period caused.'
+        : 'This is the CLOSING position. Where the opening ties and the closing does not, stock ' +
+          'moved in the stock records without a corresponding entry reaching the general ' +
+          'ledger, and cost of sales is wrong by the difference.';
+    findings.push({
+      severity: 'exception',
+      code: 'stock_does_not_tie',
+      subject: item.ledgersIncluded.join(', '),
+      company: companyArg ?? null,
+      message:
+        `Inventory does not tie at ${item.at}: the general ledger carries ` +
+        `${item.perGeneralLedger.magnitude.amount} ${item.perGeneralLedger.magnitude.currency} ` +
+        `across ${String(item.ledgersIncluded.length)} stock ledger(s), while the stock records ` +
+        `for ${String(item.stockItemsIncluded)} item(s) total ` +
+        `${item.perStockRecords.magnitude.amount} — a difference of ` +
+        `${item.difference.magnitude.amount}. ${movement} Neither figure has been adjusted and ` +
+        'neither is preferred: which is right needs the stock count.',
+      figures: {
+        at: item.at,
+        perGeneralLedger: item.perGeneralLedger,
+        perStockRecords: item.perStockRecords,
+        difference: item.difference,
+        ledgersIncluded: item.ledgersIncluded.join(', '),
+        stockItemsIncluded: item.stockItemsIncluded,
+      },
+    });
+  }
+
+  /**
+   * Inventory that was not tied is reported, not passed over in silence.
+   *
+   * Severity is not_checkable rather than info: "the stock records are
+   * unconstrained by double entry" is a limitation on the assurance this gate
+   * gives, and a limitation that only appears at full verbosity is a
+   * limitation nobody reads. It does not fail the tie-out — nothing is known
+   * to be wrong — but it must not read as a clean stock result either.
+   */
+  if (stockTieOut.notApplicableReason !== null) {
+    findings.push({
+      severity: 'not_checkable',
+      code: 'stock_not_tied',
+      subject: null,
+      company: companyArg ?? null,
+      message: stockTieOut.notApplicableReason,
+      figures: {
+        stockLedgers: stockAccounts.length,
+        stockItems: stockItems.length,
+      },
+    });
+  }
+
+  for (const reason of [
+    ...doubleEntry.notCheckable,
+    ...rollForward.notCheckable,
+    ...stockTieOut.notCheckable,
+  ]) {
     findings.push({
       severity: 'not_checkable',
       code: 'not_checkable',
@@ -591,14 +926,40 @@ async function tieOutOneCompany(
               ),
             }),
       },
+      stockTieOut: {
+        description:
+          'Stock in the general ledger equals the stock records, at both ends of the period.',
+        /**
+         * Zero means NOT APPLICABLE, not "passed". A company with no stock
+         * ledgers and no stock items has nothing to tie; counting that as a
+         * pass would report assurance nobody obtained.
+         */
+        datesChecked: stockTieOut.checked,
+        applicable: stockTieOut.checked > 0,
+        exceptions: stockTieOut.exceptions.length,
+        /**
+         * Present only when nothing was tied. Says WHICH of the three
+         * not-applicable states this is — no inventory at all, stock records
+         * with no ledger to tie them to, or a ledger with no stock records —
+         * because they carry very different amounts of assurance.
+         */
+        ...(stockTieOut.notApplicableReason === null
+          ? {}
+          : { notApplicableReason: stockTieOut.notApplicableReason }),
+      },
     },
     unbalancedVouchers: doubleEntry.imbalances,
     balanceExceptions: rollForward.exceptions,
+    stockExceptions: stockTieOut.exceptions,
     /**
      * Neither passed nor failed. Kept separate so the counts above are
      * not read as covering the whole population when they do not.
      */
-    notCheckable: [...doubleEntry.notCheckable, ...rollForward.notCheckable],
+    notCheckable: [
+      ...doubleEntry.notCheckable,
+      ...rollForward.notCheckable,
+      ...stockTieOut.notCheckable,
+    ],
   };
 
   return {
@@ -614,6 +975,7 @@ async function tieOutOneCompany(
       ...ledgerWarnings,
       ...groupWarnings,
       ...voucherWarnings,
+      ...stockWarnings,
       ...accounts.warnings,
       ...adapted.warnings,
       // Only when the currency WAS established — otherwise these are

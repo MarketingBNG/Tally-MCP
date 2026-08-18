@@ -11,6 +11,7 @@ import {
   querySchema,
   READ_ONLY_NOTICE,
   UNTRUSTED_CONTENT_NOTICE,
+  EMPTY_RESULT_CAVEAT,
 } from '../schemas/common.js';
 import {
   DEFAULT_PAGE_SIZE,
@@ -262,6 +263,8 @@ const DESCRIPTION = [
   '',
   'stockItem — returns nothing for a company that does not keep stock, which is a real answer ' +
     'rather than an error; check tally_get_company before reading an empty list as missing data. ' +
+    EMPTY_RESULT_CAVEAT +
+    ' ' +
     'Name, parent group, base unit, opening/closing balance and value, and closing rate are ' +
     'named properties, verified against live inventory data. Every other value appears under ' +
     '"fields" under TallyPrime own field names rather than being renamed.',

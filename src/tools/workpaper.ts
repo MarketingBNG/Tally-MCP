@@ -8,6 +8,12 @@ import {
   type ProcedureOptions,
   type TestName,
 } from './testVouchers.js';
+import {
+  executeGenericReport,
+  REPORT_KEYS,
+  type ReportKey,
+} from './genericReport.js';
+import { TallyError } from '../tally/TallyError.js';
 import { SERVER_VERSION } from '../version.js';
 
 /**
@@ -51,6 +57,17 @@ const DESCRIPTION = [
     'objective, the population, the method and its parameters, the results, the limitations, and ' +
     'the exact call that reproduces it.',
   '',
+  'TWO KINDS OF PAPER, and the document says which it is:',
+  '- `test` — an audit PROCEDURE this server performed over the voucher population (same values ' +
+    'as tally_test_vouchers). The paper states the population, what was excluded and why, and ' +
+    'the parameters applied.',
+  '- `report` — one of TALLYPRIME\'S OWN report views, recorded as Tally produced it (same ' +
+    'values as tally_get_report). There is no population and nothing was selected or tested: ' +
+    'the rule deciding what appears on it is TallyPrime\'s. The paper says so in its own header, ' +
+    'because a report printout filed as though it were a performed procedure overstates the ' +
+    'work done.',
+  'Give exactly one of the two. Supplying both, or neither, is refused rather than defaulted.',
+  '',
   'WHEN TO USE: when the output has to go into an audit file rather than just answer a question ' +
     'in conversation. Use `tally_test_vouchers` to explore; use this once you know which ' +
     'procedure you are documenting.',
@@ -80,7 +97,20 @@ export function registerWorkpaperTools(server: McpServer, deps: ToolDeps): void 
       inputSchema: z.object({
         test: z
           .enum(TEST_VALUES)
-          .describe('Which procedure to run and document. Same values as tally_test_vouchers.'),
+          .optional()
+          .describe(
+            'Which procedure to run and document. Same values as tally_test_vouchers. Give ' +
+              'either this or `report`, not both.'
+          ),
+        report: z
+          .enum(REPORT_KEYS)
+          .optional()
+          .describe(
+            "Document one of TallyPrime's own report views instead of running a procedure. Same " +
+              'values as tally_get_report. Give either this or `test`, not both. The document is ' +
+              'rendered differently and says plainly that it records a report as TallyPrime ' +
+              'produced it, not a procedure this server performed — see the tool description.'
+          ),
         objective: z
           .string()
           .min(1)
@@ -132,7 +162,59 @@ export function registerWorkpaperTools(server: McpServer, deps: ToolDeps): void 
     },
     async (args) =>
       runTool('tally_make_workpaper', deps, async () => {
-        const executed = await executeVoucherTest(deps, args);
+        // Exactly one of the two. Defaulting would silently document a
+        // different thing from the one asked for, and a workpaper is the last
+        // place a silent substitution belongs.
+        if ((args.test === undefined) === (args.report === undefined)) {
+          throw new TallyError(
+            'INVALID_PARAMETERS',
+            args.test === undefined
+              ? 'Give either `test` (a procedure) or `report` (a TallyPrime report view).'
+              : 'Give either `test` or `report`, not both.',
+            {
+              suggestion:
+                '`test` runs an audit procedure over the voucher population and documents it. ' +
+                '`report` records one of TallyPrime\'s own report views as it produced it. They ' +
+                'are different kinds of evidence and the document says which it is.',
+            }
+          );
+        }
+
+        if (args.report !== undefined) {
+          const report = await executeGenericReport(deps, { ...args, report: args.report });
+          const markdown = renderReportWorkpaper({
+            report: args.report,
+            reportId: report.reportId,
+            what: report.what,
+            verified: report.verified,
+            objective: args.objective,
+            ...(args.conclusion === undefined ? {} : { conclusion: args.conclusion }),
+            ...(args.preparedBy === undefined ? {} : { preparedBy: args.preparedBy }),
+            ...(args.reference === undefined ? {} : { reference: args.reference }),
+            ...(report.company === undefined ? {} : { company: report.company }),
+            period: report.period,
+            rows: report.rows,
+            warnings: report.warnings,
+            preparedAt: new Date().toISOString(),
+            serverVersion: SERVER_VERSION,
+          });
+
+          return whole(
+            {
+              markdown,
+              report: args.report,
+              reportId: report.reportId,
+              period: report.period,
+              rows: report.rows,
+              warnings: report.warnings,
+            },
+            report.rows.length
+          );
+        }
+
+        // Narrowed by the guard above — `report` was undefined, so `test` is not.
+        const test: TestName = args.test as TestName;
+        const executed = await executeVoucherTest(deps, { ...args, test });
 
         const markdown = renderWorkpaper({
           test: executed.test,
@@ -216,6 +298,115 @@ const RELEVANT_OPTIONS: Record<TestName, string[]> = {
 
 function orNotRecorded(value: string | undefined): string {
   return value === undefined || value.trim() === '' ? '_not recorded_' : value;
+}
+
+interface ReportWorkpaperInput {
+  report: ReportKey;
+  reportId: string;
+  what: string;
+  verified: 'content' | 'empty';
+  objective: string;
+  conclusion?: string;
+  preparedBy?: string;
+  reference?: string;
+  company?: string;
+  period: { fromDate: string; toDate: string };
+  rows: unknown[];
+  warnings: string[];
+  preparedAt: string;
+  serverVersion: string;
+}
+
+/**
+ * A workpaper recording one of TallyPrime's own report views.
+ *
+ * WHY THIS IS A SEPARATE RENDERER rather than the procedure one with the word
+ * swapped. A procedure workpaper documents work THIS SERVER did: it states a
+ * population, what was excluded from it and why, and the parameters applied —
+ * and those sections are what make it reviewable. A report view has none of
+ * that. TallyPrime decided what appears on it and by what rule, and this server
+ * only asked for it and passed the rows through.
+ *
+ * Rendering it through the procedure template would therefore print a
+ * "Population: 0 tested" section under an audit heading, which reads as a
+ * procedure that found nothing rather than a procedure that was never run. That
+ * is precisely the "looks like evidence" failure the tool exists to prevent, so
+ * the document says what it is in its own header instead.
+ */
+export function renderReportWorkpaper(input: ReportWorkpaperInput): string {
+  const lines: string[] = [];
+
+  lines.push(`# TallyPrime report: ${input.reportId}`);
+  lines.push('');
+  lines.push(`| | |`);
+  lines.push(`|---|---|`);
+  lines.push(`| Entity | ${orNotRecorded(input.company)} |`);
+  lines.push(`| Period | ${input.period.fromDate} to ${input.period.toDate} |`);
+  lines.push(`| Report | ${input.reportId} (\`${input.report}\`) |`);
+  lines.push(`| Working paper ref | ${orNotRecorded(input.reference)} |`);
+  lines.push(`| Prepared by | ${orNotRecorded(input.preparedBy)} |`);
+  lines.push(`| Prepared at | ${input.preparedAt} |`);
+  lines.push(`| Source | TallyPrime, read-only, via tally-mcp ${input.serverVersion} |`);
+  lines.push('');
+
+  lines.push('## Objective');
+  lines.push('');
+  lines.push(input.objective);
+  lines.push('');
+
+  lines.push('## Nature of this paper');
+  lines.push('');
+  lines.push(
+    `This records **TallyPrime's own "${input.reportId}" report** exactly as TallyPrime produced ` +
+      'it for the period above. It is not a procedure performed by this server: no population ' +
+      'was defined, nothing was selected, excluded or sampled, and no test was applied to the ' +
+      'rows. What appears below is what the report contains, and the rule deciding that belongs ' +
+      'to TallyPrime.'
+  );
+  lines.push('');
+  lines.push(`What TallyPrime says this report is: ${input.what}`);
+  lines.push('');
+  if (input.verified === 'empty') {
+    lines.push(
+      '**Row shape unverified.** TallyPrime accepts this report ID, but it returned no rows on ' +
+        'the company this server was tested against, so its column layout has never been ' +
+        'observed. Agree these figures to the report on screen in TallyPrime before relying on ' +
+        'them.'
+    );
+    lines.push('');
+  }
+  lines.push(
+    'Column names below are TallyPrime\'s own tag names and have deliberately not been renamed ' +
+      'to "debit" and "credit". Say which tag a figure came from when quoting it.'
+  );
+  lines.push('');
+
+  lines.push('## Results');
+  lines.push('');
+  lines.push(`Rows returned: **${String(input.rows.length)}**`);
+  lines.push('');
+  lines.push('```json');
+  lines.push(JSON.stringify(input.rows, null, 2));
+  lines.push('```');
+  lines.push('');
+
+  lines.push('## Limitations and notes');
+  lines.push('');
+  if (input.warnings.length === 0) {
+    lines.push('The report was returned without limitations.');
+  } else {
+    for (const warning of input.warnings) {
+      lines.push(`- ${warning}`);
+    }
+  }
+  lines.push('');
+
+  lines.push('## Conclusion');
+  lines.push('');
+  lines.push(orNotRecorded(input.conclusion));
+  lines.push('');
+
+  return lines.join('\n');
 }
 
 export function renderWorkpaper(input: WorkpaperInput): string {

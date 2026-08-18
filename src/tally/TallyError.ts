@@ -15,6 +15,17 @@ export const TALLY_ERROR_CODES = [
   'TALLY_COMPANY_NOT_FOUND',
   'TALLY_COMPANY_NOT_LOADED',
   'TALLY_UNSUPPORTED_OPERATION',
+  /**
+   * RESERVED, and never thrown today.
+   *
+   * TallyPrime's HTTP interface has no authentication step, so nothing in
+   * this server can currently raise it. It stays in the vocabulary because
+   * the codes are a shipped contract and removing one would break a consumer
+   * switching on it — but a code that cannot occur is still a claim the
+   * contract makes and does not keep, so it is labelled rather than left to
+   * look like the others. `errorContract.test.ts` enforces that every OTHER
+   * code is genuinely reachable.
+   */
   'TALLY_AUTHENTICATION_ERROR',
   'INVALID_DATE_RANGE',
   'INVALID_PARAMETERS',

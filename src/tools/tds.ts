@@ -11,6 +11,7 @@ import {
 import { FIELD_HEAVY_PAGE_SIZE, paginate, resolvePagination } from '../utils/pagination.js';
 import {
   assertResultSetFits,
+  companyNamed,
   fromPage,
   resolvePeriodForCompany,
   runTool,
@@ -172,6 +173,97 @@ function isInformativeTdsEntry([key, value]: [string, string]): boolean {
   return isTdsKey(key) && isInformative(value);
 }
 
+/**
+ * The jurisdiction TDS/TCS belongs to.
+ *
+ * TDS and TCS are creatures of the Indian Income-tax Act. Every other country
+ * has its own withholding regime under its own name, and none of them is what
+ * Tally's TDS master fields record. Matched loosely because Tally reports the
+ * country as free text from the company master ("India", "INDIA").
+ */
+function isIndianCompany(country: string | null): boolean {
+  return (country ?? '').trim().toLowerCase() === 'india';
+}
+
+/**
+ * Name fragments that mark a ledger as a TDS/TCS ACCOUNT rather than a field.
+ *
+ * Deliberately narrower than TDS_FIELD_HINTS. That set includes `DEDUCT` and
+ * `SECTION`, which are safe against Tally's concatenated field names but would
+ * match ordinary ledger names a human wrote — "Deductions from Salary", "C
+ * Section Rent" — and turn a clean chart of accounts into a false finding.
+ * Only the two acronyms are distinctive enough to use against free text.
+ */
+const TDS_LEDGER_NAME_HINTS = ['TDS', 'TCS'];
+
+function looksLikeTdsLedger(name: string): boolean {
+  const upper = name.toUpperCase();
+  return TDS_LEDGER_NAME_HINTS.some((hint) => upper.includes(hint));
+}
+
+/**
+ * What to say when no ledger carries a TDS/TCS flag.
+ *
+ * Three genuinely different situations hide behind that one condition, and
+ * saying the same sentence for all of them puts a false statement in front of
+ * an accountant:
+ *
+ * 1. Not an Indian company. TDS does not apply, so its absence means nothing.
+ *    The old text asserted "for an Indian company ... that is itself the audit
+ *    point" on a German GmbH and a US LLC, which reads as an audit implication
+ *    that does not exist in either jurisdiction.
+ * 2. Indian, and no TDS anywhere. The original finding, and it stands.
+ * 3. Indian, flags unset, but TDS liability ledgers PRESENT in the chart of
+ *    accounts. Verified live 2026-08-18 on MUDALS TECHNOLOGIES PRIVATE
+ *    LIMITED: `TDS Payable`, `TDS on Salary 192B` and `TDS ON PROFESSIONAL
+ *    FEES` all carry balances while every ledger reports `ISTDSAPPLICABLE:
+ *    "No"`. Deduction is being operated OUTSIDE Tally's TDS machinery, so none
+ *    of its threshold, rate or section logic is engaged. Reporting that as
+ *    "the feature is unused" is not merely unhelpful, it is wrong — and the
+ *    real finding is worse than the one it replaced.
+ */
+function unconfiguredWarnings(
+  ledgers: readonly { name: string }[],
+  country: string | null
+): string[] {
+  const examined = String(ledgers.length);
+  const base =
+    `No ledger among ${examined} carries any TDS or TCS setting. Tally stamps these fields ` +
+    'onto every ledger with explicit negatives, so this is a positive finding that the ' +
+    'feature is unused, not a failure to read it.';
+
+  if (!isIndianCompany(country)) {
+    const where = country === null ? 'a company outside India' : `an entity in ${country}`;
+    return [
+      `${base} TDS and TCS are Indian withholding taxes under the Income-tax Act, so for ` +
+        `${where} their absence is expected and carries NO audit implication. If this entity ` +
+        'has an Indian permanent establishment or makes payments taxable in India, that ' +
+        'obligation would sit outside this company’s books and cannot be tested from here.',
+    ];
+  }
+
+  const named = ledgers.filter((ledger) => looksLikeTdsLedger(ledger.name)).map((l) => l.name);
+  if (named.length > 0) {
+    const shown = named.slice(0, 5).join(', ');
+    const more = named.length > 5 ? `, and ${String(named.length - 5)} more` : '';
+    return [
+      `${examined} ledger(s) were examined and NONE carries a TDS or TCS flag — yet ` +
+        `${String(named.length)} ledger(s) are NAMED as TDS/TCS accounts: ${shown}${more}. ` +
+        'Deduction is therefore being operated outside TallyPrime’s TDS machinery, so none ' +
+        'of its threshold, rate, section or 206AA logic is engaged and no Tally-side control ' +
+        'exists over whether a deduction was made, at what rate, or on time. For an Indian ' +
+        'company this is a stronger control finding than clean non-use, not a weaker one. ' +
+        'Whether the amounts deducted are correct cannot be established from these flags — ' +
+        'trace the named ledgers to the returns filed.',
+    ];
+  }
+
+  return [
+    `${base} For an Indian company with payments that attract TDS, that is itself the audit ` +
+      'point.',
+  ];
+}
+
 export function registerTdsTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     'tally_get_tds',
@@ -233,6 +325,13 @@ async function fetchTdsSummary(
   // Full fields: none of the TDS flags are in the curated set.
   const { ledgers, warnings } = await fetchLedgers(deps, args.company, true);
 
+  // The company's own country, for the jurisdiction gate below. Served from
+  // TallyClient's cache alongside every other guard's company lookup, and a
+  // failure here must not fail the tool: null degrades to "outside India",
+  // which is the conservative reading — it withholds an audit implication
+  // rather than asserting one that may not apply.
+  const country = (await companyNamed(deps, args.company))?.country ?? null;
+
   const flaggedYes = (ledger: { fields?: Record<string, string> | undefined }, field: string) =>
     isInformative(ledger.fields?.[field]);
 
@@ -271,12 +370,7 @@ async function fetchTdsSummary(
     0;
 
   if (!anyConfigured) {
-    allWarnings.push(
-      `No ledger among ${String(ledgers.length)} carries any TDS or TCS setting. Tally stamps ` +
-        'these fields onto every ledger with explicit negatives, so this is a positive finding ' +
-        'that the feature is unused, not a failure to read it. For an Indian company with ' +
-        'payments that attract TDS, that is itself the audit point.'
-    );
+    allWarnings.push(...unconfiguredWarnings(ledgers, country));
   }
   if (specialRateLedgers.length > 0) {
     allWarnings.push(

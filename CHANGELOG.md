@@ -12,6 +12,48 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.5.1 — unreleased
+**Read this first: the TDS check was giving a misleading answer on non-Indian
+companies, and a clean-looking one on an Indian company that does deduct tax.**
+
+- **"No TDS set up" no longer implies an audit point on a company outside
+  India.** Asking about TDS on a German or American company produced the same
+  sentence as on an Indian one, ending "for an Indian company with payments
+  that attract TDS, that is itself the audit point". TDS is an Indian tax, so
+  on those companies the sentence stated a problem that does not exist. It now
+  names the country and says plainly that TDS does not apply there.
+
+- **TDS ledgers in the accounts are no longer reported as "the feature is
+  unused".** On a company whose books contain TDS Payable, TDS on Rent, TDS on
+  Salary and others, the answer was that no ledger carried a TDS setting and
+  the feature was therefore unused. Tax was being deducted — just outside
+  TallyPrime's own TDS machinery, so none of its rate, threshold or section
+  checks were running. The answer now lists those ledgers and says so, which is
+  a bigger point than the one it replaced, not a smaller one. **If you were
+  told a company does not use TDS, ask again.**
+
+- **A profit and loss now says when its closing stock disagrees with the stock
+  summary.** On one company the profit and loss carried the same stock figure
+  at the start and the end of the period while the stock records showed goods
+  going out, so cost of sales was nil and the gross margin read as 100%. Both
+  figures came from TallyPrime and neither has been changed; what is new is
+  that the connection now tells you they disagree and by how much.
+
+- **Figures for a period that runs past the end of the books are labelled as
+  such.** Asked about a company whose books stop in April, the connection would
+  answer for the whole year and say nothing — so a fortnight of trading was
+  read as a full year, and every ratio and margin with it. It now says how many
+  days of the period actually contain any transactions.
+
+- **New: the tie-out now checks stock as well.** "Do the books tie?" previously
+  meant every voucher balances and every ledger rolls forward. It now also
+  checks that the stock figure in the accounts agrees with the stock records,
+  at both the start and the end of the period — because a difference at the
+  start is an opening-balance error while a difference at the end means goods
+  moved without the accounts being told, and they need different fixes. Where a
+  company keeps stock records but has no stock account in its ledger, the
+  connection says the stock is untied rather than reporting a clean result.
+
 ## 0.5.0 — 2026-08-17
 **Read this first: a single ledger fetched by name was showing a blank closing
 balance.**

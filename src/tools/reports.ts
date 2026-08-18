@@ -7,6 +7,7 @@ import {
   buildFundsFlowRequest,
   buildProfitLossRequest,
   buildTrialBalanceRequest,
+  UNSCOPED,
   type TallyRequestOptions,
 } from '../tally/requests.js';
 import {
@@ -19,6 +20,7 @@ import {
 } from '../tally/normalize.js';
 import { fetchLedgers } from './ledgers.js';
 import { fetchGroups } from './groups.js';
+import { fetchClosingStockTotal } from './closingStock.js';
 import {
   companySchema,
   dateRangeSchema,
@@ -34,6 +36,7 @@ import {
   resolveCompanyCurrency,
   resolveCompanyCurrencyDetailed,
   companyNamed,
+  notePeriodBeyondBooks,
   resolvePeriodForCompany,
   runTool,
   whole,
@@ -381,6 +384,134 @@ const TOLERANCE = '0.005';
  * Never throws. A diagnostic that turns a correct answer into an error is
  * worse than the inconsistency it reports — the same rule as companyPeriodEnd.
  */
+/**
+ * The stock line on a `profit_loss`, when it carries one.
+ *
+ * Rows arrive as `{ name, amount, subAmount }` and Tally puts the stock figures
+ * on `subAmount` under the Cost of Sales block, so both are read and the first
+ * present one wins. Matched on the row name because that is all the report
+ * gives — there is no group code on a P&L row.
+ */
+function stockFigure(rows: readonly unknown[], label: string): Decimal | null {
+  for (const row of rows) {
+    const record = row as {
+      name?: unknown;
+      amount?: { amount?: unknown } | null;
+      subAmount?: { amount?: unknown } | null;
+    };
+    if (typeof record.name !== 'string') continue;
+    if (record.name.trim().toLowerCase() !== label) continue;
+    const raw = record.subAmount?.amount ?? record.amount?.amount;
+    if (typeof raw !== 'string' || raw === '') return null;
+    try {
+      return new Decimal(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Rounding floor for the stock comparison, in currency units. */
+const STOCK_TOLERANCE = new Decimal('0.01');
+
+/**
+ * Where the profit and loss carries stock at a value the Stock Summary does
+ * not agree with — and why that has to be said on THIS statement.
+ *
+ * The trial balance already discloses a version of this through
+ * noteMastersDivergence: TallyPrime's TB carries stock at its OPENING value
+ * while the balance sheet and masters carry the closing one. The profit and
+ * loss had no equivalent, and it is the statement where the consequence is
+ * largest, because stock sits inside the Cost of Sales block and a stale
+ * closing figure does not merely misstate the balance sheet — it misstates
+ * GROSS PROFIT, one for one.
+ *
+ * Found live 2026-08-18 on AgEx Pharma LLC: the P&L reported Opening Stock and
+ * Less: Closing Stock as the SAME figure, -304,588, over a period in which five
+ * sales invoices relieved 1,900 Kg of stock across three items with full batch
+ * and godown allocations. Cost of sales came out nil and `ratio_analysis`
+ * reported Gross Profit % and Nett Profit % at 100.00%. The Stock Summary for
+ * the same company totalled -239,687.94 — a gap of 64,900.06 that no tool
+ * mentioned. An accountant reading the P&L alone would have concluded the
+ * inventory was never posted; it was posted, and the closing VALUATION was
+ * stale.
+ *
+ * Two independent triggers, because they catch different failures:
+ *
+ * 1. Opening equals closing exactly. Free — read off rows already fetched. On
+ *    a period with any trading at all this is near-impossible as a genuine
+ *    outcome, and it is the signature of a period whose stock was never
+ *    revalued.
+ * 2. The P&L closing figure disagrees with the Stock Summary. Costs one
+ *    request, and is the check that produces the actual number.
+ *
+ * NOTHING IS ADJUSTED. Both figures are TallyPrime's own and both are passed
+ * through untouched — §6 rule 1. What is added is the statement that they
+ * disagree, and by how much, so the figure is not quoted as a fact about the
+ * period when it is a fact about the opening position.
+ *
+ * Never throws, for the same reason as noteMastersDivergence.
+ */
+async function noteStaleClosingStock(
+  deps: ToolDeps,
+  company: string | undefined,
+  rows: readonly unknown[]
+): Promise<string[]> {
+  try {
+    const opening = stockFigure(rows, 'opening stock');
+    const closing = stockFigure(rows, 'less: closing stock') ?? stockFigure(rows, 'closing stock');
+
+    // No stock line at all: a company that does not maintain inventory, which
+    // is a correct outcome and not something to warn about.
+    if (closing === null && opening === null) return [];
+
+    const warnings: string[] = [];
+
+    if (
+      opening !== null &&
+      closing !== null &&
+      opening.equals(closing) &&
+      !opening.isZero()
+    ) {
+      warnings.push(
+        `This profit and loss reports Opening Stock and Closing Stock as the SAME figure ` +
+          `(${opening.abs().toFixed(2)}). Cost of sales is therefore struck with NO stock ` +
+          'movement in it, and gross profit is overstated by whatever the movement was. ' +
+          'Verified live: this occurs on a period whose closing stock was never revalued, ' +
+          'including periods in which invoices did relieve stock with full batch and godown ' +
+          'allocations. Check tally_get_inventory_movements for the period before concluding ' +
+          'that no inventory was posted — the entries and the valuation fail separately.'
+      );
+    }
+
+    // Only paid for when there is a stock line to check it against.
+    if (closing !== null) {
+      const summary = await fetchClosingStockTotal(deps, company);
+      if (summary !== null) {
+        const gap = closing.abs().minus(summary.abs());
+        if (gap.abs().greaterThan(STOCK_TOLERANCE)) {
+          warnings.push(
+            `The closing stock on this profit and loss (${closing.abs().toFixed(2)}) does NOT ` +
+              `agree with TallyPrime's own Stock Summary (${summary.abs().toFixed(2)}) — a ` +
+              `difference of ${gap.abs().toFixed(2)}. Both are TallyPrime's own figures and ` +
+              'neither has been adjusted here. TallyPrime is known to carry stock on different ' +
+              'bases in different reports, so this is not a reading error. Because closing ' +
+              'stock sits inside Cost of Sales, the difference passes straight through to ' +
+              `gross profit: it is ${gap.greaterThan(0) ? 'OVERSTATED' : 'UNDERSTATED'} by ` +
+              `${gap.abs().toFixed(2)} on this statement if the Stock Summary is the right ` +
+              'basis. Establish which basis the accounts are drawn on before quoting either.'
+          );
+        }
+      }
+    }
+
+    return warnings;
+  } catch {
+    return [];
+  }
+}
+
 async function noteMastersDivergence(
   deps: ToolDeps,
   company: string | undefined,
@@ -410,12 +541,38 @@ async function noteMastersDivergence(
 
     const mastersByRoot = new Map<string, Decimal>();
     const ledgersByRoot = new Map<string, Ledger[]>();
+    /**
+     * How many ledgers under each root reported NO closing balance, and were
+     * therefore not in the sum below.
+     *
+     * WHY THIS IS COUNTED. Skipping a null is right — rule 1, a null is Tally
+     * reporting nothing and adding it as zero would invent a figure. But the
+     * note this function emits then says the masters "add up to" a number,
+     * and presents it as the counterpart of the trial balance total. When some
+     * of the group was unreadable that number is a sum over a SUBSET, and the
+     * difference it reports is part real basis difference and part simply
+     * data that was never read. The reader cannot tell which, and the honest
+     * reading of a large difference — "these two disagree, reconcile before
+     * quoting" — is then partly wrong.
+     *
+     * Verified live 2026-08-17 on AGBV Nutrition GmbH: 5 of the 10 ledgers
+     * under Sales Accounts and 68 of the 87 under Indirect Expenses report no
+     * closing balance at all. On that company they turned out to be genuinely
+     * unused ledgers — `Sales Income` has zero vouchers in the period, so the
+     * sum was complete after all — but nothing in the output said so, and on a
+     * company where they are NOT empty the same note would read identically.
+     * So the count is disclosed rather than the sum being silently partial.
+     */
+    const unreadableByRoot = new Map<string, number>();
     for (const ledger of ledgers) {
       const root = rootOf(ledger.parent);
       ledgersByRoot.set(root, [...(ledgersByRoot.get(root) ?? []), ledger]);
       // A null closing balance is Tally reporting nothing, not a zero, so it
       // contributes nothing rather than being added as 0.
-      if (ledger.closingBalance === null) continue;
+      if (ledger.closingBalance === null) {
+        unreadableByRoot.set(root, (unreadableByRoot.get(root) ?? 0) + 1);
+        continue;
+      }
       mastersByRoot.set(
         root,
         (mastersByRoot.get(root) ?? new Decimal(0)).plus(ledger.closingBalance.amount)
@@ -455,10 +612,27 @@ async function noteMastersDivergence(
       );
       const culprit = carriedAtOpening.length === 1 ? carriedAtOpening[0] : undefined;
 
+      // How much of this group the masters figure actually covers. Stated
+      // whenever anything was unreadable, so a partial sum is never presented
+      // as a whole one — see `unreadableByRoot`.
+      const unreadable = unreadableByRoot.get(key(name)) ?? 0;
+      const total = (ledgersByRoot.get(key(name)) ?? []).length;
+      const coverage =
+        unreadable === 0
+          ? ''
+          : `That masters figure is the sum of ${String(total - unreadable)} of the ` +
+            `${String(total)} ledger(s) in this group: the other ${String(unreadable)} report no ` +
+            `closing balance at all, and a missing balance is not a zero, so they were left out ` +
+            `rather than added as nought. Part of the difference above may therefore be ledgers ` +
+            `that were never read rather than a real disagreement. Check them with ` +
+            `tally_get_ledger_transactions before treating the gap as a reconciling item — an ` +
+            `unused ledger genuinely holds nothing, and TallyPrime reports those the same way. `;
+
       notes.push(
         `"${name}" is ${stated.toString()} on this trial balance, but the closing balances ` +
           `tally_get_masters type "ledger" reports for the same group add up to ${masters.toString()} — a ` +
           `difference of ${difference.toString()}. ` +
+          coverage +
           (culprit === undefined
             ? ''
             : `That is exactly the period movement on "${culprit.name}" (opening ` +
@@ -616,7 +790,7 @@ async function runTrend(
   for (const range of ranges) {
     const response = await deps.client.send(
       spec.build({
-        ...(company === undefined ? {} : { company }),
+        company: company ?? UNSCOPED,
         fromDate: range.fromDate,
         toDate: range.toDate,
         format: deps.config.tallyPreferredFormat,
@@ -958,7 +1132,7 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
 
         const fetchFor = async (range: { fromDate: string; toDate: string }) => {
           const request = spec.build({
-            ...(company === undefined ? {} : { company }),
+            company: company ?? UNSCOPED,
             fromDate: range.fromDate,
             toDate: range.toDate,
             format: deps.config.tallyPreferredFormat,
@@ -1016,7 +1190,17 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
         const divergenceWarnings =
           args.statement === 'trial_balance'
             ? await noteMastersDivergence(deps, args.company, current.rows)
-            : [];
+            : args.statement === 'profit_loss'
+              ? await noteStaleClosingStock(deps, args.company, current.rows)
+              : [];
+
+        // Only where the end date bound. Where it did not, the figures already
+        // ran past the requested period and periodWarnings says so at length —
+        // adding "and the books stop earlier" on top would describe a window
+        // that is not the one the figures cover.
+        const partialPeriodWarnings = endDateBinds
+          ? await notePeriodBeyondBooks(deps, period, args.company)
+          : [];
 
         // A single period is still answered — the figures are real, they simply
         // cover a period the caller did not ask for. Refusing outright would
@@ -1037,7 +1221,7 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
             ];
 
         if (comparisonPeriod === undefined) {
-          const allWarnings = [...periodWarnings, ...divergenceWarnings, ...current.warnings];
+          const allWarnings = [...periodWarnings, ...partialPeriodWarnings, ...divergenceWarnings, ...current.warnings];
 
           // At "summary", rows where every figure is nil are left out. They are
           // the chart of accounts showing through rather than facts about the
@@ -1094,6 +1278,7 @@ export function registerReportTools(server: McpServer, deps: ToolDeps): void {
         const compared = compareStatements(current.rows, comparison.rows, spec.compare);
 
         const allWarnings = [
+          ...partialPeriodWarnings,
           ...divergenceWarnings,
           ...current.warnings,
           ...comparison.warnings,
