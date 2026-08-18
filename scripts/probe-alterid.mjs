@@ -74,7 +74,44 @@ async function post(body) {
 }
 
 const companies = await post(buildCompanyListRequest());
-const loaded = normalizeCompanies(companies.text).data[0];
+/**
+ * WHICH company, said out loud rather than guessed.
+ *
+ * This took `data[0]` — the first of however many TallyPrime has open. With
+ * four companies loaded that silently probes one of them while the operator
+ * edits another, and every reading compares clean because nothing in the
+ * company being read ever changes. Worse, the request below used to carry no
+ * company scope at all, so Tally answered from whichever company it had
+ * current: a reading could be LABELLED one company and READ from another.
+ *
+ * Name it with TALLY_PROBE_COMPANY when more than one is open. Use a scratch
+ * company — step 4 of the procedure deletes a voucher.
+ */
+const allCompanies = normalizeCompanies(companies.text).data;
+const wanted = process.env.TALLY_PROBE_COMPANY;
+const loaded =
+  wanted === undefined
+    ? allCompanies.length === 1
+      ? allCompanies[0]
+      : undefined
+    : allCompanies.find((c) => c.name.toLowerCase() === wanted.toLowerCase());
+
+if (wanted !== undefined && !loaded) {
+  console.error(
+    `\nTallyPrime does not have "${wanted}" open. Currently loaded:\n` +
+      allCompanies.map((c) => `  - ${c.name}`).join('\n')
+  );
+  process.exit(1);
+}
+if (!loaded && allCompanies.length > 1) {
+  console.error(
+    `\nTallyPrime has ${String(allCompanies.length)} companies open, so "the loaded company" has\n` +
+      'no single answer. Name one with TALLY_PROBE_COMPANY — and make it a scratch\n' +
+      'company, because step 4 of this procedure deletes a voucher. Loaded:\n' +
+      allCompanies.map((c) => `  - ${c.name}`).join('\n')
+  );
+  process.exit(1);
+}
 if (!loaded) {
   console.error('No company is loaded in TallyPrime. Open one and re-run.');
   process.exit(1);
@@ -88,7 +125,7 @@ const period = { fromDate: `${String(startYear)}-04-01`, toDate: `${String(start
  * measured at 537KB / ~200ms against 8.6MB / ~2,000ms for the full fetch. So the probe
  * measures the real thing, not an approximation of it.
  */
-const voucherXml = await post(buildVoucherAlterIdRequest({ ...period, format: 'xml' }));
+const voucherXml = await post(buildVoucherAlterIdRequest({ ...period, company: loaded.name, format: 'xml' }));
 
 const ids = [...voucherXml.text.matchAll(/<ALTERID[^>]*>\s*(\d+)\s*<\/ALTERID>/g)].map((m) =>
   Number(m[1])
@@ -119,10 +156,25 @@ const pairs = [...voucherXml.text.matchAll(
 )].map((block) => {
   const alter = /<ALTERID[^>]*>\s*(\d+)\s*<\/ALTERID>/.exec(block[0]);
   const master = /<MASTERID[^>]*>\s*(\d+)\s*<\/MASTERID>/.exec(block[0]);
-  return `${master?.[1] ?? '?'}:${alter?.[1] ?? '?'}`;
+  // Both IDs or nothing. MASTERID is what makes a deletion visible — the pair
+  // disappears — so a record contributing only an ALTERID would weaken the
+  // fingerprint precisely where it has to be strong.
+  return master === null || alter === null ? null : `${master[1]}:${alter[1]}`;
 });
+
+/**
+ * Observed live 2026-08-18 on AgEx Pharma LLC: SIX blocks matched for FIVE
+ * vouchers. The extra is a 20-character empty `<VOUCHER></VOUCHER>` the
+ * collection emits as a template, carrying neither ID. It is constant, so it
+ * would not have produced a false movement — but it does not belong in a
+ * fingerprint, and a future Tally build is not promised to keep it constant.
+ * Dropped, and the count reported, so the discrepancy stays visible instead of
+ * being quietly absorbed.
+ */
+const skeleton = pairs.filter((pair) => pair === null).length;
+const realPairs = pairs.filter((pair) => pair !== null);
 const fingerprint = createHash('sha256')
-  .update(pairs.slice().sort().join('|'))
+  .update(realPairs.slice().sort().join('|'))
   .digest('hex')
   .slice(0, 16);
 
@@ -131,7 +183,8 @@ const reading = {
   max: Math.max(...ids),
   count: ids.length,
   distinct: new Set(ids).size,
-  pairsRead: pairs.length,
+  pairsRead: realPairs.length,
+  skeletonBlocksSkipped: skeleton,
   fingerprint,
   // Stamped by the caller, not by the script: Date.now() inside a probe makes two
   // runs incomparable if the clock is the only thing that changed.
@@ -144,7 +197,10 @@ console.log(`Period:             ${period.fromDate} to ${period.toDate}`);
 console.log(`Vouchers with an ID:${String(reading.count).padStart(6)}`);
 console.log(`Distinct ALTERIDs:  ${String(reading.distinct).padStart(6)}`);
 console.log(`MAXIMUM ALTERID:    ${String(reading.max).padStart(6)}`);
-console.log(`Set fingerprint:    ${reading.fingerprint}  (${String(reading.pairsRead)} pairs)`);
+console.log(
+  `Set fingerprint:    ${reading.fingerprint}  (${String(reading.pairsRead)} pairs` +
+    `${reading.skeletonBlocksSkipped > 0 ? `, ${String(reading.skeletonBlocksSkipped)} empty block(s) skipped` : ''})`
+);
 console.log(
   `Cost of this read:  ${String(reading.ms)}ms, ${(reading.bytes / 1048576).toFixed(1)}MB`
 );
