@@ -115,7 +115,7 @@ if (ids.length === 0) {
  * a fingerprint that changes when nothing did would be worse than useless.
  */
 const pairs = [...voucherXml.text.matchAll(
-  /<VOUCHER[^>]*>[\s\S]*?<\/VOUCHER>/g
+  /<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/g
 )].map((block) => {
   const alter = /<ALTERID[^>]*>\s*(\d+)\s*<\/ALTERID>/.exec(block[0]);
   const master = /<MASTERID[^>]*>\s*(\d+)\s*<\/MASTERID>/.exec(block[0]);
@@ -183,8 +183,31 @@ if (compare) {
   console.log(`\nPrevious maximum:   ${String(previous.max).padStart(6)}`);
   console.log(`Voucher count:      ${String(previous.count)} -> ${String(reading.count)}`);
   console.log(
-    `\n  ${moved ? 'MOVED' : '*** UNCHANGED ***'}  maximum ALTERID ${moved ? 'increased' : 'did NOT increase'}`
+    `\n  BY MAXIMUM: ${moved ? 'MOVED' : '*** UNCHANGED ***'}  maximum ALTERID ${moved ? 'increased' : 'did NOT increase'}`
   );
+  console.log(
+    `  BY SET:     ${setChanged ? 'MOVED' : '*** UNCHANGED ***'}  fingerprint ` +
+      `${previous.fingerprint ?? 'none'} -> ${reading.fingerprint}`
+  );
+
+  // The case that decides the design. A maximum cannot see a deletion; the set
+  // can. If this fires, validate on the set and the deletion risk disappears.
+  if (!moved && setChanged) {
+    console.log(
+      '\n  The SET saw this edit and the MAXIMUM did not. That is the argument for\n' +
+        '  validating on the (MasterId, AlterId) set rather than on a maximum.'
+    );
+  }
+
+  // Nothing can be built on ALTERID if this fires after a real edit.
+  if (!setChanged) {
+    console.log(
+      '\n  *** The SET did not change either. If an edit really was accepted in\n' +
+        '  Tally, ALTERID cannot validate a cache at all — write that into\n' +
+        '  docs/known-limitations.md and abandon the idea rather than working\n' +
+        '  around it. ***'
+    );
+  }
 
   if (!moved && countChanged) {
     console.log(
