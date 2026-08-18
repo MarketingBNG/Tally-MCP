@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.5.1 — unreleased
+## 0.5.1 — 2026-08-18
 **Read this first: the TDS check was giving a misleading answer on non-Indian
 companies, and a clean-looking one on an Indian company that does deduct tax.**
 
