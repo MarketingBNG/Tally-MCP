@@ -456,7 +456,14 @@ than anything above.
 
 ## Not on the list, on purpose
 
-- **Multi-company** — Tally serves one open company. A hard limit, not a gap.
+- ~~**Multi-company**~~ — **SHIPPED, and this entry was wrong.** It read "Tally
+  serves one open company. A hard limit, not a gap." TallyPrime in fact holds
+  several companies open at once and serves each when named, so it was never a
+  hard limit. `tally_get_statement` takes `companies: ["A", "B"]` for up to ten
+  side by side, and `tally_check_tie_out` the same — each read against its own
+  books and its own book year, with nothing totalled across them and no
+  difference computed between companies whose currencies differ. Verified live
+  2026-08-18 across four companies in one call (India, Germany, two US).
 - **`tally_get_day_book`** — a settled decision; the report ignores its date
   range. `tally_get_vouchers` covers the ground correctly.
 - **Thresholds and audit rules** — deliberately absent. What counts as
