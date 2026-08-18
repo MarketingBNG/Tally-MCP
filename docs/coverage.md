@@ -99,8 +99,8 @@ three did not resolve them, because all three lack the same features.
 | Cost centre allocations | reachable-shape-unverified | `AllLedgerEntries.CategoryAllocations.CostCentreAllocations` | Path accepted and safe; 0 allocations on this company. Hierarchy is one level deeper than assumed |
 | Inventory entries | reachable-shape-unverified | `AllInventoryEntries` | no inventory on this company |
 | Batch / godown allocations | unknown | nested path, untried | no inventory to test against |
-| Edit log / voucher versions | **blocked** | — | All four report IDs rejected; every masters audit container empty scaffolding |
-| Voucher-level audit fields | unknown | — | untestable while only the current year is reachable |
+| Edit log / voucher versions | **blocked** | — | Settled 2026-08-18: eleven report IDs rejected against a working control on two companies, and `EnteredBy`/`AlteredBy` are served but EMPTY on every voucher of all three companies with data. Who altered an entry is not obtainable |
+| Voucher-level audit fields | reachable | `UpdatedDateTime` etc. in FETCH | Settled 2026-08-18: `UpdatedDateTime`, `Audited`, `IsDeleted`, `IsDeletedVchRetained`, `IsSecurityOnWhenEntered`, `PersistedView`, `AsOriginal` all populated per voucher. `UpdatedDateTime` is a real per-voucher LAST-WRITTEN stamp (668 vouchers, 2 of 3 companies; the third returns all-zero placeholders) and ships as `tally_test_vouchers` test `late_entry`. `Audited` and `IsSecurityOnWhenEntered` read `No` on every voucher of all three, so they are readable with no variation to test against |
 
 ## Statements and reports
 
@@ -190,7 +190,10 @@ labelled rupees EUR. Treat any row measured against a single company as provisio
 
 **Still blocked, and honestly so.** Prior-year vouchers (the collection returns
 only the current FY); cost-centre allocations (`Cost Centre Break-up` is rejected
-as a report, and the dotted collection TYPE is unsafe to send); Edit Log; Budgets.
+as a report, and the dotted collection TYPE is unsafe to send); Edit Log (settled
+2026-08-18 — no report ID exists and `EnteredBy`/`AlteredBy` are served but empty; the
+partial substitute is `UpdatedDateTime`, now read by `tally_test_vouchers` test
+`late_entry`); Budgets.
 The untried candidate for prior-year vouchers is a custom-TDL **report** — which
 is a report, so the collection-TYPE hazard does not apply — and it needs live
 verification.

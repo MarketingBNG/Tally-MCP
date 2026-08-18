@@ -89,6 +89,10 @@ export default tseslint.config(
         // to decode UTF-16LE responses, so they need both.
         fetch: 'readonly',
         TextDecoder: 'readonly',
+        // A probe that hangs must fail rather than wait forever: a live TallyPrime
+        // can stop answering mid-run, and an unbounded fetch turns that into a
+        // stuck terminal instead of a diagnosis.
+        AbortSignal: 'readonly',
       },
     },
     rules: {

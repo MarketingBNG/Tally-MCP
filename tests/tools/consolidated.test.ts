@@ -342,7 +342,12 @@ describe('tally_test_vouchers', () => {
       fromDate: '2026-07-01',
       toDate: '2026-07-31',
     });
-    expect((result.warnings as string[]).join(' ')).toContain('Edit Log');
+    // The claim, not the wording: this used to assert the phrase "Edit Log",
+    // which passed for the wrong reason once "late_entry" existed and the
+    // sentence was rewritten to point at it instead of at a dead end.
+    const warnings = (result.warnings as string[]).join(' ');
+    expect(warnings).toContain('NOT an out-of-hours posting test');
+    expect(warnings).toContain('not the date it was entered');
   });
 
   it('returns the seed with a sample, so the sample can be drawn again', async () => {

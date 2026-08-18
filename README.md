@@ -259,7 +259,7 @@ repeated.
 | `tally_get_bank_reconciliation` | Bank instruments with cheque/UTR detail and reconciled status — see below |
 | `tally_check_tie_out` | Does the arithmetic hold? Every voucher balances, every ledger rolls forward |
 | `tally_calculate_materiality` | Overall / performance / clearly-trivial thresholds, with the basis recorded |
-| `tally_test_vouchers` | One audit procedure over a voucher population: `journal_screen`, `benford`, `sample` (reproducible, returns its seed), `duplicates`, `round_numbers`, `cutoff`, `weekend`, `related_party`. Returns **candidates for review, never findings** — see below |
+| `tally_test_vouchers` | One audit procedure over a voucher population: `journal_screen`, `benford`, `sample` (reproducible, returns its seed), `duplicates`, `round_numbers`, `cutoff`, `weekend`, `late_entry` (written long after the date it carries — the last save only, never who saved it), `related_party`. Returns **candidates for review, never findings** — see below |
 | `tally_get_report` | TallyPrime's own built-in views from a closed, live-verified allowlist: `negative_ledgers`, `negative_stock`, `ratio_analysis`, `sales_register`, `purchase_register`, `journal_register`, `bills_receivable`, `bills_payable`, `cost_category_summary`. Columns keep Tally's own tag names — see below |
 
 All are exposed over MCP and exercised against a live TallyPrime install. The
@@ -325,7 +325,7 @@ rather than only in this README:
   good/doubtful splits are a legal fact and a judgement respectively, neither is
   in TallyPrime, and the tool refuses to invent them.
 - **`tally_test_vouchers` returns candidates for review, not findings.** A round
-  amount is usually rent and a weekend date is usually nothing; none of the eight
+  amount is usually rent and a weekend date is usually nothing; none of the nine
   tests can establish that anything is wrong. Every result carries that sentence,
   plus the size of the population it tested and what was excluded — orders and
   cancelled vouchers never belong in these tests, and a test run over a
@@ -334,6 +334,13 @@ rather than only in this README:
   date it was entered (the real out-of-hours test needs the Edit Log, which is not
   reachable), and journals are identified by their type **name** containing
   "journal", because TallyPrime has no manual-journal flag.
+- **`late_entry` reads the last save, and nobody's name comes with it.** It answers
+  "this entry was written months after the date on its face", which is the cut-off
+  question. It cannot tell an entry keyed in late from one keyed in on time and
+  altered later, it does not say who did either, and it is not an audit trail — that
+  needs TallyPrime's own Edit Log, which is not reachable over this interface. On a
+  company that does not record save times the test **refuses to run** rather than
+  reporting that nothing was found.
 - **`tally_get_report` keeps TallyPrime's column names.** Rows come back as a name
   plus an `amounts` map keyed by Tally's own tags (`DSPCLDRAMTA` and so on) rather
   than relabelled debit/credit — asserting a column meaning that has not been

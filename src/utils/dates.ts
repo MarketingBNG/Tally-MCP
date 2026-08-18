@@ -56,6 +56,40 @@ export function tallyDateToIso(tally: string): string | null {
 }
 
 /**
+ * Tally's `UPDATEDDATETIME` to an ISO local timestamp, or null.
+ *
+ * The wire format is `YYYYMMDDHHMMSSmmm` — 17 digits, verified live 2026-08-18
+ * across 668 vouchers on two companies (docs/probe-findings-2026-08-18.md).
+ *
+ * NULL IS THE IMPORTANT RETURN VALUE. On a company that does not stamp its
+ * vouchers the field arrives as all zeros rather than absent, and an all-zero
+ * value parsed leniently becomes a date in year 0 — which would then sort as
+ * "written long before the voucher" and read as the opposite of what it means.
+ * So a placeholder is rejected outright, and every caller has to decide what to
+ * do about an unstamped voucher rather than being handed a fabricated instant.
+ *
+ * NO TIMEZONE is offered, because Tally does not record one: the stamp is the
+ * local clock of the machine that wrote the voucher. Returning a `Z` suffix would
+ * assert UTC and silently shift every timestamp by the client's offset.
+ */
+export function tallyDateTimeToIso(value: string): string | null {
+  const trimmed = value.trim();
+  if (!/^\d{14,17}$/.test(trimmed)) return null;
+  // All zeros — Tally's "never stamped" placeholder.
+  if (/^0+$/.test(trimmed)) return null;
+
+  const date = tallyDateToIso(trimmed.slice(0, 8));
+  if (date === null) return null;
+
+  const hour = Number(trimmed.slice(8, 10));
+  const minute = Number(trimmed.slice(10, 12));
+  const second = Number(trimmed.slice(12, 14));
+  if (hour > 23 || minute > 59 || second > 59) return null;
+
+  return `${date}T${trimmed.slice(8, 10)}:${trimmed.slice(10, 12)}:${trimmed.slice(12, 14)}`;
+}
+
+/**
  * Validate a date range supplied by a tool caller.
  * Throws INVALID_DATE_RANGE with a message naming the offending value.
  */

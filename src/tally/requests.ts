@@ -501,6 +501,18 @@ export function buildVoucherCollectionRequest(
         // regardless and leaves the inapplicable ones empty.
         'IsOrderVoucher',
         'IsInventoryVoucher',
+        /**
+         * When the voucher was last WRITTEN, as distinct from the date it is
+         * dated. The nearest thing to an entry timestamp this interface serves —
+         * Tally's Edit Log has no report ID and `EnteredBy`/`AlteredBy` come back
+         * empty (docs/probe-findings-2026-08-18.md), so this is the only evidence
+         * available that an entry was keyed in long after the date on its face.
+         *
+         * Costs nothing measurable: one 17-digit field per voucher. Absent as a
+         * real value on a company that does not stamp — it arrives as all zeros,
+         * which `tallyDateTimeToIso` deliberately reads as null.
+         */
+        'UpdatedDateTime',
         'AllLedgerEntries',
         'AllInventoryEntries',
       ];

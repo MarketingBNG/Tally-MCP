@@ -213,9 +213,13 @@ confident, well-formed, empty structure.
 | `ISRELATEDPARTY` | 330 / 330 | **See finding 7** |
 
 None of these is voucher-level, so none substitutes for the edit log that CARO
-Rule 11(g) requires. **Untested:** whether a Voucher collection carries the same
-fields populated — blocked today because the voucher collection only reaches the
-current year (finding 2) and because collection probing was stopped (finding 1).
+Rule 11(g) requires. ~~**Untested:** whether a Voucher collection carries the same
+fields populated~~ — **settled 2026-08-18**, see
+[probe-findings-2026-08-18.md](probe-findings-2026-08-18.md): `EnteredBy` and
+`AlteredBy` are served and EMPTY on every voucher of all three companies, so *who*
+altered an entry remains unavailable. But `UpdatedDateTime` is a real per-voucher
+last-written timestamp on two of the three, which supports a late-entry enquiry —
+not an audit trail, and not Rule 11(g) evidence.
 
 ---
 

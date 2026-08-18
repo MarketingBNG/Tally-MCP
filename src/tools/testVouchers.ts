@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Decimal } from 'decimal.js';
+import { TallyError } from '../tally/TallyError.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { Voucher } from '../tally/normalize.js';
 import { fetchVouchers } from './vouchers.js';
@@ -10,6 +11,7 @@ import {
   benford,
   findCutOffEntries,
   findDuplicates,
+  findLateWritten,
   findRoundNumbers,
   findWeekendDated,
   sampleVouchers,
@@ -36,10 +38,10 @@ import {
 /**
  * `tally_test_vouchers`: define a voucher population, then run a procedure over it.
  *
- * Seven tests behind one tool, because that sentence is what all seven are. They
+ * Eight tests behind one tool, because that sentence is what all eight are. They
  * share the population filter, they share the exclusion rules, and they share
- * the single Tally fetch — so seven tools would have meant seven copies of the
- * population logic and seven chances for them to drift apart, which is the worst
+ * the single Tally fetch — so eight tools would have meant eight copies of the
+ * population logic and eight chances for them to drift apart, which is the worst
  * possible failure here: two tests disagreeing about what "the journals in
  * March" means, with no error raised.
  *
@@ -77,6 +79,7 @@ export const TEST_VALUES = [
   'round_numbers',
   'cutoff',
   'weekend',
+  'late_entry',
   'related_party',
 ] as const;
 
@@ -124,6 +127,19 @@ const DESCRIPTION = [
   '- cutoff: vouchers dated within `cutoffDays` of either end of the period. Proximity to the ' +
     'boundary, not evidence about it — establishing whether goods moved before year end needs ' +
     'despatch documents, which TallyPrime does not hold.',
+  '- late_entry: vouchers last WRITTEN long after the date they carry, or written after the ' +
+    'period closed. This is the only entry-timing evidence available: TallyPrime Edit Log has ' +
+    'no report ID over this interface and its EnteredBy/AlteredBy fields come back empty, so ' +
+    'this reads `UpdatedDateTime` instead. TWO REASONS are reported — written after the period ' +
+    'end (dated inside the year, written after it closed, which is the case cut-off testing is ' +
+    'aimed at) and a lag of at least `lateEntryMinLagDays` days (default 30). Read ' +
+    '`lagDistribution` before choosing a threshold: books written up monthly show a 30-day lag ' +
+    'on nearly everything and nothing is wrong. IT IS THE LAST WRITE, of unknown authorship — a ' +
+    'voucher entered late and one entered on time then altered later are indistinguishable, and ' +
+    'nothing here says who did either. It is NOT an Edit Log, NOT an audit trail, and cannot ' +
+    'support CARO Rule 11(g). On a company that does not stamp its vouchers the field arrives as ' +
+    'all zeros and this test FAILS with TALLY_UNSUPPORTED_OPERATION rather than reporting that ' +
+    'nothing was found.',
   '- related_party: vouchers transacted with a related party. Seeded from TallyPrime own ' +
     "`IsRelatedParty` ledger flag, and extended by the `relatedParties` list you supply. " +
     'READ THE OUTPUT ON THIS ONE: a ledger reading false means "not marked in Tally", never "not ' +
@@ -341,6 +357,18 @@ export function registerVoucherTestTools(server: McpServer, deps: ToolDeps): voi
           .positive()
           .optional()
           .describe('cutoff only: how many days from each end of the period count. Default 7.'),
+        lateEntryMinLagDays: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            'late_entry only: flag a voucher when it was last written at least this many days ' +
+              'after the date it carries. Default 30. Vouchers written after the period closed ' +
+              'are flagged whatever this is set to, since that needs no threshold. Set it from ' +
+              'the `lagDistribution` in a first run — the right value depends on how often this ' +
+              'company writes its books up.'
+          ),
         sampleSize: z
           .number()
           .int()
@@ -422,6 +450,7 @@ export interface VoucherTestArgs {
   threshold?: string | undefined;
   roundMultipleOf?: number | undefined;
   cutoffDays?: number | undefined;
+  lateEntryMinLagDays?: number | undefined;
   sampleSize?: number | undefined;
   sampleSeed?: string | undefined;
   sampleMethod?: SampleMethod | undefined;
@@ -448,10 +477,10 @@ export async function executeVoucherTest(
   const test: TestName = args.test;
   const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
 
-  // Cut-off and weekend ask about DATES, so a stock-only voucher belongs
-  // in them; every other test reads an amount, which a stock-only
+  // Cut-off, weekend and late_entry ask about DATES, so a stock-only voucher
+  // belongs in them; every other test reads an amount, which a stock-only
   // voucher does not have.
-  const amountBased = test !== 'cutoff' && test !== 'weekend';
+  const amountBased = test !== 'cutoff' && test !== 'weekend' && test !== 'late_entry';
 
   const population = await buildPopulation(
     deps,
@@ -502,6 +531,7 @@ export async function executeVoucherTest(
     roundMultipleOf: args.roundMultipleOf ?? 1000,
     ...(args.threshold === undefined ? {} : { threshold: args.threshold }),
     cutoffDays: args.cutoffDays ?? 7,
+    lateEntryMinLagDays: args.lateEntryMinLagDays ?? 30,
     sampleSize: args.sampleSize ?? 25,
     sampleSeed: args.sampleSeed ?? 'tally-mcp',
     sampleMethod: args.sampleMethod ?? 'random',
@@ -527,6 +557,7 @@ export interface ProcedureOptions {
   roundMultipleOf: number;
   threshold?: string;
   cutoffDays: number;
+  lateEntryMinLagDays: number;
   sampleSize: number;
   sampleSeed: string;
   sampleMethod: SampleMethod;
@@ -666,10 +697,95 @@ function runProcedure(
             'wrong-period entry would be if there were one. Establishing whether the ' +
             'transaction belongs in this period needs the despatch or receipt documents, and ' +
             'TallyPrime does not hold those.',
-          'This tests the voucher DATE against the period. An entry dated before year end but ' +
-            'keyed in after it — the case cut-off testing is really aimed at — needs the entry ' +
-            'date from the Edit Log, which this connector cannot currently reach.',
+          'This tests the voucher DATE against the period. For the case cut-off testing is ' +
+            'really aimed at — an entry dated before year end but keyed in after it — run test ' +
+            '"late_entry", which reads when each voucher was last written. Read its limits: it ' +
+            'is the last write, of unknown authorship, and it is unavailable on a company that ' +
+            'does not stamp its vouchers.',
         ],
+      };
+    }
+
+    case 'late_entry': {
+      const result = findLateWritten(vouchers, period, options.lateEntryMinLagDays);
+
+      /**
+       * REFUSE rather than report nothing found.
+       *
+       * A company that has never stamped its vouchers sends `UpdatedDateTime` as
+       * all zeros on every record, so the honest-looking output of this test on
+       * such a company is an empty candidate list — indistinguishable from books
+       * where every entry was written on the day it is dated. An auditor reading
+       * that has been told the opposite of the truth, which is the exact failure
+       * this connector has been corrected for twice. So the test fails loudly.
+       */
+      if (result.stamped === 0 && vouchers.length > 0) {
+        throw new TallyError(
+          'TALLY_UNSUPPORTED_OPERATION',
+          `None of the ${String(vouchers.length)} vouchers in this population carries a write ` +
+            'timestamp — TallyPrime returned its all-zero placeholder for every one, so there is ' +
+            'nothing to test. This is NOT a result of "no late entries".',
+          {
+            suggestion:
+              'This company does not stamp UpdatedDateTime on its vouchers, and TallyPrime Edit ' +
+              'Log is not reachable over this interface, so entry timing cannot be examined ' +
+              'here at all. Use the Edit Log inside TallyPrime (if the company has it switched ' +
+              'on), or ask the client when the books were written up. Test "cutoff" still tests ' +
+              'voucher DATES against the period.',
+          }
+        );
+      }
+
+      const warnings = [
+        'THIS IS THE LAST WRITE, NOT THE ENTRY. `UpdatedDateTime` records when the voucher was ' +
+          'most recently saved. A voucher keyed in late and a voucher keyed in on time and ' +
+          'altered months later are indistinguishable here, and neither says who did it. Present ' +
+          'these as entries whose timing is worth asking about.',
+        'NOT AN AUDIT TRAIL. This does not show what changed, or that anything changed at all, ' +
+          'and it cannot support CARO Rule 11(g) — which needs the Edit Log itself, preserved ' +
+          'and untampered. Get that from TallyPrime on screen.',
+        'A LAG IS NOT AN IRREGULARITY. Books written up weekly or monthly produce a lag on every ' +
+          'voucher in them. Read `lagDistribution` — if the median across the whole population ' +
+          'is 40 days, a 40-day lag is this company being itself, and the threshold should be ' +
+          'set above it.',
+      ];
+      if (result.unstamped > 0) {
+        warnings.push(
+          `${String(result.unstamped)} of ${String(vouchers.length)} voucher(s) carry NO write ` +
+            'timestamp and were not tested. They are not absent from the candidate list because ' +
+            'they passed — they were never examined. Any statement about "the period" has to be ' +
+            'qualified by that count.'
+        );
+      }
+      if (result.undated > 0) {
+        warnings.push(
+          `${String(result.undated)} voucher(s) had a write timestamp but no readable date of ` +
+            'their own, so no lag could be computed for them.'
+        );
+      }
+      if (result.postDated > 0) {
+        warnings.push(
+          `${String(result.postDated)} voucher(s) were written BEFORE the date they carry — ` +
+            'post-dated entries. Counted, not flagged: entering next month rent today is ' +
+            'ordinary bookkeeping.'
+        );
+      }
+
+      return {
+        payload: {
+          minLagDays: options.lateEntryMinLagDays,
+          timestampCoverage: {
+            stamped: result.stamped,
+            unstamped: result.unstamped,
+            undated: result.undated,
+          },
+          lagDistribution: result.lagDistribution,
+          writtenAfterPeriodEnd: result.writtenAfterPeriodEnd,
+          postDated: result.postDated,
+          candidates: result.candidates,
+        },
+        rows: result.candidates.length,
+        warnings,
       };
     }
 
@@ -782,8 +898,9 @@ function runProcedure(
             'business that trades on Saturday, and wrong in jurisdictions whose weekend falls ' +
             'elsewhere. Say which days were treated as the weekend when quoting this.',
           'This is the voucher DATE, not the date it was entered, so it is NOT an out-of-hours ' +
-            'posting test. A weekend-dated voucher keyed in on Monday is unremarkable. The ' +
-            'entry timestamp lives in the Edit Log, which this connector cannot currently reach.',
+            'posting test. A weekend-dated voucher keyed in on Monday is unremarkable. Test ' +
+            '"late_entry" reads the write timestamp, but only to the DAY it is useful for — it ' +
+            'answers "written long after its date", not "written at 2am on a Sunday".',
         ],
       };
     }

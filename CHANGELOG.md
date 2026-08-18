@@ -12,6 +12,40 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.6.0 — unreleased
+
+**New: you can now ask which entries were written long after the date they
+carry.** `tally_test_vouchers` has an eighth test, `late_entry`. It lists
+vouchers whose last save happened well after the date on their face — an invoice
+dated 31 March that was keyed in during June — and vouchers dated inside the year
+that were written after the year ended. That is the cut-off question an auditor
+actually asks, and until now nothing in this connector could answer it.
+
+Read the three limits, because they decide what you can say about the result:
+
+- **It is the LAST save, and nobody's name is attached.** An entry keyed in late
+  and an entry keyed in on time then altered months later look identical here.
+  Treat a flagged voucher as one to ask the client about.
+- **It is not an audit trail.** It does not show what changed, or that anything
+  changed, and it cannot support CARO Rule 11(g). That still needs TallyPrime's
+  own Edit Log on screen.
+- **A lag is not an irregularity.** Books written up monthly show a 30-day lag on
+  nearly every voucher. The result reports the lag spread across the whole
+  population so you can set the threshold to what this company normally does —
+  measured on real books, one company's median lag was 42 days and another's 50.
+
+**On a company that does not record save times, this test refuses to run**
+rather than reporting that nothing was found. TallyPrime returns a row of zeros
+instead of leaving the field out, so an empty answer would have been
+indistinguishable from books where every entry was written on the day it is
+dated. It fails with an explanation instead.
+
+**Also: the Edit Log itself remains unreachable, and this is now settled rather
+than assumed.** Eleven report names were tried against a live TallyPrime and all
+eleven were refused; the fields naming who entered or altered a voucher are
+served but always empty. Documented in
+`docs/probe-findings-2026-08-18.md`.
+
 ## 0.5.1 — 2026-08-18
 **Read this first: the TDS check was giving a misleading answer on non-Indian
 companies, and a clean-looking one on an Indian company that does deduct tax.**

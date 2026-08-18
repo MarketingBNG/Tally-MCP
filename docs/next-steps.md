@@ -127,6 +127,12 @@ What is still blocked on the probe trip below, and deliberately not attempted:
 voucher), **ratio analysis**, and the **audit trail** of altered and deleted
 vouchers. All four need a report ID, and a wrong ID closes TallyPrime.
 
+**Three of those four have since resolved.** The registers and ratio analysis
+ship in `tally_get_report` (item 1). The **audit trail is CLOSED, not pending** —
+probed with a control on 2026-08-18, eleven report names refused and the
+`EnteredBy`/`AlteredBy` fields served but empty; see item 7. Cost centres remain,
+and remain the largest gap.
+
 **Inventory has since come off that list.** `Stock Summary` and `Godown Summary`
 were unblocked by the 2026-08-14 probe and ship as `tally_get_closing_stock`,
 including the only location-wise stock path in the server. The other four remain.
@@ -436,6 +442,36 @@ like a full one. `tally_summarise_movements` now covers the legitimate half of t
 idea — a caller who wants a total can ask for one — without making omission the
 default. Revisit only if a real session is found where the row-level response was the
 thing that exhausted the context.
+
+## 7. The Edit Log — PROBED and CLOSED 2026-08-18, with a partial substitute shipped
+
+Asked because SA 240 (fraud, management override) and CARO Rule 11(g) both want
+evidence about who altered an entry and when, and the connector had no answer.
+
+**Closed.** Eleven candidate report names were refused against a deliberately-wrong
+control that was refused identically, on two companies — so there is no report path,
+and the verdict is trustworthy rather than a null result. The question the 2026-08-14
+run left open is also answered: `EnteredBy` and `AlteredBy` ARE served on the Voucher
+collection and are EMPTY on every voucher of all three companies with data. So **who**
+altered an entry is not obtainable over this interface at all. Rule 11(g) cannot be
+supported and that is now a settled limitation rather than an open question.
+
+Do not re-probe without a company that has Edit Log switched on, and do not go looking
+for a collection TYPE for it — that is the class of request that parks TallyPrime behind
+a modal dialog.
+
+**What the same run found instead**, and what shipped because of it: `UpdatedDateTime`
+is a genuine per-voucher LAST-WRITTEN timestamp — 668 vouchers across two companies,
+223 and 229 distinct stamps, so a real per-record stamp rather than one bulk migration
+event. It lags the voucher date by a median of 42 and 50 days on those two companies.
+The third returns all-zero placeholders on every voucher, which is why the test built
+on it **refuses to run** rather than reporting nothing found.
+
+Shipped as `tally_test_vouchers` test `late_entry`. It answers "written long after the
+date it carries" and "written after the period closed" — the cut-off question — and
+explicitly does not claim to answer "who changed this" or "what changed". Evidence in
+[probe-findings-2026-08-18.md](probe-findings-2026-08-18.md); probe at
+[scripts/probe-editlog.mjs](../scripts/probe-editlog.mjs).
 
 ---
 

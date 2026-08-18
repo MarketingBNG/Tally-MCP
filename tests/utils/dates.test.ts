@@ -7,6 +7,7 @@ import {
   isoToTallyDate,
   nearestBindingEndDate,
   tallyDateToIso,
+  tallyDateTimeToIso,
   validateDateRange,
   financialYearFor,
   todayIso,
@@ -330,5 +331,45 @@ describe('bookYearFor against the live-measured accumulation endpoint', () => {
       fromDate: '2026-01-01',
       toDate: '2026-12-31',
     });
+  });
+});
+
+describe('tallyDateTimeToIso', () => {
+  it('reads the 17-digit UPDATEDDATETIME Tally actually sends', () => {
+    // Format confirmed live 2026-08-18 across 668 vouchers on two companies.
+    expect(tallyDateTimeToIso('20260711123213000')).toBe('2026-07-11T12:32:13');
+  });
+
+  it('returns null for the all-zero placeholder, which is the whole point', () => {
+    // A company that does not stamp its vouchers sends this rather than omitting
+    // the field. Parsed leniently it would become a date in year 0 and read as
+    // "written long before the voucher" — the opposite of what it means.
+    expect(tallyDateTimeToIso('000000000')).toBeNull();
+    expect(tallyDateTimeToIso('00000000000000000')).toBeNull();
+  });
+
+  it('offers no timezone, because Tally records none', () => {
+    // A trailing Z would assert UTC and shift every timestamp by the reader's
+    // offset. The stamp is the local clock of whatever machine wrote the voucher.
+    expect(tallyDateTimeToIso('20260711123213000')).not.toContain('Z');
+  });
+
+  it('accepts a 14-digit stamp without the milliseconds', () => {
+    expect(tallyDateTimeToIso('20260711123213')).toBe('2026-07-11T12:32:13');
+  });
+
+  it('rejects an impossible clock rather than rolling it over', () => {
+    expect(tallyDateTimeToIso('20260711253213000')).toBeNull();
+    expect(tallyDateTimeToIso('20260711126013000')).toBeNull();
+  });
+
+  it('rejects an impossible date', () => {
+    expect(tallyDateTimeToIso('20260231123213000')).toBeNull();
+  });
+
+  it('rejects anything that is not a run of digits of the right length', () => {
+    expect(tallyDateTimeToIso('')).toBeNull();
+    expect(tallyDateTimeToIso('20260711')).toBeNull();
+    expect(tallyDateTimeToIso('2026-07-11T12:32:13')).toBeNull();
   });
 });

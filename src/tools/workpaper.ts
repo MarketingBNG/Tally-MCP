@@ -274,6 +274,7 @@ const PROCEDURE_TITLES: Record<TestName, string> = {
   round_numbers: 'Round-amount screen',
   cutoff: 'Cut-off proximity screen',
   weekend: 'Weekend-dated posting screen',
+  late_entry: 'Entries written late relative to their date',
   related_party: 'Related-party transactions',
 };
 
@@ -293,6 +294,7 @@ const RELEVANT_OPTIONS: Record<TestName, string[]> = {
   round_numbers: ['roundMultipleOf'],
   cutoff: ['cutoffDays'],
   weekend: [],
+  late_entry: ['lateEntryMinLagDays'],
   related_party: ['relatedParties'],
 };
 

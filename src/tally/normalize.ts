@@ -1,4 +1,4 @@
-import { tallyDateToIso } from '../utils/dates.js';
+import { tallyDateToIso, tallyDateTimeToIso } from '../utils/dates.js';
 import { DEFAULT_CURRENCY, toMoney, type Money } from '../utils/numbers.js';
 import { TallyError } from './TallyError.js';
 import {
@@ -930,6 +930,21 @@ export interface Voucher {
    * purchase invoice that follows it describe the same goods.
    */
   isInventoryVoucher: boolean;
+  /**
+   * When this voucher was last WRITTEN — `YYYY-MM-DDTHH:MM:SS`, local to the
+   * machine that wrote it, with no timezone because Tally records none.
+   *
+   * NULL WHERE THE COMPANY DOES NOT STAMP. Tally sends the field as all zeros in
+   * that case rather than omitting it, so null here means "no timestamp
+   * available", never "written at the same moment it was dated". A test built on
+   * this has to refuse to answer when it is null rather than report nothing found.
+   *
+   * The LAST write, not the creation: it cannot distinguish a voucher keyed in
+   * late from one keyed in on time and altered later, and it does not say who
+   * wrote it. Verified live 2026-08-18 as a genuine per-voucher stamp rather than
+   * a bulk migration artifact — see docs/probe-findings-2026-08-18.md.
+   */
+  lastWrittenAt: string | null;
   entries: LedgerEntry[];
   source: SourceRef;
   /**
@@ -985,6 +1000,7 @@ const VOUCHER_PROMOTED_FIELDS = new Set([
   'NARRATION',
   'ISCANCELLED',
   'ISOPTIONAL',
+  'UPDATEDDATETIME',
 ]);
 
 /** Entry fields already surfaced as first-class properties. */
@@ -1076,6 +1092,11 @@ export function normalizeVouchers(
         // false — the correct reading, since absence means "not one of these".
         isOrderVoucher: isYes(childText(node, 'ISORDERVOUCHER')),
         isInventoryVoucher: isYes(childText(node, 'ISINVENTORYVOUCHER')),
+        // No warning when this fails to parse, unlike DATE above. An unstamped
+        // company sends all zeros on every single voucher, so warning per record
+        // would bury the real warnings under hundreds of copies of one fact. The
+        // test that reads this counts the nulls and says so once.
+        lastWrittenAt: tallyDateTimeToIso(childText(node, 'UPDATEDDATETIME') ?? ''),
         entries: normalizeEntries(
           node,
           number,

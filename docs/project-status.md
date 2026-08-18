@@ -6,9 +6,10 @@ than against how finished it feels. Companion to
 as they do, and [performance.md](performance.md), which covers what each tool
 costs in tokens and time; this file covers *how much* is done.
 
-**Last updated:** 2026-08-13, verified against two live TallyPrime installs — the
-original 330-ledger/~30-vouchers-per-month company, and the second live company (a US LLC, FY 25-26),
-453 vouchers over a full financial year.
+**Last updated:** 2026-08-18, verified against four companies loaded together in one
+live TallyPrime — an Indian private limited (472 ledgers), a German GmbH on
+calendar-year books, and two US LLCs. Earlier readings came from the first two of
+those.
 
 ---
 
@@ -18,9 +19,9 @@ original 330-ledger/~30-vouchers-per-month company, and the second live company 
 |---|---|
 | **Built** | ~95% |
 | **Verified against real data** | ~90% |
-| Tools | 20 registered — the newest is `tally_get_closing_stock` (see [Inventory reports unblocked](#inventory-reports-unblocked-2026-08-14)) |
+| Tools | 23 registered — the newest is `tally_get_report` (see [Inventory reports unblocked](#inventory-reports-unblocked-2026-08-14)). `tally_test_vouchers` carries 8 procedures, the newest being `late_entry` (see [Entry timing](#entry-timing-2026-08-18)) |
 | Prompts / resources | 4 / 2 |
-| Tests | 569 passing, 2 skipped, across 31 files. One skip is the fixture-vs-`samples/` guard, which runs only where `samples/` exists — i.e. precisely on a machine that has pulled real exports |
+| Tests | 976 passing, 2 skipped, across 59 files. One skip is the fixture-vs-`samples/` guard, which runs only where `samples/` exists — i.e. precisely on a machine that has pulled real exports |
 | `typecheck` / `lint` / `test` / `build` | Enforced by CI on every push (Windows + Linux) |
 | Definition of done | **8 of 8** |
 
@@ -474,6 +475,37 @@ via `bookYearFor`.
 binds when its day of the month is the 31st. Nineteen live observations. The guard
 shipped on 2026-08-12 was refusing periods Tally answers exactly.
 
+## Entry timing, 2026-08-18
+
+The Edit Log question is **closed** and a narrower capability shipped in its place.
+Full evidence in [probe-findings-2026-08-18.md](probe-findings-2026-08-18.md).
+
+**Not reachable, and now settled rather than assumed:** eleven Edit Log report names
+refused against a control that was refused identically, on two companies; and
+`EnteredBy`/`AlteredBy` served but empty on every voucher of all three companies with
+data. **Who** altered an entry cannot be obtained over this interface, so CARO Rule
+11(g) cannot be supported. That is a limitation, not a backlog item.
+
+**Reachable, and new:** `UpdatedDateTime` is a real per-voucher last-written timestamp —
+384/384 and 284/284 populated on two companies, with 223 and 229 distinct stamps, which
+is what rules out a single bulk migration event. Lag from voucher date to last write ran
+1–119 days (median 51) and 8–103 days (median 42). The third company returns all-zero
+placeholders on every voucher.
+
+Shipped as `tally_test_vouchers` test `late_entry`, which flags entries written long
+after the date they carry or after the period closed, and **fails with
+`TALLY_UNSUPPORTED_OPERATION` on an unstamped company** rather than returning an empty
+list that would read as "no late entries". Verified live the same day: 193 candidates of
+284 vouchers at a 30-day threshold on one company, 275 of 384 on another, a clean
+refusal on the third.
+
+Also confirmed populated per voucher, previously known only on masters: `Audited`,
+`IsDeleted`, `IsDeletedVchRetained`, `IsSecurityOnWhenEntered`, `PersistedView`,
+`AsOriginal`. `Audited` and `IsSecurityOnWhenEntered` read `No` on every voucher of all
+three companies, so they are readable with no variation to test against.
+
+---
+
 ## Unproven: built but not observed
 
 Complete, tested against fixtures, and designed to degrade honestly — but not yet
@@ -520,11 +552,21 @@ Nothing on this list is a code gap. In rough order of value:
    move closes the rest.
 2. **Decide what happens to `samples/`** — it holds real accounting data on
    disk. Gitignored, but still there.
-3. **Publish decisions** — the package is `0.1.0` with a `bin` entry and a
-   `files` allowlist, so it is shaped for npm, but nothing has been published
-   and no release process exists. Only worth doing if the server is meant to
-   leave this machine.
-4. **Revisit the deliberate omissions if Tally's behaviour changes** —
+3. **Get it onto somebody else's machine.** Superseded the old "publish
+   decisions" entry, which said no release process existed — one does now:
+   `installer/package.ps1` assembles a zip with a bundled Node runtime, and
+   `Setup.bat` writes the Claude Desktop config. What has never happened is an
+   install by anyone outside this machine, or a run where Claude Desktop itself
+   launches the server and answers a question. npm publishing stays deliberately
+   undone: the audience is accountants, so the zip is the shipping route.
+4. **Prove `ALTERID` moves on every edit** — the probe is written and a baseline
+   reading was taken on 2026-08-18, but the procedure it exists for (alter, add,
+   delete a voucher, comparing after each) needs a human with a scratch company
+   in TallyPrime. It gates a 10x cache improvement, and it must not be taken on
+   faith: if a deletion leaves `ALTERID` unmoved, a validated cache would serve
+   stale figures confidently. See
+   [next-steps.md](next-steps.md#6a-prove-alterid---probe-built-2026-08-13-needs-a-human-with-tally-open).
+5. **Revisit the deliberate omissions if Tally's behaviour changes** —
    `tally_get_day_book` and the two flow statements are settled decisions, not
    a backlog; they are recorded here so they stay decisions rather than
    drifting into forgotten gaps.

@@ -303,6 +303,16 @@ still reads correctly.
   capability would have repeated the exact failure that caused the 0.2.0 corrections:
   a confident, well-formed, empty structure.
 
+  **Probed again 2026-08-18 with a control, and settled.** Eleven report names refused,
+  and the voucher-level `EnteredBy`/`AlteredBy` fields — the one thing the 08-14 run
+  left untested — are served and EMPTY on every voucher of every company available. So
+  *who* altered an entry is not obtainable and this idea is closed, not pending. What
+  the same run DID find is `UpdatedDateTime`: a genuine per-voucher last-written
+  timestamp, populated on two of three companies, lagging the voucher date by a median
+  of 42 and 50 days. That is now shipped as `tally_test_vouchers` test `late_entry`,
+  which answers "written long after its date" and explicitly does not claim to answer
+  "who changed this". See docs/probe-findings-2026-08-18.md.
+
   This is the largest single gap in the connector. Without it, **CARO Rule 11(g)** —
   the auditor's positive report that the audit trail was enabled all year, untampered
   and preserved — cannot be supported at all, and the cut-off test that actually
