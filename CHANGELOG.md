@@ -12,8 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.6.0 — unreleased
-
+## 0.6.0 — 2026-08-18
 **New: you can now ask which entries were written long after the date they
 carry.** `tally_test_vouchers` has an eighth test, `late_entry`. It lists
 vouchers whose last save happened well after the date on their face — an invoice
