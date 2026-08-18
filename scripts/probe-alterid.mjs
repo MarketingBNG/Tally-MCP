@@ -45,6 +45,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -100,11 +101,38 @@ if (ids.length === 0) {
   process.exit(1);
 }
 
+/**
+ * The (MasterId, AlterId) pairs, not just the maximum.
+ *
+ * A MAXIMUM cannot see a deletion: remove any record other than the highest and
+ * the maximum is unchanged, so a cache validated on it serves figures for a
+ * voucher that no longer exists. A SET can — the pair simply disappears. Since
+ * this probe already pays for one row per voucher (537KB), the set costs nothing
+ * extra to record, and one pass of the manual edits below then answers BOTH
+ * questions: does the naive max approach work, and does the set approach.
+ *
+ * Order-independent: Tally is not promised to return rows in a stable order, and
+ * a fingerprint that changes when nothing did would be worse than useless.
+ */
+const pairs = [...voucherXml.text.matchAll(
+  /<VOUCHER[^>]*>[\s\S]*?<\/VOUCHER>/g
+)].map((block) => {
+  const alter = /<ALTERID[^>]*>\s*(\d+)\s*<\/ALTERID>/.exec(block[0]);
+  const master = /<MASTERID[^>]*>\s*(\d+)\s*<\/MASTERID>/.exec(block[0]);
+  return `${master?.[1] ?? '?'}:${alter?.[1] ?? '?'}`;
+});
+const fingerprint = createHash('sha256')
+  .update(pairs.slice().sort().join('|'))
+  .digest('hex')
+  .slice(0, 16);
+
 const reading = {
   company: loaded.name,
   max: Math.max(...ids),
   count: ids.length,
   distinct: new Set(ids).size,
+  pairsRead: pairs.length,
+  fingerprint,
   // Stamped by the caller, not by the script: Date.now() inside a probe makes two
   // runs incomparable if the clock is the only thing that changed.
   bytes: voucherXml.bytes,
@@ -116,6 +144,7 @@ console.log(`Period:             ${period.fromDate} to ${period.toDate}`);
 console.log(`Vouchers with an ID:${String(reading.count).padStart(6)}`);
 console.log(`Distinct ALTERIDs:  ${String(reading.distinct).padStart(6)}`);
 console.log(`MAXIMUM ALTERID:    ${String(reading.max).padStart(6)}`);
+console.log(`Set fingerprint:    ${reading.fingerprint}  (${String(reading.pairsRead)} pairs)`);
 console.log(
   `Cost of this read:  ${String(reading.ms)}ms, ${(reading.bytes / 1048576).toFixed(1)}MB`
 );
@@ -148,6 +177,8 @@ if (compare) {
 
   const moved = reading.max > previous.max;
   const countChanged = reading.count !== previous.count;
+  // The verdict that actually decides whether this can be built.
+  const setChanged = reading.fingerprint !== previous.fingerprint;
 
   console.log(`\nPrevious maximum:   ${String(previous.max).padStart(6)}`);
   console.log(`Voucher count:      ${String(previous.count)} -> ${String(reading.count)}`);
