@@ -84,7 +84,8 @@ const REPORTS = {
   {
     // NOT optional. An `options?` here would let a report be fetched with no
     // company scope at all through this indirection, which is the hole that
-    // produced TEMP.md §2.8 one layer up. See CompanyScope in requests.ts.
+    // produced the cross-company cache hit one layer up, pinned in
+    // tests/tools/companyScoping.test.ts. See CompanyScope in requests.ts.
     build: (options: TallyRequestOptions) => string;
     reportName: string;
     entityKind: 'stockItem' | 'godown';

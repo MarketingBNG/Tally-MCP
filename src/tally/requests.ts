@@ -40,7 +40,8 @@ export const UNSCOPED: unique symbol = Symbol('UNSCOPED');
  * object to `{}`. So `buildLedgerListRequest({ format })` compiled, sent no
  * `SVCURRENTCOMPANY`, and TallyPrime answered from whichever company it had
  * current. That is exactly how `tally_get_company` came to report one company's
- * 472 ledgers under another company's name (TEMP.md §2.8) — the call site did
+ * 472 ledgers under another company’s name (pinned in
+ * tests/tools/companyScoping.test.ts) — the call site did
  * not decide to be unscoped, it simply forgot to say.
  *
  * Worse, an unscoped request body is byte-identical whichever company was

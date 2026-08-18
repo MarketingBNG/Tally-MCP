@@ -280,6 +280,65 @@ elsewhere: a guard placed after a fetch charges 21MB for saying no.
 
 ---
 
+### `source_query` provenance — token cost
+
+Measured 2026-08-18 over a seven-call audit sequence. `source_query` was **31%
+of every byte returned**, and most of that was repetition rather than
+information.
+
+**First: requests that produced nothing were dropped from the record.**
+`source_query` exists so a figure can be re-derived, and a request that
+produced no figure does not belong in it. The company-list probe — "which
+company did the caller mean, and how does TallyPrime spell it" — was sent from
+three resolution helpers and recorded on nearly every call while contributing
+to no number in any of them. Those now run under `withoutQueryLog`.
+
+Deliberately NOT applied to the currency lookup. It produces no number either,
+but it decides the currency label on every amount, and this project has already
+shipped dollar balances labelled INR once. That request stays in the record.
+Worth 3.5% on its own — the value is correctness rather than size: what remains
+is now exactly the set of requests that produced the answer.
+
+**Then: the ones that did produce figures stopped repeating.**
+`TALLY_SOURCE_QUERY_MODE` takes three values, defaulting to `dedupe`:
+
+| Mode | Behaviour |
+|---|---|
+| `full` | every body verbatim, every call |
+| `dedupe` *(default)* | each DISTINCT body verbatim once per session; a one-line descriptor after |
+| `compact` | descriptors only, never a body |
+
+| Mode | Total | `source_query` | `data` | vs `full` |
+|---|---|---|---|---|
+| full | 36,545 b | 11,206 b (31%) | 23,949 b | — |
+| **dedupe** | **31,694 b** | 6,355 b (20%) | 23,949 b | **−13.3%** |
+| compact | 28,106 b | 2,767 b (10%) | 23,949 b | −23.1% |
+
+`data` is byte-identical in all three, which is the property that matters: the
+saving is confined to the transcript, and no warning, figure or caveat moves.
+There is a test asserting exactly that.
+
+Design points worth keeping:
+
+- **The first emission is byte-for-byte verbatim, with nothing added.** The
+  repeat descriptor is therefore self-identifying (type, ID, company, dates)
+  rather than a numeric back-reference — an index would have required
+  annotating the body, and something a consumer replays must not carry notes
+  of ours.
+- **The descriptor is terse.** It first re-explained the config flag on every
+  repeat, which cost more than the repetition it saved (10.9% → 13.3% once
+  trimmed). It is re-read on every call, so brevity is signal.
+- **Safe for audit files.** `tally_make_workpaper` reproduces a paper from its
+  TOOL PARAMETERS, not from these bodies, so a deduplicated transcript cannot
+  weaken a workpaper. That was the main objection and it does not hold.
+- **Eviction fails long, not short.** Bounded at 300 remembered bodies per
+  session; an evicted body is simply shown in full again.
+
+**The one assumption.** `dedupe` assumes the earlier response is still
+readable. In a long session that gets summarised, the first occurrence may be
+gone and a reader is left with a descriptor and no body. Set
+`TALLY_SOURCE_QUERY_MODE=full` where the transcript itself is the record.
+
 ## Documented changes
 
 Two rounds of changes, both preserved here since the numbers above depend on them.
