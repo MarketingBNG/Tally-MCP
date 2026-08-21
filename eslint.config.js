@@ -93,6 +93,11 @@ export default tseslint.config(
         // can stop answering mid-run, and an unbounded fetch turns that into a
         // stuck terminal instead of a diagnosis.
         AbortSignal: 'readonly',
+        // A probe that must abort a request it started, and time its own wait —
+        // AbortSignal.timeout alone cannot be cancelled once the answer arrives.
+        AbortController: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
       },
     },
     rules: {

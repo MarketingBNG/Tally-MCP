@@ -539,23 +539,22 @@ export function buildVoucherCollectionRequest(
 }
 
 /**
- * Every voucher's `AlterId`, and nothing else — a candidate cache-validation probe.
+ * Every voucher's `AlterId` and `MasterId`, and nothing else — the change check.
  *
- * NOT USED BY ANY TOOL YET, and deliberately so. The idea is that if the maximum
- * `AlterId` has not moved, the books have not changed and a cached parse is still
- * valid — turning a 2.6s / 8.6MB refetch into a ~200ms / 537KB check. Measured live
- * 2026-08-13: 537.6KB in 199-260ms against 8.6MB in ~2,000ms, so roughly 16x smaller
- * and 10x faster.
+ * This is what lets the unattended exporter ask "has anything changed?" every
+ * minute instead of re-exporting the books: measured live 2026-08-13, 537.6KB in
+ * 199-260ms against 8.6MB in ~2,000ms, so roughly 16x smaller and 10x faster.
+ * `src/export/fingerprint.ts` is the caller, and carries the reasoning that
+ * matters — why the SET of pairs rather than the maximum (a maximum cannot see a
+ * deletion), and what still rests on `ALTERID` moving on every edit.
  *
- * It is not wired in because the saving is worthless if the assumption is wrong. If
- * `AlterId` fails to move on any kind of edit — a DELETION being the likely one — a
- * validated cache would serve stale figures and report them as current, which is
- * strictly worse than the honest five-minute expiry in place today. Proving it needs
- * someone to alter, add and delete a voucher in a real company, so it lives in
- * `scripts/probe-alterid.mjs` until that is done.
+ * `MasterId` is fetched alongside because it is what makes a deletion visible:
+ * the pair simply disappears from the set.
  *
- * The shape is defined here rather than in the script so that the Export-only
- * guarantee this file carries covers it too.
+ * The shape is defined here rather than in the caller so that the Export-only
+ * guarantee this file carries covers it too. `scripts/probe-alterid.mjs` imports
+ * it for the same reason — a probe that builds its own request body would not be
+ * testing what production sends.
  */
 export function buildVoucherAlterIdRequest(options: TallyRequestOptions): string {
   return [
@@ -577,6 +576,81 @@ export function buildVoucherAlterIdRequest(options: TallyRequestOptions): string
     '</DESC></BODY>',
     '</ENVELOPE>',
   ].join('');
+}
+
+/**
+ * Every ledger's `AlterId`, and nothing else — the masters half of the change check.
+ *
+ * A voucher-only fingerprint cannot see a renamed ledger, a new ledger or a
+ * changed opening balance: none of those touches a voucher, so the workbook
+ * would keep serving the old chart of accounts until somebody happened to post
+ * an entry. Measured live 2026-08-18: the ledger collection carries `ALTERID`
+ * on all 367 records, so the masters get the same treatment as the vouchers.
+ *
+ * `Ledger` is a collection TYPE this server already uses (see
+ * `buildLedgerListRequest`), which matters: an UNOBSERVED collection type parks
+ * TallyPrime behind a modal dialog until someone dismisses it, so a new one is
+ * never introduced casually.
+ */
+export function buildLedgerAlterIdRequest(options: TallyRequestOptions): string {
+  return [
+    '<ENVELOPE>',
+    '<HEADER>',
+    '<VERSION>1</VERSION>',
+    `<TALLYREQUEST>${EXPORT_ONLY}</TALLYREQUEST>`,
+    '<TYPE>Collection</TYPE>',
+    '<ID>LedgerAlterIds</ID>',
+    '</HEADER>',
+    '<BODY><DESC>',
+    staticVariables(options),
+    '<TDL><TDLMESSAGE>',
+    '<COLLECTION NAME="LedgerAlterIds" ISMODIFY="No" ISFIXED="No">',
+    '<TYPE>Ledger</TYPE>',
+    '<FETCH>AlterId,MasterId,Name</FETCH>',
+    '</COLLECTION>',
+    '</TDLMESSAGE></TDL>',
+    '</DESC></BODY>',
+    '</ENVELOPE>',
+  ].join('');
+}
+
+/**
+ * One of the simple master lists — cost centres, units, stock groups and their kin.
+ *
+ * ## The safety rule this sits inside
+ *
+ * Each of these needs a collection TYPE, and an unrecognised TYPE parks
+ * TallyPrime behind a modal dialog until somebody dismisses it. That is why
+ * type probing was stopped after two hangs and why these lists were documented
+ * as unreachable rather than untried.
+ *
+ * The types named in `SIMPLE_MASTER_TYPES` below were re-probed on 2026-08-21
+ * against TallyPrime 7.1 — watched, one at a time, export disabled, with a
+ * `Ledger` control — and every one was accepted in under 30ms with no dialog.
+ * That is why they are here, and why the list is CLOSED: adding a type to it
+ * without running scripts/probe-collection-types.mjs first would reintroduce
+ * exactly the hazard the rule exists for.
+ */
+export const SIMPLE_MASTER_TYPES = [
+  'CostCentre',
+  'CostCategory',
+  'Godown',
+  'Unit',
+  'StockGroup',
+  'StockCategory',
+  'Budget',
+] as const;
+
+export type SimpleMasterType = (typeof SIMPLE_MASTER_TYPES)[number];
+
+export function buildSimpleMasterRequest(
+  type: SimpleMasterType,
+  options: TallyRequestOptions
+): string {
+  // `*` rather than a named list: these are small — one to a few dozen records —
+  // and which fields a company populates on a cost centre or a unit is exactly
+  // the interesting part, the same reasoning the ledger all-fields path follows.
+  return buildCollectionRequest(`${type}Masters`, type, '*', options);
 }
 
 /**

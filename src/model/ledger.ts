@@ -10,11 +10,14 @@ import type { Money } from '../utils/numbers.js';
  * consequence bluntly: if a test contains a source-specific field name, it is
  * written wrong.
  *
- * STATUS: draft for review. Annexure A §7.3 requires the audit-team domain
- * owner to sign this off BEFORE any adapter is written. Nothing here is wired
- * to anything yet — deliberately. These types compile and are exported so they
- * can be reviewed as code alongside docs/normalised-ledger-model.md, which
- * explains them for a non-engineer and lists the open questions.
+ * STATUS: partly in use, the rest still draft for review. `Account`, `Voucher`,
+ * `EntryLine` and `SignedAmount` are wired — src/model/fromTally.ts adapts Tally
+ * into them and src/tools/tieOut.ts reads them. Everything else is defined and
+ * unused ON PURPOSE: Annexure A §7.3 requires the audit-team domain owner to
+ * sign the model off, and these types are how it is reviewed as code alongside
+ * docs/normalised-ledger-model.md, which explains them for a non-engineer and
+ * lists the open questions. An unused type here is a roadmap entry, not dead
+ * code — do not delete one because nothing references it yet.
  *
  * THREE RULES CARRIED OVER from src/tally/normalize.ts, which is the closest
  * thing to a first draft of this model and has been proven against live data:

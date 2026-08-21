@@ -48,6 +48,189 @@ Claude Desktop  --MCP/stdio-->  tally-mcp  --HTTP-->  TallyPrime (127.0.0.1:9000
   asserts this against the source tree on every run.
 - **Stateless.** Claude Desktop launches the process; it holds nothing.
 
+> **One thing on this page is no longer true by default.** "Your accounting data
+> never leaves your machine" describes the connector, and still does. It does not
+> describe the **daily spreadsheet** below, whose entire purpose is a folder
+> Google Drive syncs. This codebase never calls a Google API and holds no
+> credential — but if you set that up, client accounting data is in Google Drive.
+> Decide that deliberately. See [The daily spreadsheet](#the-daily-spreadsheet).
+
+## The daily spreadsheet
+
+Setup can put a scheduled job on this machine that writes each company's books
+to an Excel workbook — one file per company, one tab per part of the books — in
+a folder of your choosing. Point that folder at Google Drive and Claude can
+answer from the workbook, through the Google Drive connector, with the Tally
+connector switched off entirely.
+
+```
+TallyPrime  --HTTP-->  Run-Export.bat  -->  <folder>\<Company>\<Company>.xlsx
+                                                    |
+                                       Google Drive Desktop syncs it
+                                                    |
+                                        Claude reads it via Drive
+```
+
+**What it buys.** TallyPrime does not have to be open when somebody asks a
+question. The accountant gets a real spreadsheet rather than retyped figures.
+And an ordinary conversation loads the Google connector instead of this server's
+23 tools, which cost about **12,000 tokens of every conversation** before any
+data moves.
+
+**What it costs, stated plainly.** Reading the workbook still costs tokens —
+this moves the data out of Claude's fetch path, it does not compress it. And
+Claude's arithmetic over spreadsheet rows replaces this server's tested
+procedures: tie-out, ageing, materiality, sampling, late-entry. If a figure has
+to go into an audit file, check it against the live connector first.
+
+### Reading it
+
+A `.xlsx` in Drive **opens directly in Google Sheets** with tabs intact. Nothing
+needs importing.
+
+> **Do not use File → Save as Google Sheets.** That creates a separate native
+> copy the exporter will never touch again. It silently becomes a frozen
+> snapshot while looking like the live file — and Claude, pointed at it, would
+> answer from stale books without knowing.
+
+**Read the Manifest tab first, and tell Claude to.** The workbook is the
+interface now, so everything the tools used to attach to an answer lives there:
+the company as Tally spells it, the currency *and how it was established*, the
+period, the as-at stamp, a row count per tab, which voucher flags to exclude
+before totalling anything, and every warning TallyPrime produced, verbatim. A
+`Not in this workbook` tab names what TallyPrime holds that this interface
+cannot read, so a silence is never read as a zero.
+
+### What it does on each run
+
+The task wakes on its interval and asks one cheap question: **has anything
+changed?** A collection fetching only `AlterId,MasterId` costs about **537KB in
+200ms**, against roughly 20MB and 10–20 seconds for a full export. Only when the
+answer is yes does it do the real work — plus once a day regardless, so the
+as-at stamp always advances and a stale file cannot masquerade as a current one.
+
+It compares the **set** of `(MasterId, AlterId)` pairs, not the maximum. A
+maximum cannot see a deletion: remove any record other than the highest and the
+maximum is unchanged, so a workbook validated on one would keep serving a
+voucher that no longer exists.
+
+> **The prerequisite, which is not optional — and why the default is hourly.**
+> All of that rests on `ALTERID` moving on **every** edit, including deletions.
+> That is unproven, so Setup ships `TALLY_EXPORT_INTERVAL_MINUTES=60`: an hourly
+> export does less work than the design intends, but it cannot skip a change it
+> failed to notice. Set it to 1 once the check below has been run.
+>
+> To prove it, somebody has to be at a TallyPrime screen: run
+> `node scripts/probe-alterid.mjs` on a **scratch company**, then alter a
+> voucher, add one, and delete one,
+> running `--compare` after each. **All three must report MOVED.** If any does
+> not, set `TALLY_EXPORT_INTERVAL_MINUTES=60` for a fixed hourly export and
+> record the finding in `docs/known-limitations.md`. A change check that misses
+> an edit produces a workbook that looks current and is wrong, which is worse
+> than a slow schedule.
+
+### When it fails
+
+Nobody is watching a scheduled task, so a failure has to be visible without
+opening anything:
+
+- **A filename in the folder** — `LAST RUN FAILED - TallyPrime was not open -
+  2026-08-19 18-05.txt`, or `LAST RUN OK - ...`.
+- **A line in `run-log.txt`** beside it. Minutes that found nothing changed are
+  counted rather than logged, so the log stays readable instead of gaining 1,440
+  lines a day.
+- **A Windows toast, on a CHANGE OF STATE only.** The first failure notifies,
+  repeats go quietly to the log, and recovery notifies once. At a one-minute
+  cadence, notifying every failure would fire once a minute for as long as
+  somebody leaves the workbook open in Excel — which trains people to ignore it.
+- **`Check-Tally`** reports the last run's outcome and how old the workbook is,
+  so "this spreadsheet is four days old" gets said out loud.
+
+**Nothing appears on screen.** The scheduled task runs
+`Run-Export-Hidden.vbs`, which starts the export with its window hidden from the
+outset. A `.bat` action would create a console window once a minute, all day, on
+a machine somebody is trying to work on — and `-WindowStyle Hidden` does not fix
+that, because the window is created and then hidden, which still flashes.
+
+The alternative — running the task whether or not the user is logged on — is
+genuinely windowless but was rejected: that session has no desktop, so it cannot
+raise the failure toast, and a quiet export is exactly what this design is trying
+not to be. So the session stays interactive and the window is hidden instead.
+Windows Script Host is deprecated, so its absence is checked rather than assumed;
+without it the task falls back to the visible `.bat` and Setup says so, because a
+visible window on every run is annoying while an export that never runs is not
+something anybody would notice.
+
+Double-click `Run-Export.bat` yourself when you want to watch a run.
+
+**On a laptop, one Task Scheduler default would have broken this silently.**
+`schtasks` writes `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` as
+true by default — so unplugging the machine stops the export, resuming only when
+somebody happens to plug it back in, with nothing announcing either. The task is
+therefore registered from a full XML definition rather than the one-line form,
+with both set to false, plus `StartWhenAvailable` (run a start that was missed
+while the machine was off or asleep) and a one-hour `ExecutionTimeLimit` —
+because `MultipleInstancesPolicy` is `IgnoreNew`, and one hung run would
+otherwise block every later run for the default 72 hours.
+
+A failed run never damages good output: the workbook is written under a
+temporary name and renamed over the target, which is atomic. If Excel has the
+file open the rename fails, the run says so, and this run's data is kept under a
+dated name rather than thrown away.
+
+### What it cannot tell you
+
+**Whether Google Drive uploaded it.** The exporter can confirm it wrote the file
+to disk; the sync is Drive Desktop's business. If Drive is signed out or paused,
+the local file is correct and the cloud copy is stale, and only Drive's own icon
+will say so. Since Claude reads the cloud copy, **the as-at stamp on the
+Manifest is the reader's only defence** — which is why it is there.
+
+### Changing the folder later
+
+Run `Setup` again. It shows the folder in use and offers to keep it, so changing
+one other answer does not mean re-finding a folder somebody chose weeks ago. The
+picker also opens *at* the current folder rather than guessing.
+
+If you do change it, the setting moves immediately — the next scheduled run
+writes to the new place, nothing needs restarting.
+
+**It offers to move the old spreadsheets across.** Say yes and each company's
+workbook, its `Archive\` and its state file are copied to the new folder and then
+removed from the old one — so there is only ever one copy of a client's books.
+The next scheduled run overwrites the workbook with fresh figures; the archive
+copies are left as they are.
+
+Three safeguards, because this is the only part of the installer that deletes
+anything:
+
+- **It moves only what the exporter created**, recognised by the state file it
+  writes rather than by name. If you picked a folder that also holds payroll
+  scans or someone's working papers, those are left exactly where they are and
+  the old folder is not removed. It says how many it left alone.
+- **Copy, verify, then delete** — in that order. Anything that could not be
+  copied is left in place rather than deleted, and named so you can move it by
+  hand.
+- **It asks first**, and warns that if the old folder is inside Google Drive,
+  removing files locally removes them from Drive as well — for everyone it is
+  shared with. Say no and it leaves a `THIS FOLDER IS NO LONGER UPDATED` note
+  instead, touching nothing.
+
+Why move rather than leave both: an abandoned workbook is **frozen and still
+looks current**. If it is still syncing, Claude pointed at it would answer from
+books that stopped updating, and the only clue would be an as-at stamp nobody
+thought to check.
+
+You can also edit `TALLY_EXPORT_FOLDER` in `.env` directly, but then nothing
+moves and nothing warns you. Setup is the safer route.
+
+### Where to put the folder
+
+In a **Shared Drive**, not somebody's My Drive, so the team sees it and it does
+not disappear when one person leaves. One folder per company is created
+automatically, so a single client's folder can be shared without exposing the
+others.
+
 ## Requirements
 
 - **TallyPrime** running locally with a company loaded
@@ -188,6 +371,10 @@ fix.
 | `TALLY_MAX_RESPONSE_BYTES` | `150000` | Refuse responses larger than this. Sized by **context** budget (~37,500 tokens), not by the client's 1MB message cap — see below |
 | `TALLY_CURRENCY_LABEL` | *(unset)* | Currency label to use **only** where TallyPrime could not transport its own symbol (it substitutes `?` for `₹`, `€` and others before the data leaves). Two forms: a bare `EUR`, which applies only when exactly ONE company is loaded, or `Company Name=EUR;Other Company=INR` per company. The bare form is restricted because a German and an Indian company both report `?`, so a global `EUR` would label rupees EUR. Never overrides a symbol that arrived intact, and the response always says the label came from configuration rather than from Tally |
 | `TALLY_CACHE_TTL_MS` | `300000` | Reuse an identical Tally response, and the records parsed from it, for this long. **The biggest lever on audit speed** — see below. `0` disables caching |
+| `TALLY_EXPORT_FOLDER` | *(unset)* | Where the scheduled export writes its workbooks. An ordinary **local** folder — nothing here calls a Google API. Put it inside a folder Google Drive Desktop syncs and Drive's own client uploads it. Unset means no export is configured |
+| `TALLY_EXPORT_COMPANIES` | *(all open)* | Which companies to export, semicolon-separated. Naming them is what stops a workbook being labelled one company and read from another. A named company TallyPrime does not have open is refused by name, never skipped silently |
+| `TALLY_EXPORT_INTERVAL_MINUTES` | `1` | How often the scheduled task wakes. Most wakes cost one ~200ms question and stop there. Set to `60` for a fixed hourly export — see the prerequisite below |
+| `TALLY_EXPORT_FORCE` | `false` | Export even when nothing changed. What `Run-Export.bat --force` sets |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, `debug` |
 
 Invalid configuration fails at startup with a message naming every bad value
@@ -630,7 +817,13 @@ through is a bug worth a sample.
 
 - **Read-only by construction.** Only `Export` requests are built, and
   `tests/tally/requests.test.ts` scans `src/` on every run to assert no write
-  verb exists anywhere.
+  verb exists anywhere. This covers the scheduled export too: it sends the same
+  builders' requests and writes nothing to Tally.
+- **The daily spreadsheet puts data in Google Drive — read that section.** No
+  Google API is called from this codebase and no credential is created here, so
+  none can leak. But the folder is deliberately one Drive syncs, and that is a
+  decision to take on purpose rather than to discover later. See
+  [The daily spreadsheet](#the-daily-spreadsheet).
 - **No secrets in logs.** Logging is structured, level-gated and redacts
   credential-shaped keys. Full Tally payloads appear only at `debug`.
 - **No stack traces cross the MCP boundary.** Errors return a stable code, a

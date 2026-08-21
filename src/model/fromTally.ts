@@ -1,15 +1,13 @@
 import { Decimal } from 'decimal.js';
 import type {
-  Company as TallyCompany,
   Group as TallyGroup,
   Ledger as TallyLedger,
   Voucher as TallyVoucher,
 } from '../tally/normalize.js';
-import { DEFAULT_CURRENCY, type Money } from '../utils/numbers.js';
+import type { Money } from '../utils/numbers.js';
 import type {
   Account,
   AccountType,
-  Entity,
   EntryLine,
   SignedAmount,
   SourceRef,
@@ -173,28 +171,6 @@ function entryAmount(
   return {
     magnitude: { amount: value.abs().toFixed(), currency: money.currency },
     side,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Entity
-// ---------------------------------------------------------------------------
-
-export function adaptCompany(company: TallyCompany, options: AdapterOptions): Entity {
-  return {
-    id: options.entityId,
-    name: company.name,
-    // TallyPrime does not report the books' currency over this interface, and
-    // every install observed has been INR. Assumed rather than read, which is
-    // safe today and must be revisited for the first non-INR entity.
-    functionalCurrency: DEFAULT_CURRENCY,
-    fiscalYearStartMonth:
-      company.startingFrom === null ? null : Number(company.startingFrom.slice(5, 7)),
-    // Not derivable from Tally. Belongs in the client registry (Spec §4 L0),
-    // which is partner-owned configuration rather than anything in the books.
-    framework: null,
-    taxIdentifiers: [],
-    source: ref('entity', company.name),
   };
 }
 

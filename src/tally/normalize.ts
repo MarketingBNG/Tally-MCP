@@ -382,6 +382,82 @@ export function normalizeGroups(xml: string): Normalized<Group[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Simple name/parent masters
+// ---------------------------------------------------------------------------
+
+/**
+ * One record from a master list that is essentially a name, a parent and
+ * whatever else the company happens to record.
+ *
+ * Cost centres, cost categories, units, stock groups and stock categories all
+ * have this shape. They get one normaliser rather than five because there is
+ * nothing type-specific to interpret — a name is a name — and five near-copies
+ * would drift.
+ */
+export interface SimpleMaster {
+  name: string;
+  parent: string | null;
+  /** Every other populated field, verbatim. Which appear is a company property. */
+  fields: Record<string, string>;
+  source: SourceRef;
+}
+
+/** Fields already surfaced as first-class properties. */
+const SIMPLE_MASTER_PROMOTED = new Set(['NAME', 'PARENT', 'GUID']);
+
+/**
+ * Normalise one of the simple master collections.
+ *
+ * ## Why these were unreachable until 2026-08-21
+ *
+ * They need a collection TYPE this server had never sent — and type probing was
+ * stopped years-of-commits ago after two hangs, because an unrecognised TYPE
+ * parks TallyPrime behind a modal dialog. The rule was sound and the cost of
+ * breaking it was real, so the lists were documented as unreachable.
+ *
+ * Re-probed on 2026-08-21 against TallyPrime 7.1, with somebody watching the
+ * Tally window and the scheduled export disabled: `CostCentre`, `CostCategory`,
+ * `Godown`, `Unit`, `StockGroup`, `StockCategory` and `Budget` were ALL accepted
+ * in under 30ms with no dialog and no error, against a `Ledger` control that
+ * passed alongside them. `Godown` returned "Main Location", `Unit` returned
+ * "Kg", `CostCategory` returned "Primary Cost Category". Empty results are the
+ * company not using the feature, not a refusal.
+ *
+ * The safety rule is NOT repealed by this. What is now known is that these seven
+ * specific types are safe on this build; a type nobody has sent is still
+ * unknown, and scripts/probe-collection-types.mjs is how to find out — watched,
+ * one at a time, with the export disabled.
+ */
+export function normalizeSimpleMasters(
+  xml: string,
+  element: string,
+  entityType: SourceRef['entityType'],
+  what: string
+): Normalized<SimpleMaster[]> {
+  const warnings: string[] = [];
+  const nodes = openDocument(xml);
+
+  const data = findAll(dataScope(nodes), element)
+    // CMPINFO carries a counter element of the same name — `<GODOWN>0</GODOWN>`
+    // — which has no NAME attribute. Same guard every master list here needs.
+    .filter((node) => attributesOf(node).NAME !== undefined)
+    .map((node) => {
+      const name = attributesOf(node).NAME ?? '';
+      return {
+        name,
+        parent: childText(node, 'PARENT'),
+        fields: scalarFieldsOf(node, SIMPLE_MASTER_PROMOTED),
+        source: sourceRef(entityType, childText(node, 'GUID') ?? name),
+      };
+    });
+
+  const unread = unreadablePayloadWarning(xml, data.length, what);
+  if (unread !== undefined) warnings.push(unread);
+
+  return { data, warnings };
+}
+
+// ---------------------------------------------------------------------------
 // Voucher types
 // ---------------------------------------------------------------------------
 

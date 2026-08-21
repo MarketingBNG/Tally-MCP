@@ -130,7 +130,15 @@ async function main() {
   const fetchMonths = async (toDate) => {
     const body = (
       await client.send(
-        buildReportRequest('Cash Flow', { fromDate: from, toDate, format: config.tallyPreferredFormat }),
+        buildReportRequest('Cash Flow', {
+          fromDate: from,
+          toDate,
+          format: config.tallyPreferredFormat,
+          // Always named. An unscoped request is answered from whichever company
+          // TallyPrime considers current, so an unscoped probe could measure one
+          // company while reporting on another.
+          company: company.name,
+        }),
         'report'
       )
     ).body;
@@ -180,7 +188,9 @@ async function main() {
     ['item', 'Stock Summary', 'stockItem'],
     ['godown', 'Godown Summary', 'godown'],
   ]) {
-    const body = (await client.send(buildReportRequest(reportId), 'report')).body;
+    const body = (
+      await client.send(buildReportRequest(reportId, { company: company.name }), 'report')
+    ).body;
     const { data, warnings } = normalizeClosingStock(body, reportId.toLowerCase(), kind, '?');
 
     console.log(`  ${reportId}: ${data.length} rows, ${warnings.length} warnings`);

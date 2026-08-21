@@ -54,8 +54,16 @@
 
   2. Double-click  Setup
 
-     It asks which app you use -- Claude Desktop, Codex, or both. Type the
-     number and press Enter. If you are not sure, just press Enter.
+     It asks three things.
+
+        - Do you want the daily spreadsheet? (See the section below. If you
+          say yes, a folder picker opens so you can choose where it goes --
+          just click through to the folder, no typing -- and then it asks
+          which companies to cover.)
+        - Do you want the live Tally connector switched on as well?
+        - Which app do you use -- Claude Desktop, Codex, or both?
+
+     If you are not sure, just press Enter at each one.
 
      It then tells you what it did, and whether it could see your Tally.
 
@@ -69,6 +77,73 @@
   4. Ask it:  "What is my cash balance in Tally?"
 
   That is it.
+
+
+-------------------------------------------------------------------------------
+  THE DAILY SPREADSHEET
+-------------------------------------------------------------------------------
+
+  Setup can keep an Excel workbook of your books up to date automatically --
+  one file per company, a tab for each part of the books.
+
+  Put that folder inside Google Drive and two useful things follow:
+
+     - Claude can answer questions WITHOUT TallyPrime being open, because it
+       reads the spreadsheet instead of your books.
+
+     - You have an actual spreadsheet, which you can open, filter and send to
+       somebody, rather than figures retyped out of a chat.
+
+  It runs quietly in the background. Once an hour it asks Tally one very
+  small question -- has anything changed? -- and stops there. It only writes
+  a new spreadsheet when your books have actually moved, plus once a day so
+  the file never looks newer than it is.
+
+  TWO THINGS TO KNOW BEFORE YOU RELY ON IT
+
+     Read the Manifest tab first. It says which company these figures are,
+     what currency, what period, and -- this one matters -- WHEN they were
+     last read from Tally. An answer from the spreadsheet is as at that
+     moment, not as at now.
+
+     Do NOT use  File > Save as Google Sheets  on it. That makes a separate
+     copy that stops updating, while still looking live. Just open the file;
+     Google Sheets reads it as it is, tabs and all.
+
+  IF A FIGURE IS GOING INTO AN AUDIT FILE, check it against Tally directly
+  first. The spreadsheet is for answering questions quickly, not for evidence.
+
+  YOU WILL NOT SEE IT RUNNING. It works in the background with no window,
+  so nothing pops up while you are working.
+
+  TO EXPORT RIGHT NOW, without waiting: double-click  Run-Export
+  (this one DOES show a window, so you can watch it)
+
+  TO CHANGE WHERE IT SAVES: double-click  Setup  again. It shows you the
+  folder it is using now and asks whether to keep it, so you can change just
+  that one thing.
+
+     It then offers to MOVE the old spreadsheets across, so you do not end
+     up with two copies of one client's books and no way to tell which is
+     current. Say yes and it copies them over, checks they arrived, and only
+     then removes the old ones.
+
+     It only ever moves the files IT created. If that folder also holds your
+     own files, they are left exactly where they are.
+
+     One warning it will also give you: if the old folder is inside Google
+     Drive, removing files from it removes them from Drive too -- for
+     everyone it is shared with. Say no if you would rather tidy up by hand,
+     and it will just leave a note in the old folder instead.
+
+  IF IT STOPS WORKING, you will see it in the folder -- a file whose NAME
+  says what went wrong, like
+
+     LAST RUN FAILED - the workbook is open in Excel - 2026-08-19 1805.txt
+
+  The two usual causes are that TallyPrime was closed, or that you have the
+  spreadsheet open in Excel so it cannot be replaced. Close it and the next
+  run sorts itself out. Check-Tally also reports how old the spreadsheet is.
 
 
 -------------------------------------------------------------------------------
@@ -141,3 +216,16 @@
   order to answer your question -- the same as if you had typed them in. If
   that matters for a particular client, ask about that client's data only when
   you mean to.
+
+  THE DAILY SPREADSHEET IS DIFFERENT, and you should be clear about it.
+
+  If you set it up and choose a folder inside Google Drive, then your clients'
+  accounting data is in Google Drive. This program does not upload anything --
+  it writes an ordinary file to an ordinary folder on this computer, and your
+  own Google Drive program is what copies it to the cloud, exactly as it would
+  with any other file you put there.
+
+  That is the whole point of the folder, and it is worth deciding on purpose
+  rather than discovering later. If you would rather it stayed on this
+  computer, choose a folder that Google Drive does not sync -- everything else
+  works the same.

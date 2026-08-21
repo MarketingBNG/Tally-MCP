@@ -11,6 +11,15 @@ import {
   isCodexInstalled,
   mergeServerIntoToml,
 } from './lib/codexConfig.mjs';
+import {
+  markFolderRetired,
+  moveExportData,
+  pickFolder,
+  readEnvSetting,
+  registerTask,
+  removeTask,
+  writeEnvSettings,
+} from './lib/exportSetup.mjs';
 
 /**
  * One-time (and re-runnable) setup: point Claude Desktop and/or Codex at this
@@ -100,7 +109,44 @@ async function main() {
     ]);
   }
 
-  const targets = await chooseTargets();
+  // Tally is asked FIRST now, not last. The export questions below need the
+  // company list, and asking somebody to type company names they cannot see —
+  // spelled exactly as Tally spells them — is how a configured name ends up
+  // matching nothing.
+  heading('Checking TallyPrime');
+  const probe = await probeTally({
+    host: DEFAULT_ENV.TALLY_HOST,
+    port: Number(DEFAULT_ENV.TALLY_PORT),
+  });
+  const explained = explainProbe(probe, {
+    host: DEFAULT_ENV.TALLY_HOST,
+    port: Number(DEFAULT_ENV.TALLY_PORT),
+  });
+  line(explained.headline);
+  blank();
+  explained.lines.forEach(line);
+  blank();
+
+  // The spreadsheet export is asked about before the connector, because on a
+  // Drive-only install it decides whether the connector is set up at all — and
+  // asking "which app?" first would be asking a question whose answer might not
+  // be needed.
+  const exportChoice = await configureExport(probe.companies);
+
+  const targets = exportChoice.wantsConnector ? await chooseTargets() : [];
+
+  if (targets.length === 0) {
+    blank();
+    line('The Tally connector was NOT switched on, so Claude will answer from the');
+    line('spreadsheet only. That is the lighter setup: the connector costs about');
+    line('12,000 tokens of every conversation just to describe its tools.');
+    blank();
+    line('To switch it on later, run Setup again and answer Yes to the connector');
+    line('question. Nothing else needs redoing.');
+    blank();
+    await pause();
+    return;
+  }
 
   const results = [];
   for (const target of targets) {
@@ -118,19 +164,6 @@ async function main() {
   for (const result of results) {
     result.lines.forEach(line);
   }
-  blank();
-
-  // Step 3 — tell them about Tally now, while they are still at the keyboard.
-  heading('Checking TallyPrime');
-  const probe = await probeTally({ host: DEFAULT_ENV.TALLY_HOST, port: Number(DEFAULT_ENV.TALLY_PORT) });
-  const explained = explainProbe(probe, {
-    host: DEFAULT_ENV.TALLY_HOST,
-    port: Number(DEFAULT_ENV.TALLY_PORT),
-  });
-
-  line(explained.headline);
-  blank();
-  explained.lines.forEach(line);
   blank();
 
   heading('Last step');
@@ -161,6 +194,366 @@ async function main() {
   }
 
   await pause();
+}
+
+/**
+ * The scheduled spreadsheet export: where it writes, what it covers, and how
+ * often it looks.
+ *
+ * ## Why this is asked at all rather than defaulted
+ *
+ * The folder decides whether anyone else ever sees the spreadsheet, and there
+ * is no safe default: writing to Documents produces a file nobody can share,
+ * and guessing at a Google Drive path produces a folder that syncs somewhere
+ * unexpected. The companies matter for a sharper reason — TallyPrime answers an
+ * unscoped request from whichever company it considers current, so naming them
+ * is what stops a workbook being labelled one company and read from another.
+ *
+ * ## What it does NOT ask
+ *
+ * Anything about Google. No account, no sign-in, no permission. The folder is
+ * an ordinary local folder; if it happens to sit inside one Google Drive
+ * Desktop syncs, Drive's own client uploads it. No credential is ever created
+ * here, so none can leak.
+ *
+ * @param {string[]} companiesOpen Company names TallyPrime reported, for the prompt.
+ * @returns {Promise<{wantsConnector: boolean}>}
+ */
+async function configureExport(companiesOpen) {
+  // No keyboard attached — a scripted or unattended run. The export needs a
+  // folder that only a person can choose, and half-configuring it (settings
+  // written, no folder) would leave a scheduled task failing every minute. So
+  // it is skipped, said out loud, and the connector is set up as before.
+  if (!process.stdin.isTTY) {
+    heading('The daily spreadsheet');
+    line('Skipped: the automatic spreadsheet export needs someone at the keyboard');
+    line('to choose a folder. Run Setup again from a window to set it up.');
+    blank();
+    return { wantsConnector: true };
+  }
+
+  heading('The daily spreadsheet');
+
+  line('This can write your Tally data to an Excel workbook automatically, so');
+  line('Claude can answer questions from the spreadsheet without TallyPrime');
+  line('having to be open.');
+  blank();
+  line('Put the folder inside Google Drive and the whole team can see it.');
+  blank();
+
+  if (!(await confirm('Set up the automatic spreadsheet export?', true))) {
+    line('Skipped. Nothing was scheduled.');
+    blank();
+    return { wantsConnector: true };
+  }
+
+  const folder = await chooseExportFolder();
+
+  if (folder === null) {
+    line('No folder chosen, so the export was not set up. Run Setup again when you');
+    line('know where you want it.');
+    blank();
+    return { wantsConnector: true };
+  }
+
+  // Shown back, spelled the way Tally spells them, so a typed name matches.
+  blank();
+  if (companiesOpen.length > 0) {
+    line('TallyPrime currently has these companies open:');
+    companiesOpen.forEach((name) => line(`   - ${name}`));
+  } else {
+    line('TallyPrime has no company open at the moment, so there is no list to');
+    line('show. You can leave the next question blank and it will export whatever');
+    line('is open when it runs.');
+  }
+  blank();
+
+  const companies = (
+    await ask(
+      '  Which companies should it export?\n' +
+        '  (separate several with a semicolon, or press Enter for all open ones):  '
+    )
+  ).trim();
+
+  const settings = {
+    TALLY_EXPORT_FOLDER: folder,
+    // HOURLY, not the every-minute design. The minute cadence depends on the
+    // change check being sound, and that rests on TallyPrime's ALTERID moving on
+    // every edit including deletions — not yet proven at a real screen. If it
+    // does not hold, the exporter skips runs while the books move and the
+    // workbook reports itself current while being stale. Hourly is merely slow.
+    TALLY_EXPORT_INTERVAL_MINUTES: '60',
+  };
+  if (companies !== '') settings.TALLY_EXPORT_COMPANIES = companies;
+
+  const previousFolder = readEnvSetting(PACKAGE_ROOT, 'TALLY_EXPORT_FOLDER');
+  const envPath = writeEnvSettings(PACKAGE_ROOT, settings);
+  blank();
+  line(`Settings saved to  ${envPath}`);
+  blank();
+
+  // The folder CHANGED, so there are spreadsheets and archive copies sitting in
+  // the old one. Offer to bring them across, because the alternative is a frozen
+  // workbook that looks current — the most dangerous thing this design can leave
+  // lying around.
+  if (previousFolder !== null && normalisePath(previousFolder) !== normalisePath(folder)) {
+    await handleFolderChange(previousFolder, folder);
+  }
+
+  // The schedule is offered, never assumed: it changes the machine's task
+  // list, and a policy on a managed machine may forbid it outright.
+  line('It can run once an hour. Each time it asks TallyPrime whether anything');
+  line('has changed, and writes a fresh workbook only if the books actually');
+  line('moved — plus once a day regardless, so the file never looks older than');
+  line('it is.');
+  blank();
+
+  if (await confirm('Schedule it to run automatically?', true)) {
+    const result = registerTask({
+      batPath: join(PACKAGE_ROOT, 'Run-Export.bat'),
+      everyMinutes: 60,
+    });
+    if (result.ok) {
+      line('Scheduled. It runs while you are logged on, which is also when');
+      line('TallyPrime is open.');
+      blank();
+      if (result.hidden) {
+        line('You will not see anything happen — it runs with no window.');
+      } else {
+        // Said plainly rather than letting them discover it. A window every
+        // minute is the kind of thing somebody switches the feature off over,
+        // and they should at least know why it is happening.
+        line('ONE THING TO EXPECT: a small black window will appear briefly each');
+        line('time it runs. This computer is missing the component that would let');
+        line('it run invisibly (Windows Script Host), so the visible version is');
+        line('being used instead — an export you can see is better than one that');
+        line('silently never happens.');
+      }
+    } else {
+      line('The schedule could NOT be created, so nothing will run on its own.');
+      blank();
+      line('You can still export whenever you like by double-clicking');
+      line('Run-Export in this folder.');
+      blank();
+      line('This usually means a policy on this computer forbids scheduled tasks.');
+      line(`Technical detail:  ${result.detail ?? 'none'}`);
+    }
+  } else {
+    removeTask();
+    line('Not scheduled. Double-click Run-Export in this folder whenever you');
+    line('want a fresh spreadsheet.');
+  }
+  blank();
+
+  // The connector question. Asked here because the answer only makes sense
+  // once someone knows they already have the spreadsheet.
+  heading('The Tally connector');
+  line('The connector lets Claude query TallyPrime live — useful for checking a');
+  line('figure, or for anything the spreadsheet does not cover.');
+  blank();
+  line('It costs about 12,000 tokens of EVERY conversation just to describe its');
+  line('tools, whether or not you use them. With the spreadsheet set up, most');
+  line('people do not need it switched on all the time.');
+  blank();
+
+  const wantsConnector = await confirm('Switch the Tally connector on as well?', false);
+  return { wantsConnector };
+}
+
+/**
+ * Where the spreadsheets go — chosen in a Windows folder picker, not typed.
+ *
+ * The picker is offered first because a typed path is the step this audience
+ * gets stuck on, and a mistyped one is not visibly wrong: Setup would save it,
+ * and the scheduled task would then fail every minute against a folder that was
+ * never there.
+ *
+ * Typing stays available for three real cases — a dialog that cannot be shown, a
+ * UNC path somebody wants to paste, and anyone who simply prefers it. A picker
+ * that fails must never become an install that cannot be finished.
+ *
+ * @returns {Promise<string|null>} A folder that EXISTS, or null if they gave up.
+ */
+async function chooseExportFolder() {
+  // What it is set to now, so re-running Setup to change ONE other answer does
+  // not mean re-finding a folder somebody chose weeks ago.
+  const current = readEnvSetting(PACKAGE_ROOT, 'TALLY_EXPORT_FOLDER');
+
+  if (current !== null) {
+    line('At the moment the spreadsheets go here:');
+    line(`   ${current}`);
+    if (!existsSync(current)) {
+      line('');
+      line('   ...except that folder does not exist any more. It was probably moved,');
+      line('   renamed, or is on a drive that is not connected right now.');
+    }
+    blank();
+
+    if (await confirm('Keep using that folder?', true)) {
+      blank();
+      return current;
+    }
+    blank();
+  }
+
+  for (;;) {
+    line('A folder picker will open. Choose (or create) the folder you want.');
+    line('If you use Google Drive, pick something under  Shared drives  so the');
+    line('whole team can see it, rather than your own My Drive.');
+    blank();
+
+    const picked = pickFolder('Where should the TallyPrime spreadsheets go?', current);
+
+    if (picked !== null) {
+      line(`Chosen:  ${picked}`);
+      blank();
+      return picked;
+    }
+
+    // Null covers two different things, and they deserve different words: the
+    // dialog appeared and was cancelled, or it could not appear at all. From
+    // here they look identical, so the message covers both without claiming
+    // which happened.
+    line('Nothing was chosen — either the picker was cancelled, or this computer');
+    line('would not show it.');
+    blank();
+
+    const typed = (
+      await ask('  Type or paste the folder instead, or press Enter to skip:  ')
+    ).trim();
+
+    if (typed === '') return null;
+
+    // Checked, and NOT created. A path with a typo in it would otherwise be
+    // created as a brand-new empty folder that syncs nowhere, and the mistake
+    // would only surface days later as a spreadsheet nobody can find.
+    if (existsSync(typed)) {
+      line(`Chosen:  ${typed}`);
+      blank();
+      return typed;
+    }
+
+    line('That folder does not exist, so it was not saved.');
+    blank();
+    line('Check the spelling — or create the folder in File Explorer first, then');
+    line('let the picker find it.');
+    blank();
+
+    if (!(await confirm('Try again?', true))) return null;
+  }
+}
+
+/**
+ * The old folder, once the export has moved on from it.
+ *
+ * Offered as a MOVE — bring the spreadsheets and their archive across, then
+ * remove them from the old place — because the thing left behind is a workbook
+ * that has stopped updating and still looks current. Two copies of a client's
+ * books, one of them quietly frozen, is worse than either one alone.
+ *
+ * Always confirmed, never assumed, and the prompt says the one thing that makes
+ * this irreversible: if the old folder is inside Google Drive, removing files
+ * locally removes them from the cloud, and from everyone else's synced copy too.
+ */
+async function handleFolderChange(previousFolder, folder) {
+  heading('The folder you were using before');
+
+  line('The spreadsheets used to go here:');
+  line(`   ${previousFolder}`);
+  blank();
+
+  if (!existsSync(previousFolder)) {
+    line('That folder cannot be reached right now, so nothing was moved out of it.');
+    line('If it comes back — a drive that was not connected, say — remember that');
+    line('whatever is in it has stopped updating.');
+    blank();
+    return;
+  }
+
+  line('Anything left there stops updating, while still LOOKING like a current');
+  line('spreadsheet. Two copies of one client\'s books, one of them quietly');
+  line('frozen, is the thing worth avoiding here.');
+  blank();
+  line('IF THAT FOLDER IS IN GOOGLE DRIVE, moving files out of it removes them');
+  line('from Drive as well — for everyone it is shared with, not just this');
+  line('computer. Say no if you would rather sort it out by hand.');
+  blank();
+
+  if (!(await confirm('Move the old spreadsheets across to the new folder?', true))) {
+    line('Nothing moved. A note has been left in the old folder instead, saying');
+    line('that what is in it no longer updates.');
+    markFolderRetired(previousFolder, folder, new Date());
+    blank();
+    return;
+  }
+
+  const result = moveExportData(previousFolder, folder);
+  blank();
+
+  if (result.moved.length > 0) {
+    line(`Moved ${String(result.moved.length)} item(s) across, including each company's`);
+    line('spreadsheet and its Archive folder.');
+  } else {
+    line('There was nothing of ours to move — no spreadsheet had been written yet.');
+  }
+
+  // Said explicitly. Somebody who chose a shared folder needs to know their
+  // other files were deliberately not touched, rather than wondering whether
+  // they were about to be.
+  if (result.left.length > 0) {
+    blank();
+    line(`${String(result.left.length)} other item(s) in that folder were NOT touched, because`);
+    line('this program did not put them there. They are still where they were:');
+    result.left.slice(0, 5).forEach((name) => line(`   ${name}`));
+    if (result.left.length > 5) line(`   ...and ${String(result.left.length - 5)} more`);
+  }
+
+  if (result.failed.length > 0) {
+    blank();
+    line(`${String(result.failed.length)} item(s) could not be copied, so they were LEFT ALONE`);
+    line('rather than deleted — something may have them open. They are still in');
+    line('the old folder:');
+    result.failed.slice(0, 5).forEach((name) => line(`   ${name}`));
+    blank();
+    line('Close anything using them and move them across by hand, or run Setup');
+    line('again and choose the same new folder.');
+  }
+
+  if (result.oldFolderRemoved) {
+    blank();
+    line('The old folder was empty afterwards, so it has been removed.');
+  } else if (result.failed.length === 0 && result.left.length > 0) {
+    blank();
+    line('The old folder is still there, holding those other files.');
+  }
+
+  blank();
+  line('The next run will overwrite the spreadsheets in the new folder with fresh');
+  line('figures. The Archive copies that came across are kept as they are.');
+  blank();
+}
+
+/**
+ * Windows paths differ by slash and by case without differing, so "did the
+ * folder change?" cannot be a string comparison. Getting this wrong would
+ * retire the folder the export is about to write to.
+ */
+function normalisePath(path) {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+/** A yes/no question with a default, for an audience that should not get stuck. */
+async function confirm(question, fallback) {
+  const hint = fallback ? 'Y/n' : 'y/N';
+  if (!process.stdin.isTTY) return fallback;
+
+  for (;;) {
+    const answer = (await ask(`  ${question}  (${hint}):  `)).trim().toLowerCase();
+    if (answer === '') return fallback;
+    if (answer === 'y' || answer === 'yes') return true;
+    if (answer === 'n' || answer === 'no') return false;
+    line('Please answer y or n.');
+  }
 }
 
 /**

@@ -193,6 +193,67 @@ export async function fetchClosingStockTotal(
   }
 }
 
+/** What one closing-stock report produced. */
+export interface ExecutedClosingStock {
+  basis: string;
+  groupedBy: string;
+  rows: ClosingStockRow[];
+  warnings: string[];
+}
+
+/**
+ * Read one of the two closing-stock reports.
+ *
+ * Extracted from the tool handler so the scheduled workbook export writes the
+ * same rows the tool answers with, including the empty-result note — the one
+ * sentence standing between "this company keeps no inventory" and "stock is
+ * nil", which a bare empty tab in a spreadsheet cannot say for itself.
+ */
+export async function executeClosingStock(
+  deps: ToolDeps,
+  by: 'item' | 'godown',
+  company: string | undefined
+): Promise<ExecutedClosingStock> {
+  const spec = REPORTS[by];
+  // Tally’s own spelling, not the caller’s — see assertCompanyIsLoaded.
+  const scope = await assertCompanyIsLoaded(deps, company);
+
+  const currencyWarnings: string[] = [];
+  const currency = await resolveCompanyCurrency(deps, scope, currencyWarnings);
+
+  const response = await deps.client.send(
+    spec.build({ company: scope ?? UNSCOPED }),
+    // Report-class: these get the longer timeout, like the statements.
+    'report'
+  );
+
+  const { data, warnings }: Normalized<ClosingStockRow[]> = normalizeClosingStock(
+    response.body,
+    spec.reportName,
+    spec.entityKind,
+    currency
+  );
+
+  // Said explicitly rather than left for the caller to infer from a zero
+  // row count, which reads identically to "the stock is nil".
+  const emptyNote =
+    data.length === 0
+      ? [
+          `TallyPrime returned no rows for its ${spec.reportName}. The report is valid, so ` +
+            'this means the loaded company does not maintain inventory (or, for godowns, ' +
+            'records no stock against any location) — it does NOT mean stock is zero. Do ' +
+            'not report a nil stock position on the strength of this.',
+        ]
+      : [];
+
+  return {
+    basis: `TallyPrime ${spec.reportName} report`,
+    groupedBy: spec.rowLabel,
+    rows: data,
+    warnings: [...response.repairs, ...currencyWarnings, ...warnings, ...emptyNote],
+  };
+}
+
 export function registerClosingStockTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     'tally_get_closing_stock',
@@ -205,54 +266,17 @@ export function registerClosingStockTools(server: McpServer, deps: ToolDeps): vo
     },
     async (args) =>
       runTool('tally_get_closing_stock', deps, async () => {
-        const spec = REPORTS[args.by];
-        // Tally’s own spelling, not the caller’s — see assertCompanyIsLoaded.
-        const company = await assertCompanyIsLoaded(deps, args.company);
-
-        const currencyWarnings: string[] = [];
-        const currency = await resolveCompanyCurrency(deps, company, currencyWarnings);
-
-        const response = await deps.client.send(
-          spec.build({ company: company ?? UNSCOPED }),
-          // Report-class: these get the longer timeout, like the statements.
-          'report'
-        );
-
-        const { data, warnings }: Normalized<ClosingStockRow[]> = normalizeClosingStock(
-          response.body,
-          spec.reportName,
-          spec.entityKind,
-          currency
-        );
-
-        // Said explicitly rather than left for the caller to infer from a zero
-        // row count, which reads identically to "the stock is nil".
-        const emptyNote =
-          data.length === 0
-            ? [
-                `TallyPrime returned no rows for its ${spec.reportName}. The report is valid, so ` +
-                  'this means the loaded company does not maintain inventory (or, for godowns, ' +
-                  'records no stock against any location) — it does NOT mean stock is zero. Do ' +
-                  'not report a nil stock position on the strength of this.',
-              ]
-            : [];
-
-        const allWarnings = [
-          ...response.repairs,
-          ...currencyWarnings,
-          ...warnings,
-          ...emptyNote,
-        ];
+        const executed = await executeClosingStock(deps, args.by, args.company);
 
         return whole(
           {
-            basis: `TallyPrime ${spec.reportName} report`,
-            groupedBy: spec.rowLabel,
+            basis: executed.basis,
+            groupedBy: executed.groupedBy,
             ...(args.company === undefined ? {} : { company: args.company }),
-            rows: data,
-            ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
+            rows: executed.rows,
+            ...(executed.warnings.length > 0 ? { warnings: executed.warnings } : {}),
           },
-          data.length
+          executed.rows.length
         );
       })
   );

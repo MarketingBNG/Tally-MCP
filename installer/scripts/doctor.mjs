@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { probeTally } from './lib/probe.mjs';
@@ -6,6 +6,7 @@ import { explainProbe } from './lib/explain.mjs';
 import { isPlainObject, SERVER_KEY } from './lib/configMerge.mjs';
 import { packageRootFor, isTemporaryLocation } from './lib/paths.mjs';
 import { buildFreshness } from './lib/buildFreshness.mjs';
+import { readEnvSetting, taskExists } from './lib/exportSetup.mjs';
 
 /**
  * The doctor window — run by double-clicking Check-Tally.bat.
@@ -75,6 +76,12 @@ async function main() {
 
   if (!explained.ok) problems.push('TallyPrime is not ready');
 
+  // 4. The spreadsheet. Its age is the thing nobody would otherwise notice:
+  // a workbook that stopped updating four days ago looks exactly like one that
+  // updated a minute ago, and Claude reading the cloud copy cannot tell either.
+  const exportCheck = checkExport();
+  if (exportCheck.problem) problems.push(exportCheck.problem);
+
   heading(problems.length === 0 ? 'All good' : 'Needs attention');
   if (problems.length === 0) {
     line('Nothing to fix. If Claude still says it cannot see Tally, close Claude');
@@ -93,6 +100,96 @@ async function main() {
   blank();
 
   await pause();
+}
+
+/**
+ * The scheduled spreadsheet: is it set up, did the last run work, and — the
+ * one nobody checks — HOW OLD is the workbook?
+ *
+ * A stale workbook is the failure this whole design is most exposed to. It
+ * looks identical to a fresh one, Claude reading it through Google Drive cannot
+ * tell, and the answer that comes back is confidently wrong about the date
+ * rather than about the arithmetic. So the age is said out loud, in days, and a
+ * workbook older than two days is reported as a problem rather than a note.
+ */
+function checkExport() {
+  heading('The daily spreadsheet');
+
+  const folder = readEnvSetting(PACKAGE_ROOT, 'TALLY_EXPORT_FOLDER');
+  if (!folder) {
+    line('Not set up. Claude will answer from TallyPrime directly, if the');
+    line('connector is switched on.');
+    blank();
+    line('What to do (optional):  run Setup and answer Yes to the spreadsheet');
+    line('question. It is worth having if you want answers without Tally open.');
+    blank();
+    return { problem: null };
+  }
+
+  line(`Folder    ${folder}`);
+  line(`Scheduled ${taskExists() ? 'yes, every minute while you are logged on' : 'NO — nothing runs on its own'}`);
+  blank();
+
+  if (!existsSync(folder)) {
+    line('That folder does not exist any more.');
+    blank();
+    line('What to do:  check whether it was moved or renamed — a Google Drive');
+    line('folder somebody reorganised is the usual cause — then run Setup again.');
+    blank();
+    return { problem: 'the export folder is missing' };
+  }
+
+  let worst = null;
+  let anyCompany = false;
+
+  for (const entry of readdirSync(folder, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    anyCompany = true;
+
+    const companyFolder = join(folder, entry.name);
+    const status = readdirSync(companyFolder).find((name) => name.startsWith('LAST RUN '));
+    const workbook = readdirSync(companyFolder).find((name) => name.endsWith('.xlsx'));
+
+    line(entry.name);
+
+    if (!workbook) {
+      line('   No spreadsheet has been written yet.');
+      worst = 'a company has no spreadsheet yet';
+      continue;
+    }
+
+    const age = Date.now() - statSync(join(companyFolder, workbook)).mtimeMs;
+    const days = age / 86_400_000;
+    const howOld =
+      days < 1
+        ? `${Math.round(age / 3_600_000)} hour(s) old`
+        : `${Math.floor(days)} day(s) old`;
+
+    line(`   Spreadsheet  ${howOld}`);
+    line(`   Last run     ${status ? status.replace(/\.txt$/, '') : 'unknown'}`);
+
+    if (status && status.startsWith('LAST RUN FAILED')) {
+      worst = 'the last export failed';
+    } else if (days >= 2 && worst === null) {
+      worst = 'the spreadsheet has not been updated for days';
+    }
+  }
+
+  if (!anyCompany) {
+    blank();
+    line('Nothing has been exported yet. If it was only just set up, that is');
+    line('normal — the next run will write it.');
+    blank();
+    return { problem: null };
+  }
+
+  blank();
+  line('An up-to-date file here means it was written to THIS COMPUTER. Whether');
+  line("Google Drive has uploaded it is Drive's own business — check its icon in");
+  line('the notification area if the cloud copy matters.');
+  blank();
+
+  return { problem: worst };
 }
 
 /**

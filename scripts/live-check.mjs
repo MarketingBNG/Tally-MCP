@@ -74,10 +74,8 @@ const modules = await Promise.all(
   [
     'connection',
     'companies',
-    'ledgers',
-    'groups',
+    'masters',
     'vouchers',
-    'voucherTypes',
     'bankReconciliation',
     'outstanding',
     'reports',
@@ -256,8 +254,12 @@ console.log(`\nCompany: "${loaded.name}", books from ${String(loaded.startingFro
 console.log(`Testing over ${fy.fromDate} to ${fy.toDate}\n`);
 
 console.log('Voucher types');
-const types = await run('03-voucher-types', 'tally_get_voucher_types');
-await run('04-voucher-types-query', 'tally_get_voucher_types', { query: 'sales' });
+// Voucher types are served by the merged masters tool, not a tool of their own.
+const types = await run('03-voucher-types', 'tally_get_masters', { type: 'voucherType' });
+await run('04-voucher-types-query', 'tally_get_masters', {
+  type: 'voucherType',
+  query: 'sales',
+});
 
 console.log('\nStatements and comparison');
 await run('05-tb-single', 'tally_get_statement', { statement: 'trial_balance', ...fy });

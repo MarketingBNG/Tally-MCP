@@ -211,6 +211,83 @@ const configSchema = z.object({
     .min(1, 'TALLY_CURRENCY_LABEL must not be empty if it is set at all.')
     .max(512, 'TALLY_CURRENCY_LABEL must be at most 512 characters.')
     .optional(),
+
+  /**
+   * Where the scheduled exporter writes its workbooks.
+   *
+   * A LOCAL folder. Nothing in this codebase calls a Google API — the intended
+   * setup is that this path sits inside a folder Google Drive Desktop syncs, so
+   * Drive's own client does the uploading and no credential ever exists here.
+   * See docs and README: client accounting data ends up in Drive, which is the
+   * point of the folder, but our code does not put it there.
+   *
+   * Unset means no export is configured, which is the state of every install
+   * that has not run Setup's export questions. The exporter says so plainly and
+   * exits rather than inventing a location.
+   */
+  tallyExportFolder: z
+    .string()
+    .trim()
+    .min(1, 'TALLY_EXPORT_FOLDER must not be empty if it is set at all.')
+    .optional(),
+
+  /**
+   * Which companies the exporter fetches, semicolon-separated.
+   *
+   * Named EXPLICITLY, never "whichever company is current". TallyPrime holds
+   * several companies at once and answers an unscoped request from whichever it
+   * considers current — that is how a workbook ends up labelled one company and
+   * read from another, which is the worst failure this whole export can have.
+   *
+   * Unset means "every company TallyPrime currently has open", which is honest
+   * about what it did because the Manifest records the name Tally gave.
+   */
+  tallyExportCompanies: z
+    .string()
+    .trim()
+    .min(1, 'TALLY_EXPORT_COMPANIES must not be empty if it is set at all.')
+    .optional(),
+
+  /**
+   * How often the scheduled task runs, in minutes.
+   *
+   * The task itself is registered by Setup at this interval; the exporter reads
+   * it only to say, in the run log, what cadence it believes it is on. One
+   * minute is the design in the plan — the task WAKES every minute and asks the
+   * cheap "has anything changed?" question, exporting only when the answer is
+   * yes.
+   *
+   * SIXTY IS THE DEFAULT, deliberately slower than the design, because the
+   * every-minute cadence is only worth having if the change check is sound. That
+   * check rests on `ALTERID` moving on every edit INCLUDING deletions, which
+   * needs a human at a TallyPrime screen to prove — alter a voucher, add one,
+   * delete one, comparing the fingerprint after each (see
+   * scripts/probe-alterid.mjs). If it does not hold, the exporter skips runs
+   * while the books move and the workbook reports itself current while being
+   * stale, which is the one failure an accountant cannot see and cannot forgive.
+   * A fixed hourly export is merely slow.
+   *
+   * Once it IS proven, set this to 1 and the design cadence is back — the
+   * machinery is already here and unchanged.
+   */
+  tallyExportIntervalMinutes: z.coerce
+    .number()
+    .int()
+    .min(1, 'TALLY_EXPORT_INTERVAL_MINUTES must be at least 1.')
+    .max(1440, 'TALLY_EXPORT_INTERVAL_MINUTES must be at most 1440.')
+    .default(60),
+
+  /**
+   * Force an export even when the fingerprint says nothing changed.
+   *
+   * The daily guaranteed run uses this. It exists as a setting so a support
+   * question — "the workbook looks stale, prove it is not" — has an answer that
+   * does not involve editing the books to make the fingerprint move.
+   */
+  tallyExportForce: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
 });
 
 /**
@@ -291,6 +368,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tallyCacheTtlMs: env.TALLY_CACHE_TTL_MS,
     tallySourceQueryMode: env.TALLY_SOURCE_QUERY_MODE,
     tallyCurrencyLabel: env.TALLY_CURRENCY_LABEL,
+    tallyExportFolder: env.TALLY_EXPORT_FOLDER,
+    tallyExportCompanies: env.TALLY_EXPORT_COMPANIES,
+    tallyExportIntervalMinutes: env.TALLY_EXPORT_INTERVAL_MINUTES,
+    tallyExportForce: env.TALLY_EXPORT_FORCE,
     logLevel: env.LOG_LEVEL,
   });
 

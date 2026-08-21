@@ -188,6 +188,210 @@ const DESCRIPTION = [
   SHARED_NOTES,
 ].join('\n');
 
+/**
+ * What one receivables or payables run produced.
+ *
+ * The ageing basis travels WITH the rows rather than beside them. A bucket
+ * quoted without "as at this date, by bill age, covering only bills raised in
+ * this period" is the single most misreadable figure this server produces, so
+ * it is part of the result and not something a caller may forget to ask for.
+ */
+export interface ExecutedOutstanding {
+  side: 'receivable' | 'payable';
+  period: { fromDate: string; toDate: string };
+  groupsUsed: string[];
+  /** Present only when ageing was requested; null rather than zero-filled. */
+  ageingBasis: {
+    asOn: string;
+    measure: string;
+    buckets: number[];
+    coverage: string;
+  } | null;
+  rows: PartyOutstanding[];
+  warnings: string[];
+}
+
+/**
+ * Receivables or payables for one company and period.
+ *
+ * Extracted from the tool handler on the same rule `executeVoucherTest` and
+ * `executeStatement` follow: a second reader — here, the scheduled workbook
+ * export — calls this rather than writing its own party-and-bill assembly,
+ * because two ways of deciding who counts as a debtor is two answers.
+ */
+export async function executeOutstanding(
+  deps: ToolDeps,
+  args: {
+    side: 'receivable' | 'payable';
+    groups?: string[] | undefined;
+    includeZeroBalances?: boolean | undefined;
+    includeAgeing?: boolean | undefined;
+    ageingAsOn?: string | undefined;
+    ageingBuckets?: number[] | undefined;
+    ageingPreset?: 'days' | 'schedule_iii' | undefined;
+    creditTerms?: { party?: string | undefined; group?: string | undefined; days: number }[] | undefined;
+    company?: string | undefined;
+    fromDate?: string | undefined;
+    toDate?: string | undefined;
+  }
+): Promise<ExecutedOutstanding> {
+  const spec = SPECS[args.side];
+  const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
+
+  // Validated FIRST, before anything is fetched. Measured live: rejecting a
+  // descending bucket list used to take 1,180ms, because the ledger and
+  // voucher fetches happened before the check. Input validation must never
+  // cost a round trip to Tally, let alone a 21MB one.
+  const wantsAgeing = args.includeAgeing === true;
+  const scheduleIii = args.ageingPreset === 'schedule_iii';
+  // Resolved before the fetch, like the bucket validation below and for
+  // the same measured reason: rejecting bad input must not cost a 21MB
+  // round trip to Tally.
+  const ageingAsOnEarly = args.ageingAsOn;
+
+  const groups = args.groups ?? [...spec.defaultGroups];
+  const groupSet = new Set(groups.map((group) => group.toLowerCase()));
+
+  const { ledgers, warnings: ledgerWarnings } = await fetchLedgers(deps, args.company);
+
+  const parties = ledgers.filter((ledger) =>
+    groupSet.has((ledger.parent ?? '').toLowerCase())
+  );
+
+  // Bill references live in nested structures on vouchers, so full
+  // detail is needed to read them.
+  const { vouchers, warnings: voucherWarnings } = await fetchVouchers(
+    deps,
+    args.company,
+    period,
+    // Nested only. This tool reads bill allocations and no scalar voucher field, so
+    // asking for every field would cost 18.3MB to use none of it.
+    false,
+    true
+  );
+
+  const billsByParty = collectBills(vouchers);
+
+  const ageingAsOn = ageingAsOnEarly ?? period.toDate;
+  const buckets = wantsAgeing
+    ? scheduleIii
+      ? validateBuckets(scheduleIiiBoundaries(ageingAsOn))
+      : validateBuckets(args.ageingBuckets ?? DEFAULT_AGEING_BUCKETS)
+    : [];
+  const ageingWarnings: string[] = [];
+  if (wantsAgeing && scheduleIii) {
+    ageingWarnings.push(SCHEDULE_III_INCOMPLETE_NOTE);
+    ageingWarnings.push(
+      'MAPPING TO THE DISCLOSURE: the FIRST bucket returned is "future-dated" and is not ' +
+        'part of Schedule III — it holds bills dated after the as-at date, which the ' +
+        'disclosure has no line for and which are worth looking at on their own account. ' +
+        'The five buckets AFTER it are, in order: ' +
+        SCHEDULE_III_LABELS.join('; ') +
+        `. Boundaries were computed as calendar months back from ${ageingAsOn}.`
+    );
+    if (args.ageingBuckets !== undefined) {
+      ageingWarnings.push(
+        'ageingBuckets was ignored because ageingPreset is "schedule_iii", which defines ' +
+          'its own boundaries. Drop one of the two so the request says one thing.'
+      );
+    }
+  }
+
+  // Party terms beat group terms: the more specific statement wins, which
+  // is how someone writing "30 days generally, 60 for this customer"
+  // expects it to be read.
+  const creditByParty = new Map<string, number>();
+  const creditByGroup = new Map<string, number>();
+  for (const term of args.creditTerms ?? []) {
+    if (term.party !== undefined) creditByParty.set(term.party.toLowerCase(), term.days);
+    else if (term.group !== undefined) creditByGroup.set(term.group.toLowerCase(), term.days);
+  }
+  const creditDaysFor = (name: string, group: string | null): number | null =>
+    creditByParty.get(name.toLowerCase()) ??
+    creditByGroup.get((group ?? '').toLowerCase()) ??
+    null;
+
+  const rows: PartyOutstanding[] = parties
+    .filter((ledger) => {
+      if (args.includeZeroBalances === true) return true;
+      // Null is kept deliberately: it means "not reported", and
+      // dropping it would hide a party rather than show a zero.
+      if (ledger.closingBalance === null) return true;
+      return Number(ledger.closingBalance.amount) !== 0;
+    })
+    .map((ledger) => {
+      const allocations = billsByParty.get(ledger.name.toLowerCase()) ?? [];
+      const ageing = wantsAgeing
+        ? ageBills(
+            allocations,
+            ageingAsOn,
+            buckets,
+            ageingWarnings,
+            creditDaysFor(ledger.name, ledger.parent)
+          )
+        : null;
+
+      return {
+        party: ledger.name,
+        group: ledger.parent,
+        closingBalance: ledger.closingBalance,
+        bills: allocations.map((allocation) => allocation.fields),
+        ...(ageing === null ? {} : { ageing }),
+      };
+    });
+
+  assertResultSetFits(
+    rows.length,
+    deps.config,
+    'Narrow the group list, or raise TALLY_MAX_RECORDS.'
+  );
+
+  const warnings = [
+    // Bills come from the period's vouchers, so an empty defaulted
+    // period silently strips every bill reference off these balances.
+    ...(await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company)),
+    ...ledgerWarnings,
+    ...voucherWarnings,
+    ...ageingWarnings,
+  ];
+
+  if (wantsAgeing) {
+    // Attached to every ageing response, not only the suspicious ones.
+    // The basis is what stops a bucket being read as overdue, and it has
+    // to be present on the call that gets quoted back to the user.
+    warnings.push(
+      `Ageing is by BILL AGE as at ${ageingAsOn} — days since the raising voucher's own ` +
+        'date — and is NOT days overdue: no due date or credit period was used. It covers ' +
+        `only bills raised between ${period.fromDate} and ${period.toDate}, so any invoice ` +
+        'older than that period is absent from the schedule. State both points when ' +
+        'reporting the buckets.'
+    );
+  }
+
+  if (parties.length === 0) {
+    warnings.push(
+      `No ledgers were found under ${groups.map((g) => `"${g}"`).join(', ')}. This company may file its parties under different group names — check tally_get_masters type "ledger" for the groups actually in use.`
+    );
+  }
+
+
+  return {
+    side: args.side,
+    period,
+    groupsUsed: groups,
+    ageingBasis: wantsAgeing
+      ? {
+          asOn: ageingAsOn,
+          measure: 'days since the bill was raised, not days overdue',
+          buckets,
+          coverage: `bills raised between ${period.fromDate} and ${period.toDate} only`,
+        }
+      : null,
+    rows,
+    warnings,
+  };
+}
+
 export function registerOutstandingTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     'tally_get_outstanding',
@@ -279,160 +483,14 @@ export function registerOutstandingTools(server: McpServer, deps: ToolDeps): voi
     },
     async (args) =>
       runTool('tally_get_outstanding', deps, async () => {
-        const spec = SPECS[args.side];
         const pagination = resolvePagination(args.page, args.pageSize);
-        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
+        const executed = await executeOutstanding(deps, args);
 
-        // Validated FIRST, before anything is fetched. Measured live: rejecting a
-        // descending bucket list used to take 1,180ms, because the ledger and
-        // voucher fetches happened before the check. Input validation must never
-        // cost a round trip to Tally, let alone a 21MB one.
-        const wantsAgeing = args.includeAgeing === true;
-        const scheduleIii = args.ageingPreset === 'schedule_iii';
-        // Resolved before the fetch, like the bucket validation below and for
-        // the same measured reason: rejecting bad input must not cost a 21MB
-        // round trip to Tally.
-        const ageingAsOnEarly = args.ageingAsOn;
-
-        const groups = args.groups ?? [...spec.defaultGroups];
-        const groupSet = new Set(groups.map((group) => group.toLowerCase()));
-
-        const { ledgers, warnings: ledgerWarnings } = await fetchLedgers(deps, args.company);
-
-        const parties = ledgers.filter((ledger) =>
-          groupSet.has((ledger.parent ?? '').toLowerCase())
-        );
-
-        // Bill references live in nested structures on vouchers, so full
-        // detail is needed to read them.
-        const { vouchers, warnings: voucherWarnings } = await fetchVouchers(
-          deps,
-          args.company,
-          period,
-          // Nested only. This tool reads bill allocations and no scalar voucher field, so
-          // asking for every field would cost 18.3MB to use none of it.
-          false,
-          true
-        );
-
-        const billsByParty = collectBills(vouchers);
-
-        const ageingAsOn = ageingAsOnEarly ?? period.toDate;
-        const buckets = wantsAgeing
-          ? scheduleIii
-            ? validateBuckets(scheduleIiiBoundaries(ageingAsOn))
-            : validateBuckets(args.ageingBuckets ?? DEFAULT_AGEING_BUCKETS)
-          : [];
-        const ageingWarnings: string[] = [];
-        if (wantsAgeing && scheduleIii) {
-          ageingWarnings.push(SCHEDULE_III_INCOMPLETE_NOTE);
-          ageingWarnings.push(
-            'MAPPING TO THE DISCLOSURE: the FIRST bucket returned is "future-dated" and is not ' +
-              'part of Schedule III — it holds bills dated after the as-at date, which the ' +
-              'disclosure has no line for and which are worth looking at on their own account. ' +
-              'The five buckets AFTER it are, in order: ' +
-              SCHEDULE_III_LABELS.join('; ') +
-              `. Boundaries were computed as calendar months back from ${ageingAsOn}.`
-          );
-          if (args.ageingBuckets !== undefined) {
-            ageingWarnings.push(
-              'ageingBuckets was ignored because ageingPreset is "schedule_iii", which defines ' +
-                'its own boundaries. Drop one of the two so the request says one thing.'
-            );
-          }
-        }
-
-        // Party terms beat group terms: the more specific statement wins, which
-        // is how someone writing "30 days generally, 60 for this customer"
-        // expects it to be read.
-        const creditByParty = new Map<string, number>();
-        const creditByGroup = new Map<string, number>();
-        for (const term of args.creditTerms ?? []) {
-          if (term.party !== undefined) creditByParty.set(term.party.toLowerCase(), term.days);
-          else if (term.group !== undefined) creditByGroup.set(term.group.toLowerCase(), term.days);
-        }
-        const creditDaysFor = (name: string, group: string | null): number | null =>
-          creditByParty.get(name.toLowerCase()) ??
-          creditByGroup.get((group ?? '').toLowerCase()) ??
-          null;
-
-        const rows: PartyOutstanding[] = parties
-          .filter((ledger) => {
-            if (args.includeZeroBalances === true) return true;
-            // Null is kept deliberately: it means "not reported", and
-            // dropping it would hide a party rather than show a zero.
-            if (ledger.closingBalance === null) return true;
-            return Number(ledger.closingBalance.amount) !== 0;
-          })
-          .map((ledger) => {
-            const allocations = billsByParty.get(ledger.name.toLowerCase()) ?? [];
-            const ageing = wantsAgeing
-              ? ageBills(
-                  allocations,
-                  ageingAsOn,
-                  buckets,
-                  ageingWarnings,
-                  creditDaysFor(ledger.name, ledger.parent)
-                )
-              : null;
-
-            return {
-              party: ledger.name,
-              group: ledger.parent,
-              closingBalance: ledger.closingBalance,
-              bills: allocations.map((allocation) => allocation.fields),
-              ...(ageing === null ? {} : { ageing }),
-            };
-          });
-
-        assertResultSetFits(
-          rows.length,
-          deps.config,
-          'Narrow the group list, or raise TALLY_MAX_RECORDS.'
-        );
-
-        const warnings = [
-          // Bills come from the period's vouchers, so an empty defaulted
-          // period silently strips every bill reference off these balances.
-          ...(await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company)),
-          ...ledgerWarnings,
-          ...voucherWarnings,
-          ...ageingWarnings,
-        ];
-
-        if (wantsAgeing) {
-          // Attached to every ageing response, not only the suspicious ones.
-          // The basis is what stops a bucket being read as overdue, and it has
-          // to be present on the call that gets quoted back to the user.
-          warnings.push(
-            `Ageing is by BILL AGE as at ${ageingAsOn} — days since the raising voucher's own ` +
-              'date — and is NOT days overdue: no due date or credit period was used. It covers ' +
-              `only bills raised between ${period.fromDate} and ${period.toDate}, so any invoice ` +
-              'older than that period is absent from the schedule. State both points when ' +
-              'reporting the buckets.'
-          );
-        }
-
-        if (parties.length === 0) {
-          warnings.push(
-            `No ledgers were found under ${groups.map((g) => `"${g}"`).join(', ')}. This company may file its parties under different group names — check tally_get_masters type "ledger" for the groups actually in use.`
-          );
-        }
-
-        return fromPage(paginate(rows, pagination, warnings), {
-          side: args.side,
-          period,
-          groupsUsed: groups,
-          ...(wantsAgeing
-            ? {
-                ageingBasis: {
-                  asOn: ageingAsOn,
-                  measure: 'days since the bill was raised, not days overdue',
-                  buckets,
-                  coverage: `bills raised between ${period.fromDate} and ${period.toDate} only`,
-                },
-              }
-            : {}),
+        return fromPage(paginate(executed.rows, pagination, executed.warnings), {
+          side: executed.side,
+          period: executed.period,
+          groupsUsed: executed.groupsUsed,
+          ...(executed.ageingBasis === null ? {} : { ageingBasis: executed.ageingBasis }),
         });
       })
   );

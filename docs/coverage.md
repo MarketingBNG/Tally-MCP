@@ -48,6 +48,29 @@ coverage of the features nobody here uses.
 
 ---
 
+## The collection-TYPE safety rule, as it now stands (2026-08-21)
+
+The rule was **never send a collection TYPE this server has not observed**, after
+two probes hung TallyPrime behind a modal dialog. Seven master lists were
+documented unreachable on that basis.
+
+Re-probed on 2026-08-21 against TallyPrime 7.1 — with somebody watching the Tally
+window, the scheduled export disabled, one type at a time, a 12-second timeout, a
+health check between each, and a `Ledger` control — **all seven were accepted**:
+`CostCentre`, `CostCategory`, `Godown`, `Unit`, `StockGroup`, `StockCategory`,
+`Budget`. Fastest 14ms, slowest 30ms. No dialog. No `LINEERROR`. The control
+passed alongside them, so the probe itself was sound.
+
+**What this does and does not change.** Those seven are now production routes and
+ship as workbook tabs. What is NOT established is that any type is safe: the two
+hangs were real, and the likeliest explanation is a type name TallyPrime does not
+recognise at all. So the rule becomes *probe deliberately* rather than *never
+probe* — `scripts/probe-collection-types.mjs` is the way, and its header lists the
+three conditions that have to hold first. Adding a name to `SIMPLE_MASTER_TYPES`
+without running it would reintroduce exactly the hazard.
+
+---
+
 ## Layer 1 status summary
 
 | Status | Meaning | Count |
@@ -79,26 +102,26 @@ three did not resolve them, because all three lack the same features.
 | Chart of accounts | reachable | `List of Accounts` report | 7.5 MB live |
 | `ISRELATEDPARTY` flag | reachable | ledger field | 330/330 populated. Corrects an earlier plan assumption |
 | TDS / TCS applicability | reachable | ledger fields | **Verified live 17 Aug 2026.** `ISTDSAPPLICABLE`, `ISTCSAPPLICABLE`, `ISTDSEXPENSE`, `IGNORETDSEXEMPT`, `TDSDEDUCTEEISSPECIALRATE`, `TDSDEDUCTEESPECIALRATE`, `TAXTYPE` all present on a live ledger master, carrying explicit negatives where the feature is off. Surfaced by `tally_get_tds` |
-| TDS section / nature of payment | unknown | separate master | Not observed populated — no probed company deducts tax. Passed through where it appears; never claimed complete. Direct TYPE probing ruled out by the safety rule |
+| TDS section / nature of payment | unknown | separate master | Not observed populated — no probed company deducts tax. Passed through where it appears; never claimed complete. The TYPE name is unknown, and an unknown TYPE is still not probed casually — but see the note below: the rule is now "probe deliberately", not "never probe" |
 | MSME / Udyam registration | unknown | ledger field, unconfirmed | **Row corrected 17 Aug 2026** — briefly recorded as blocked, which one company cannot support. Absent across all 472 ledgers of MUDALS TECHNOLOGIES, and Tally does emit unpopulated fields, so this company genuinely does not record it. TallyPrime DOES offer MSME details on the party ledger in recent releases; whether they transport over HTTP is **untested** for want of a company that uses them. Same class as cost centres and bill-wise: waiting on books, not on code |
 | `ALTERID` / `UPDATEDDATETIME` | reachable | ledger fields | 367/367 populated |
-| Cost centres (masters) | unknown | `CostCentre` collection | **not sent** — collection probing stopped after two hangs |
-| Cost categories (masters) | unknown | `CostCategory` collection | not sent |
-| Godowns (masters) | unknown | `Godown` collection | not sent |
-| Budgets | **blocked** | — | `Budget Variance` and `Budgets` reports both rejected; collection type unknown and now unprobeable under the TYPE safety rule |
+| Cost centres (masters) | reachable | `CostCentre` collection | **Row corrected 2026-08-20→21 — was "not sent, probing stopped after two hangs".** Re-probed 2026-08-21 on TallyPrime 7.1, watched, export disabled, with a `Ledger` control: accepted in 14ms, no dialog, no error. 0 records on AGBV (the company defines none) — an empty list, not a refusal. Now a workbook tab |
+| Cost categories (masters) | reachable | `CostCategory` collection | **Row corrected 2026-08-21.** Accepted in 30ms under the same probe; returned `Primary Cost Category` on AGBV. Now a workbook tab |
+| Godowns (masters) | reachable | `Godown` collection | **Row corrected 2026-08-21.** Accepted in 24ms; returned `Main Location` with parent `Primary` on AGBV. The derived "used" list and the `Godown Summary` report both remain, answering different questions — defined, posted-to, and holding stock are three things |
+| Budgets | reachable (route), unproven (shape) | `Budget` collection | **Row corrected 2026-08-21.** The two REPORTS are still rejected, but the `Budget` collection TYPE is accepted — no dialog, no error — and returned 0 records on every company loaded, none of which uses budgets. So the route exists and the row shape has never been observed. Now a workbook tab that will populate on a company that budgets |
 
 ## Transactions
 
 | Data | Status | Route | Evidence / reason |
 |---|---|---|---|
 | Vouchers, **current** financial year | reachable | `Voucher` collection | 285 vouchers live |
-| Vouchers, **any prior** year | **blocked** | — | Collection returns current FY only. `Day Book` ignores its date range. `<FILTER>` on `$Date` did not work. Custom-TDL-report route **untried** — the remaining candidate |
+| Vouchers, **any prior** year | reachable | `Voucher Register` report, one book year per call | **Row corrected 2026-08-20 — was recorded as blocked.** The collection is current-FY only and `Day Book` does ignore its dates, both still true. But `Voucher Register` is a REPORT and reports honour a date range: verified live 2026-08-17 (14 vouchers for FY2023-24 with 50 entries; 788 and 1,534 for the two years after) and again 2026-08-20, when the workbook export went from 284 vouchers in one year to **2,738 across five**, entries still summing to zero. Cost is the reason no interactive tool defaults to it: ~880KB/0.3s, 39MB/27s and 79MB/103s for three successive years. `fetchAcrossBookYears` routes prior years here and the current year to the collection |
 | Ledger entries (debit/credit lines) | reachable | `AllLedgerEntries` in FETCH | 985 live |
 | Bill allocations | reachable-shape-unverified | arrives free in shipped FETCH | 985 containers; company has bill-wise tracking off, so contents unproven |
 | Bank allocations | reachable | arrives free in shipped FETCH | 985; production tool reads it |
 | Cost centre allocations | reachable-shape-unverified | `AllLedgerEntries.CategoryAllocations.CostCentreAllocations` | Path accepted and safe; 0 allocations on this company. Hierarchy is one level deeper than assumed |
 | Inventory entries | reachable-shape-unverified | `AllInventoryEntries` | no inventory on this company |
-| Batch / godown allocations | unknown | nested path, untried | no inventory to test against |
+| Batch / godown allocations | reachable | `AllInventoryEntries.BatchAllocations` | **Row corrected 2026-08-20 — was unknown/untried.** Found by walking the nested tree rather than probing: 42 on AgEx Pharma, 668 rows on AGBV Nutrition, carrying `GODOWNNAME`, `BATCHNAME`, `BATCHID`, `ORDERNO`, `TRACKINGNUMBER` and quantities. This is TWO levels deep — it hangs off an inventory ENTRY, not off the voucher — which is why a one-level fetch had never seen it |
 | Edit log / voucher versions | **blocked** | — | Settled 2026-08-18: eleven report IDs rejected against a working control on two companies, and `EnteredBy`/`AlteredBy` are served but EMPTY on every voucher of all three companies with data. Who altered an entry is not obtainable |
 | Voucher-level audit fields | reachable | `UpdatedDateTime` etc. in FETCH | Settled 2026-08-18: `UpdatedDateTime`, `Audited`, `IsDeleted`, `IsDeletedVchRetained`, `IsSecurityOnWhenEntered`, `PersistedView`, `AsOriginal` all populated per voucher. `UpdatedDateTime` is a real per-voucher LAST-WRITTEN stamp (668 vouchers, 2 of 3 companies; the third returns all-zero placeholders) and ships as `tally_test_vouchers` test `late_entry`. `Audited` and `IsSecurityOnWhenEntered` read `No` on every voucher of all three, so they are readable with no variation to test against |
 
@@ -114,7 +137,7 @@ three did not resolve them, because all three lack the same features.
 | Statement for a **mid-year** period | **blocked** | — | End date binds only on a 31st; otherwise accumulates to a fixed endpoint. Format-independent — four wire encodings tested |
 | Negative ledgers (exception) | reachable | `Negative Ledgers` | 20,909 B live. **New capability** |
 | Negative stock (exception) | reachable-shape-unverified | `Negative Stock` | valid but empty; no inventory |
-| Ratio analysis | **reachable but empty** | `Ratio Analysis` | **Re-measured 17 Aug 2026: 0 rows** on MUDALS for 1-Apr-26 to 28-Jul-26, where an earlier probe recorded 1,676 B. Accepted by Tally, returns nothing. A first-class ratio tool was therefore NOT built on it — it would have been built on sand |
+| Ratio analysis | reachable | `Ratio Analysis` | **Row corrected 2026-08-20 — was recorded as reachable-but-empty.** The workbook export returned **21 populated rows** on MUDALS (Working Capital, Cash-in-Hand, Bank Accounts and so on), read for the company's defaulted period rather than the 1-Apr-26..28-Jul-26 window the 17 Aug probe used. So the report does serve content; the earlier zero was a property of that period, not of the report. Values arrive as FORMATTED STRINGS carrying Indian digit grouping and a Dr/Cr suffix — `1,46,32,571.18 Dr` — not as numbers, which is why the workbook writes every generic-report column as text. Still no first-class ratio tool: the column meanings remain unverified |
 | Sales / purchase / journal registers | reachable | three report IDs | live |
 | Stock summary / godown summary | reachable-shape-unverified | production builders | no inventory |
 | Bills receivable / payable | reachable-shape-unverified | both IDs valid | empty; no bill-wise tracking |

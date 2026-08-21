@@ -421,7 +421,15 @@ async function fetchAcrossBookYears(
  * year alone when the anchor is unknown, which keeps the previous behaviour
  * rather than inventing a split.
  */
-function bookYearsSpanning(
+/**
+ * Every book year a period touches, oldest first.
+ *
+ * Exported so the workbook export can ask for a statement PER YEAR using the
+ * same year boundaries the voucher fetch uses. Two different ideas of where a
+ * book year starts would put a trial balance and the vouchers behind it on
+ * different periods, which is the kind of disagreement nobody would spot.
+ */
+export function bookYearsSpanning(
   period: DateRange,
   startingFrom: string | null,
   currentYear: DateRange | null

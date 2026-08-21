@@ -59,6 +59,24 @@ Claude Desktop  --MCP-->  Tally MCP Server (Node/TS, local process)  --HTTP-->  
 ```
 
 - No cloud, no database, no web dashboard, no background jobs, no multi-tenancy.
+  **Amended 2026-08-19: the "no background jobs" half of this line is overruled,
+  by the user's decision.** A scheduled task now exports each company's books to
+  an Excel workbook in a folder Google Drive syncs, so Claude can answer from the
+  spreadsheet without TallyPrime being open and without the connector's ~12,000
+  tokens of tool descriptions in every conversation. See `src/export/` and
+  README → The daily spreadsheet.
+
+  **What is NOT overruled**, and is unchanged:
+  - Nothing writes to TallyPrime. Every request is still `TALLYREQUEST=Export`,
+    and the test asserting no write-capable Tally path exists still passes.
+  - No cloud API is called from this codebase. Google Drive's involvement is the
+    user's own sync client acting on an ordinary local folder; no credential is
+    created here, so none can leak.
+  - No database, no web dashboard, no multi-tenancy.
+
+  Worth saying plainly, because the spec should not have to be read between the
+  lines: **client accounting data ends up in Google Drive.** This code does not
+  put it there, but the whole point of the folder is that Drive does.
 - The MCP server is a stateless local process that Claude Desktop launches via stdio.
 - Read-only, always. No tool may create/update/delete/alter/modify Tally data. If some Tally integration mechanism could write data, don't wire it up, even partially.
 

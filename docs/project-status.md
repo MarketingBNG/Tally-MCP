@@ -6,7 +6,9 @@ than against how finished it feels. Companion to
 as they do, and [performance.md](performance.md), which covers what each tool
 costs in tokens and time; this file covers *how much* is done.
 
-**Last updated:** 2026-08-18, verified against four companies loaded together in one
+**Last updated:** 2026-08-19 (the scheduled spreadsheet export — see
+[The spreadsheet export](#the-spreadsheet-export-2026-08-19)). The readings below
+come from 2026-08-18, verified against four companies loaded together in one
 live TallyPrime — an Indian private limited (472 ledgers), a German GmbH on
 calendar-year books, and two US LLCs. Earlier readings came from the first two of
 those.
@@ -21,7 +23,7 @@ those.
 | **Verified against real data** | ~90% |
 | Tools | 23 registered — the newest is `tally_get_report` (see [Inventory reports unblocked](#inventory-reports-unblocked-2026-08-14)). `tally_test_vouchers` carries 8 procedures, the newest being `late_entry` (see [Entry timing](#entry-timing-2026-08-18)) |
 | Prompts / resources | 4 / 2 |
-| Tests | 976 passing, 2 skipped, across 59 files. One skip is the fixture-vs-`samples/` guard, which runs only where `samples/` exists — i.e. precisely on a machine that has pulled real exports |
+| Tests | 1,046 passing, 2 skipped, across 63 files. One skip is the fixture-vs-`samples/` guard, which runs only where `samples/` exists — i.e. precisely on a machine that has pulled real exports |
 | `typecheck` / `lint` / `test` / `build` | Enforced by CI on every push (Windows + Linux) |
 | Definition of done | **8 of 8** |
 
@@ -503,6 +505,93 @@ Also confirmed populated per voucher, previously known only on masters: `Audited
 `IsDeleted`, `IsDeletedVchRetained`, `IsSecurityOnWhenEntered`, `PersistedView`,
 `AsOriginal`. `Audited` and `IsSecurityOnWhenEntered` read `No` on every voucher of all
 three companies, so they are readable with no variation to test against.
+
+---
+
+## The spreadsheet export, 2026-08-19
+
+A scheduled task now writes each company's books to an `.xlsx` in a folder
+Google Drive syncs, so Claude can answer from the workbook with the connector
+switched off. `PROJECT_SPEC.md`'s "no background jobs" line is amended in the
+same change rather than left contradicted — see the amendment there for what is
+and is not overruled.
+
+**Built:** `src/export/` (fetch, shaping, workbook, fingerprint, folder naming,
+orchestration), `installer/scripts/export.mjs`, `installer/Run-Export.bat`,
+Setup's export questions and `schtasks` registration, and the doctor's report on
+the workbook's age.
+
+**Refactors, no behaviour change:** `executeStatement` out of `reports.ts`,
+`executeOutstanding` out of `outstanding.ts`, `executeClosingStock` out of
+`closingStock.ts` — the same extraction `executeVoucherTest` had, so the export
+reuses each tool's own fetch path rather than growing a second way to get the
+same figure. The existing tool tests are the regression check and all pass.
+
+**Verified live** against MUDALS TECHNOLOGIES PRIVATE LIMITED on 2026-08-19:
+
+| Check | Result |
+|---|---|
+| Full export | **35 tabs, 23,468 rows, 100s** (was 24 tabs / 4,913 rows / 8.1s before prior years and the report views were added) |
+| Trial balance debits + credits | 0.00 |
+| Voucher entries debits + credits | 0.00 |
+| Vouchers / entries | **2,738 / 6,716 across five book years** (2022-03-31 to 2026-07-28). Was 284 / 985 for the current year alone |
+| Voucher fields varying vs folded | 36 columns, 241 relocated to `Tally defaults` |
+| Change check, nothing altered | 0.77s, no file written, no log line |
+| Workbook open / unreplaceable | Named the reason, kept the data, wrote `LAST RUN FAILED - ...` |
+| Repeat failure, then recovery | One state change each way — no repeat notification |
+| Tally unreachable | Diagnosed as "TallyPrime was not open" in plain words |
+| Export folder missing | Diagnosed by name rather than as an OS error |
+
+**Two defects found by inspecting the registered task, not by it failing:**
+`schtasks /SC MINUTE` defaults `DisallowStartIfOnBatteries` and
+`StopIfGoingOnBatteries` to **true**, so on a laptop — the normal case for this
+audience — the export would stop the moment the machine was unplugged, silently.
+The task is now registered from a full XML definition with both false, plus
+`StartWhenAvailable` and a one-hour `ExecutionTimeLimit` (with `IgnoreNew`, one
+hung run would otherwise block every later run for 72 hours). Verified on the
+live registration: `MultipleInstancesPolicy` is `IgnoreNew` as the docs claim,
+and the repetition carries no `Duration`, so it repeats indefinitely.
+
+Also confirmed while doing it: `schtasks /Create /XML` **requires UTF-16 with a
+BOM**. A UTF-8 file is refused with "The task XML is malformed. (1,40)::ERROR:
+unable to switch the encoding".
+
+**A third defect, and the only one that would have broken every install:**
+`dotenv` reads `.env` from the WORKING DIRECTORY, and Task Scheduler runs an
+action with the working directory set to `C:\Windows\System32`. So the task
+fired on the minute, exited 1, and reported "No export folder has been chosen
+yet" — every minute, forever, on a correctly configured install. No unit test
+could see it, because tests never run from another directory. `export.mjs` now
+loads the file by absolute path before importing the config module (`dotenv`
+runs at import time), `Run-Export.bat` sets its own working directory as a second
+guard, and four tests pin the behaviour.
+
+**Verified running unattended**, 2026-08-19 17:11-17:15: the registered task
+fired on the minute, found nothing changed twice in a row, and — when a second
+company (AgEx Pharma LLC) was opened in TallyPrime mid-session — picked it up on
+the next minute and exported it as a first run, without anyone touching Setup.
+
+**One real bug caught by the tests rather than in the field:** the fingerprint
+request is byte-identical every run, so the client's five-minute response cache
+served it from memory and the change check could not see a change for up to five
+minutes. It now passes `bypassCache`, and a test that deletes a voucher pins it.
+
+### Not done, and it gates the cadence
+
+**The `ALTERID` prerequisite is still unproven.** Item 6a in
+[next-steps.md](next-steps.md): `ALTERID` must move on every edit, including
+deletions, and proving that needs somebody at a TallyPrime screen —
+`node scripts/probe-alterid.mjs` on a scratch company, then alter / add / delete,
+comparing after each. **All three must report MOVED.** If any does not, set
+`TALLY_EXPORT_INTERVAL_MINUTES=60` and record it in
+[known-limitations.md](known-limitations.md). Until it is run, the every-minute
+cadence is built and defaulted but not validated.
+
+Also outstanding, and needing a person rather than code: the end-to-end Google
+Drive check (does the workbook appear in Drive, open in Sheets with numbers as
+numbers), the same-question-both-ways comparison against the live connector, the
+scheduled task running on the minute without overlapping, and the toast
+behaviour over ten minutes with the workbook left open.
 
 ---
 

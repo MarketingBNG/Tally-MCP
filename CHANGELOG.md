@@ -12,6 +12,69 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.7.0 — unreleased
+**New: your Tally data can now write itself to a spreadsheet, automatically.**
+Setup opens a folder picker — choose one inside Google Drive — and from then on a small
+job keeps an Excel workbook there up to date, one file per company, a tab per
+part of the books. Claude reads that workbook through the Google Drive
+connector.
+
+Three things this buys you:
+
+- **TallyPrime does not have to be open** for somebody to ask a question. The
+  spreadsheet is already there.
+- **You get a real spreadsheet**, not figures retyped out of a chat.
+- **Conversations get cheaper.** With the connector switched off, you save about
+  12,000 tokens of every conversation that went on describing tools you were not
+  using. Setup now offers to leave the connector off for exactly this reason —
+  and turning it back on is just running Setup again.
+
+**It only writes when the books change.** The job wakes once an hour and asks
+TallyPrime one cheap question — has anything moved? — which takes about a fifth
+of a second. Only when the answer is yes does it do the real work. It also
+exports once a day regardless, so the file can never quietly go stale while
+looking current.
+
+The machinery is fast enough to run every minute, and that is the intended
+cadence. It ships hourly because the "has anything moved?" check relies on
+TallyPrime marking every edit — including a DELETED voucher — and that has not
+yet been confirmed at a real TallyPrime screen. If it turned out not to hold,
+a minute-by-minute job could skip exports while your books were changing, and
+the spreadsheet would look current while being out of date. Hourly is only
+slower. Once it is confirmed, the interval line in the .env file goes to 1.
+
+**Read the Manifest tab first.** It carries the things the connector used to say
+out loud: which company these figures are, what currency and how we know, what
+period is covered, when it was last read, which voucher flags to exclude before
+totalling anything, and every warning TallyPrime produced. Without it the
+workbook is a pile of numbers with no context.
+
+**Two limits worth knowing:**
+
+- **It goes back as far as your books do.** Not just this year: on one real
+  company the spreadsheet went from 284 vouchers to 2,738 across five years.
+  Earlier years take longer to fetch, which is why an export can run for a
+  couple of minutes when the books have changed.
+- **The statements are still this year only.** Trial balance, profit and loss
+  and balance sheet cover the current book year, because TallyPrime will not
+  honour any other end date. The Manifest says which period each part covers,
+  so do not tie a trial balance to the full voucher history.
+- **"As at", not "now".** Every answer from the spreadsheet is as at the last
+  successful export. If a figure is going into an audit file, check it against
+  the live connector first.
+
+**Do not use File → Save as Google Sheets** on the workbook. That makes a
+separate copy the job will never touch again — it looks live and is frozen. Open
+the .xlsx directly; Google Sheets reads it with the tabs intact.
+
+**It runs invisibly.** Nothing pops up on screen while you work — the
+background job has no window. Double-click `Run-Export` yourself when you
+actually want to watch one happen.
+
+Also in this release: `Run-Export` in your folder exports on demand, and
+`Check-Tally` now reports how old the spreadsheet is and whether the last run
+worked.
+
 ## 0.6.0 — 2026-08-18
 **New: you can now ask which entries were written long after the date they
 carry.** `tally_test_vouchers` has an eighth test, `late_entry`. It lists

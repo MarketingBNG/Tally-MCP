@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Builds the distributable zip that accountants unzip and run Setup from.
 
@@ -11,6 +11,8 @@
       TallyPrime for Claude\
         Setup.bat              <- they double-click this once
         Check-Tally.bat        <- they double-click this when something is wrong
+        Run-Export.bat         <- double-click to export now, and watch it run
+        Run-Export-Hidden.vbs  <- what the scheduled task runs, with no window
         READ ME FIRST.txt
         node\node.exe          <- bundled runtime
         dist\                  <- the built server
@@ -105,6 +107,10 @@ Copy-Item (Join-Path $InstallerDir 'scripts') (Join-Path $PayloadDir 'scripts') 
 
 Copy-Item (Join-Path $InstallerDir 'Setup.bat') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'Check-Tally.bat') $PayloadDir
+Copy-Item (Join-Path $InstallerDir 'Run-Export.bat') $PayloadDir
+# The scheduled task points at this. Without it the task falls back to the .bat
+# and flashes a console window every minute -- see launcherFor in exportSetup.mjs.
+Copy-Item (Join-Path $InstallerDir 'Run-Export-Hidden.vbs') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'READ ME FIRST.txt') $PayloadDir
 Copy-Item (Join-Path $RepoRoot 'package.json') $PayloadDir
 Copy-Item (Join-Path $RepoRoot 'LICENSE') $PayloadDir
