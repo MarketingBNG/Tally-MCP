@@ -102,27 +102,43 @@ New-Item -ItemType Directory -Path $PayloadDir -Force | Out-Null
 # installer\ is flattened into the payload root here — see the note above.
 Write-Step 'Copying the server'
 $InstallerDir = $PSScriptRoot
-Copy-Item (Join-Path $RepoRoot 'dist') (Join-Path $PayloadDir 'dist') -Recurse
-Copy-Item (Join-Path $InstallerDir 'scripts') (Join-Path $PayloadDir 'scripts') -Recurse
 
+# THE app\ LAYER IS WHAT MAKES UPDATES POSSIBLE.
+#
+# Everything that changes with a version goes in app\; everything durable stays
+# at the payload root. An update is then a folder rename -- app.next\ becomes
+# app\ -- rather than an edit to claude_desktop_config.json, and the user's .env
+# and scheduled task are untouched because they live a level above.
+# See installer/launch.mjs and installer/scripts/lib/update.mjs.
+$AppDir = Join-Path $PayloadDir 'app'
+New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
+
+Copy-Item (Join-Path $RepoRoot 'dist') (Join-Path $AppDir 'dist') -Recurse
+Copy-Item (Join-Path $InstallerDir 'scripts') (Join-Path $AppDir 'scripts') -Recurse
+Copy-Item (Join-Path $RepoRoot 'package.json') $AppDir
+
+# Stable: the launchers a user double-clicks, the runtime, and the indirection
+# Claude Desktop is pointed at. Their paths must never change across versions.
 Copy-Item (Join-Path $InstallerDir 'Setup.bat') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'Check-Tally.bat') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'Run-Export.bat') $PayloadDir
 # The scheduled task points at this. Without it the task falls back to the .bat
-# and flashes a console window every minute -- see launcherFor in exportSetup.mjs.
+# and flashes a console window on every run -- see launcherFor in exportSetup.mjs.
 Copy-Item (Join-Path $InstallerDir 'Run-Export-Hidden.vbs') $PayloadDir
+Copy-Item (Join-Path $InstallerDir 'launch.mjs') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'READ ME FIRST.txt') $PayloadDir
-Copy-Item (Join-Path $RepoRoot 'package.json') $PayloadDir
 Copy-Item (Join-Path $RepoRoot 'LICENSE') $PayloadDir
 
 # package.ps1 is a developer tool and must never reach a user's folder. It lives
 # beside scripts\ rather than inside it, so this is belt-and-braces.
-Remove-Item (Join-Path $PayloadDir 'scripts\package.ps1') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $AppDir 'scripts\package.ps1') -Force -ErrorAction SilentlyContinue
 
 # --- Production dependencies ----------------------------------------------
+# Into app\, beside the package.json that declares them, so node_modules travels
+# with the version that was tested against it.
 Write-Step 'Installing production dependencies'
-Copy-Item (Join-Path $RepoRoot 'package-lock.json') $PayloadDir
-Push-Location $PayloadDir
+Copy-Item (Join-Path $RepoRoot 'package-lock.json') $AppDir
+Push-Location $AppDir
 try {
   npm ci --omit=dev --ignore-scripts
   if ($LASTEXITCODE -ne 0) { throw 'npm ci failed while assembling the release.' }
@@ -130,7 +146,7 @@ try {
   Pop-Location
 }
 # The lockfile was only needed for that install.
-Remove-Item (Join-Path $PayloadDir 'package-lock.json') -Force
+Remove-Item (Join-Path $AppDir 'package-lock.json') -Force
 
 # --- Bundled Node runtime -------------------------------------------------
 if ($SkipRuntime) {
@@ -176,7 +192,7 @@ $probeCheck = & $smokeNode -e @"
 import('file:///' + process.argv[1].replace(/\\/g, '/'))
   .then((m) => { if (typeof m.probeTally !== 'function') { process.exit(3); } })
   .catch(() => process.exit(4));
-"@ (Join-Path $PayloadDir 'scripts\lib\probe.mjs')
+"@ (Join-Path $AppDir 'scripts\lib\probe.mjs')
 if ($LASTEXITCODE -ne 0) { throw "The assembled folder could not load its own code (exit $LASTEXITCODE)." }
 Write-Note 'The shipped folder loads correctly.'
 
@@ -188,9 +204,24 @@ Compress-Archive -Path $PayloadDir -DestinationPath $ZipPath -CompressionLevel O
 $sizeMb = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
 $hash = (Get-FileHash $ZipPath -Algorithm SHA256).Hash
 
+# --- Checksum file --------------------------------------------------------
+# UPLOAD THIS ALONGSIDE THE ZIP. An installed copy refuses to unpack a download
+# whose digest it cannot verify, so a release published without this file is one
+# that no existing install will update to -- deliberately, because the
+# alternative is unverified code running against somebody's books. See
+# CHECKSUM_ASSET in installer/scripts/lib/update.mjs.
+$SumsPath = Join-Path $ReleaseDir 'SHA256SUMS.txt'
+"$($hash.ToLower())  $(Split-Path $ZipPath -Leaf)" |
+  Set-Content -Path $SumsPath -Encoding ascii
+
 Write-Step 'Done'
 Write-Host "    $ZipPath" -ForegroundColor Green
 Write-Note "$sizeMb MB"
 Write-Note "SHA256 $hash"
+Write-Host ''
+Write-Host ''
+Write-Host "    $SumsPath" -ForegroundColor Green
+Write-Note 'Attach BOTH files to the GitHub release. Without SHA256SUMS.txt no'
+Write-Note 'existing install will update itself to this version.'
 Write-Host ''
 Write-Note 'Before sending it out, unzip it somewhere clean and run Setup.bat once.'

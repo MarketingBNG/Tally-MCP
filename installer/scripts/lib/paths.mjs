@@ -108,3 +108,51 @@ export function packageRootFor(moduleUrl) {
   const here = dirname(fileURLToPath(moduleUrl));
   return findPackageRoot(here) ?? here;
 }
+
+/**
+ * The folder that survives an update, as opposed to the one that is replaced.
+ *
+ * An install that can update itself keeps the versioned payload in `app\` and
+ * everything durable one level above it:
+ *
+ *   TallyPrime for Claude/        <- the INSTALL root: stable across versions
+ *     Setup.bat, node/, launch.mjs
+ *     .env                        <- the user's settings
+ *     run-log.txt, update-state.json
+ *     app/                        <- the PACKAGE root: replaced on every update
+ *       package.json, dist/, scripts/, node_modules/
+ *
+ * The distinction is not cosmetic. `.env` holds the export folder somebody chose
+ * and the schedule they agreed to; if it lived inside `app\` every update would
+ * silently reset it, the exporter would come back up with no folder configured,
+ * and the workbook would stop refreshing while still sitting there looking
+ * current. So state is addressed from here and code from `packageRootFor`.
+ *
+ * A source checkout and an older flat install have no `app\` layer, and there
+ * the two roots are the same folder — which is why this is derived rather than
+ * assumed.
+ *
+ * @param {string} moduleUrl Pass `import.meta.url` from the calling module.
+ * @returns {string} The stable install root.
+ */
+export function installRootFor(moduleUrl) {
+  return installRootOf(packageRootFor(moduleUrl));
+}
+
+/**
+ * The install root for a known package root.
+ *
+ * Separate from `installRootFor` so it can be tested without a real module on
+ * disk, and so a caller that already resolved its package root does not resolve
+ * it twice.
+ *
+ * @param {string} packageRoot
+ * @returns {string}
+ */
+export function installRootOf(packageRoot) {
+  const name = packageRoot.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  // `app.next` appears here only if something ran a staged payload in place,
+  // which nothing should — but resolving it to the same root is the harmless
+  // answer, and pointing at a folder inside the payload is not.
+  return name === 'app' || name === 'app.next' ? dirname(packageRoot) : packageRoot;
+}

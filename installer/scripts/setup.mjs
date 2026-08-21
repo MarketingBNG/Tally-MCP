@@ -4,7 +4,7 @@ import { createInterface } from 'node:readline';
 import { mergeServerIntoConfig, isPlainObject } from './lib/configMerge.mjs';
 import { probeTally } from './lib/probe.mjs';
 import { explainProbe } from './lib/explain.mjs';
-import { packageRootFor, isTemporaryLocation } from './lib/paths.mjs';
+import { installRootFor, packageRootFor, isTemporaryLocation } from './lib/paths.mjs';
 import {
   codexConfigPath,
   isClaudeInstalled,
@@ -42,7 +42,24 @@ import {
  */
 
 const PACKAGE_ROOT = packageRootFor(import.meta.url);
-const SERVER_ENTRY = join(PACKAGE_ROOT, 'dist', 'index.js');
+// Settings, the scheduled task and the launcher live here and survive updates;
+// the code under PACKAGE_ROOT is replaced by them. See lib/paths.mjs.
+const INSTALL_ROOT = installRootFor(import.meta.url);
+
+/**
+ * What Claude Desktop is pointed at.
+ *
+ * `launch.mjs` where the install has one, and the server itself where it does
+ * not. The indirection is what lets a new version arrive without editing
+ * claude_desktop_config.json again — see installer/launch.mjs. Rewriting that
+ * config is the step in this whole install most likely to go wrong, so doing it
+ * once rather than once per release is a real reduction in risk.
+ *
+ * A source checkout has no launcher, and pointing straight at dist/index.js
+ * there is exactly what a developer wants.
+ */
+const LAUNCHER = join(INSTALL_ROOT, 'launch.mjs');
+const SERVER_ENTRY = existsSync(LAUNCHER) ? LAUNCHER : join(PACKAGE_ROOT, 'dist', 'index.js');
 
 const DEFAULT_ENV = {
   TALLY_HOST: '127.0.0.1',
@@ -286,8 +303,8 @@ async function configureExport(companiesOpen) {
   };
   if (companies !== '') settings.TALLY_EXPORT_COMPANIES = companies;
 
-  const previousFolder = readEnvSetting(PACKAGE_ROOT, 'TALLY_EXPORT_FOLDER');
-  const envPath = writeEnvSettings(PACKAGE_ROOT, settings);
+  const previousFolder = readEnvSetting(INSTALL_ROOT, 'TALLY_EXPORT_FOLDER');
+  const envPath = writeEnvSettings(INSTALL_ROOT, settings);
   blank();
   line(`Settings saved to  ${envPath}`);
   blank();
@@ -310,7 +327,7 @@ async function configureExport(companiesOpen) {
 
   if (await confirm('Schedule it to run automatically?', true)) {
     const result = registerTask({
-      batPath: join(PACKAGE_ROOT, 'Run-Export.bat'),
+      batPath: join(INSTALL_ROOT, 'Run-Export.bat'),
       everyMinutes: 60,
     });
     if (result.ok) {
@@ -377,7 +394,7 @@ async function configureExport(companiesOpen) {
 async function chooseExportFolder() {
   // What it is set to now, so re-running Setup to change ONE other answer does
   // not mean re-finding a folder somebody chose weeks ago.
-  const current = readEnvSetting(PACKAGE_ROOT, 'TALLY_EXPORT_FOLDER');
+  const current = readEnvSetting(INSTALL_ROOT, 'TALLY_EXPORT_FOLDER');
 
   if (current !== null) {
     line('At the moment the spreadsheets go here:');

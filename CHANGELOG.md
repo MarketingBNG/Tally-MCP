@@ -12,6 +12,38 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.0 — unreleased
+**New: it updates itself. No more replacing folders by hand.**
+Until now a new version meant somebody emailing you a 42MB zip and talking you
+through swapping a folder over — so copies drifted, and one sat two versions
+behind for weeks without anyone noticing. From this version on, your copy checks
+once an hour whether a newer one has been published, downloads it quietly in the
+background, and starts using it **the next time you open Claude**.
+
+What you will see: one notification, once, saying a version is ready. Then
+nothing until you next restart Claude. `Check-Tally` tells you at any time which
+version you are on and whether one is waiting.
+
+**Why it waits for a restart rather than switching immediately.** Claude holds
+the connection open while it is running, so swapping underneath it is not
+possible — and would not be desirable anyway. If you quote a figure from the
+spreadsheet on Tuesday, which version produced it has to have an answer. Changing
+only when you restart makes that a moment you chose.
+
+**If an update is ever broken, your copy puts itself back.** The previous version
+is kept, not deleted. If a new one fails to start, the old one is restored
+automatically and the broken version is refused from then on — you keep a working
+tool without doing anything, and `Check-Tally` says what happened. A download that
+does not match its published checksum is discarded and never unpacked.
+
+**Your settings survive an update.** The export folder you chose, the schedule
+you agreed to, and your run history now live above the part that gets replaced,
+so an update cannot quietly reset them.
+
+**One last manual step, this once.** Self-updating needs the new folder layout,
+which an existing copy does not have. So this version has to be installed the old
+way — unzip and run Setup once. Every version after it arrives on its own.
+
 ## 0.7.0 — 2026-08-21
 **New: your Tally data can now write itself to a spreadsheet, automatically.**
 Setup opens a folder picker — choose one inside Google Drive — and from then on a small

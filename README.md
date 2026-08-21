@@ -890,6 +890,7 @@ from every client. `npm run check:build` answers the question directly, and
 npm version minor   # or patch / major
 git push --follow-tags
 powershell -ExecutionPolicy Bypass -File installer\package.ps1
+gh release create "v$(node -p "require('./package.json').version")"   "release/TallyPrime-for-Claude-$(node -p "require('./package.json').version").zip"   release/SHA256SUMS.txt --notes-from-tag
 ```
 
 `npm version` runs `verify` first, then stamps the `## <version> — unreleased`
@@ -897,6 +898,48 @@ heading in [CHANGELOG.md](CHANGELOG.md) with the released version and today's
 date, and includes it in the version commit. The version an install reports
 comes from `package.json`, so this keeps the number a user reads back during
 support and the notes describing it in the same commit.
+
+> **Attach BOTH assets, every time.** Installed copies update themselves from
+> the GitHub release, and they refuse to unpack a download whose SHA-256 they
+> cannot verify against `SHA256SUMS.txt`. A release published without that file
+> is one no existing install will take — which is the intended failure, since the
+> alternative is unverified code running against somebody's books. The packager
+> prints both paths and says the same thing.
+
+### How an installed copy updates itself
+
+The install is split so that a new version is a folder rename rather than a
+config edit:
+
+```
+TallyPrime for Claude/        <- stable; never replaced
+  Setup.bat, Check-Tally.bat, Run-Export.bat
+  node/node.exe               <- the bundled runtime
+  launch.mjs                  <- what Claude Desktop is pointed at
+  .env, update-state.json     <- the user's settings and update bookkeeping
+  app/                        <- replaced on every update
+    package.json, dist/, scripts/, node_modules/
+```
+
+- The hourly export task also asks GitHub whether a newer release exists
+  ([update.mjs](installer/scripts/lib/update.mjs)). If so it downloads it,
+  verifies the checksum, and unpacks it to `app.next/`. **Nothing touches the
+  running `app/`**, so a failed or corrupt update is a no-op rather than a
+  broken install.
+- [launch.mjs](installer/launch.mjs) promotes `app.next/` at the next Desktop
+  start — the one moment nothing holds the current version open — keeping the
+  old one as `app.previous/`.
+- If the promoted version cannot even be imported, the launcher restores the
+  previous one and records the bad version so the hourly check will not fetch it
+  again. A later release supersedes the refusal.
+
+Because `.env` lives above `app/`, an update cannot reset the export folder or
+the schedule. That matters more than it sounds: a reset would leave the exporter
+running with nothing configured, and the workbook would silently stop refreshing
+while still looking current.
+
+Self-updating requires this layout, so a copy predating it needs one manual
+reinstall. After that, releases arrive on their own.
 
 ## Contributing samples
 

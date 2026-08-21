@@ -29,7 +29,13 @@ if not exist "%NODE_EXE%" (
   set "NODE_EXE=node"
 )
 
-"%NODE_EXE%" "%HERE%scripts\doctor.mjs"
+rem The payload lives under app\ on an install that can update itself: the
+rem scripts move with each version while this .bat and node\ stay put. A source
+rem checkout has scripts\ beside this file instead, so both are accepted.
+set "SCRIPTS=%HERE%app\scripts"
+if not exist "%SCRIPTS%\doctor.mjs" set "SCRIPTS=%HERE%scripts"
+
+"%NODE_EXE%" "%SCRIPTS%\doctor.mjs"
 set "RESULT=%ERRORLEVEL%"
 
 if not "%RESULT%"=="0" pause

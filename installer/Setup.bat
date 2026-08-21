@@ -33,7 +33,13 @@ if not exist "%NODE_EXE%" (
   set "NODE_EXE=node"
 )
 
-"%NODE_EXE%" "%HERE%scripts\setup.mjs"
+rem The payload lives under app\ on an install that can update itself: the
+rem scripts move with each version while this .bat and node\ stay put. A source
+rem checkout has scripts\ beside this file instead, so both are accepted.
+set "SCRIPTS=%HERE%app\scripts"
+if not exist "%SCRIPTS%\setup.mjs" set "SCRIPTS=%HERE%scripts"
+
+"%NODE_EXE%" "%SCRIPTS%\setup.mjs"
 set "RESULT=%ERRORLEVEL%"
 
 rem setup.mjs pauses on its own when it has a console; this is the safety net for

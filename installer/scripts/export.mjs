@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { packageRootFor } from './lib/paths.mjs';
+import { installRootFor, packageRootFor } from './lib/paths.mjs';
 import { probeTally } from './lib/probe.mjs';
 import { loadEnvFile } from './lib/exportSetup.mjs';
 import { toast } from './lib/notify.mjs';
 import { explainProbe } from './lib/explain.mjs';
+import { checkForUpdate } from './lib/update.mjs';
 
 /**
  * The scheduled export.
@@ -44,6 +45,10 @@ import { explainProbe } from './lib/explain.mjs';
  */
 
 const PACKAGE_ROOT = packageRootFor(import.meta.url);
+// Settings, logs and the update marker live above the versioned payload, so an
+// update replaces the code without resetting what the user chose. See
+// installRootFor in lib/paths.mjs.
+const INSTALL_ROOT = installRootFor(import.meta.url);
 const QUIET = process.argv.includes('--quiet');
 const FORCE = process.argv.includes('--force');
 
@@ -65,7 +70,7 @@ async function main() {
   // BEFORE the config module is imported, because `dotenv` runs at import time
   // and looks in the working directory — which the scheduler sets to
   // System32, not to this folder. See loadEnvFile.
-  loadEnvFile(PACKAGE_ROOT);
+  loadEnvFile(INSTALL_ROOT);
 
   /*
    * A far longer report timeout than an interactive tool wants.
@@ -224,6 +229,59 @@ async function main() {
   }
 
   process.exitCode = failed.length > 0 ? 1 : 0;
+
+  // LAST, and deliberately after the exit code is set. Keeping the workbook
+  // current is this task's job; fetching a new version is a convenience, and it
+  // must never be the reason a successful export reports failure.
+  await maybeUpdate();
+}
+
+/**
+ * Check for a new version and stage it, once per run.
+ *
+ * Piggybacks on the export schedule rather than registering a second task: the
+ * machine already wakes for this, the check is one small HTTPS request, and a
+ * second scheduled task is a second thing that can be blocked by policy or
+ * silently disabled.
+ *
+ * Nothing here can fail the run. The check swallows its own errors, and this
+ * wrapper swallows anything it somehow did not — an install that cannot reach
+ * GitHub is an install that keeps working, not one that starts complaining.
+ */
+async function maybeUpdate() {
+  try {
+    const installed = installedVersion();
+    if (installed === null) return;
+
+    const result = await checkForUpdate({ packageRoot: INSTALL_ROOT, installed });
+
+    if (!QUIET) {
+      blank();
+      line(result.acted ? `Update ready: version ${result.staged}.` : `Update check: ${result.reason}`);
+    }
+
+    // Told once, when it happens, and never again — the staged marker stops the
+    // next run repeating it. A toast every hour about the same pending update is
+    // how somebody learns to ignore every toast this tool raises.
+    if (result.acted) {
+      toast(
+        'TallyPrime for Claude has an update ready',
+        `Version ${result.staged} will start being used the next time you open Claude.`
+      );
+    }
+  } catch {
+    // Best effort, as everywhere in this file.
+  }
+}
+
+/** The version of the payload currently running, or null if unreadable. */
+function installedVersion() {
+  try {
+    const manifest = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'));
+    return typeof manifest.version === 'string' ? manifest.version : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Import one of the built server's modules. */

@@ -4,7 +4,8 @@ import { createInterface } from 'node:readline';
 import { probeTally } from './lib/probe.mjs';
 import { explainProbe } from './lib/explain.mjs';
 import { isPlainObject, SERVER_KEY } from './lib/configMerge.mjs';
-import { packageRootFor, isTemporaryLocation } from './lib/paths.mjs';
+import { installRootFor, packageRootFor, isTemporaryLocation } from './lib/paths.mjs';
+import { readUpdateState } from './lib/update.mjs';
 import { buildFreshness } from './lib/buildFreshness.mjs';
 import { readEnvSetting, taskExists } from './lib/exportSetup.mjs';
 
@@ -22,13 +23,16 @@ import { readEnvSetting, taskExists } from './lib/exportSetup.mjs';
  */
 
 const PACKAGE_ROOT = packageRootFor(import.meta.url);
+// Settings and the update marker sit above the versioned payload. See paths.mjs.
+const INSTALL_ROOT = installRootFor(import.meta.url);
 
 async function main() {
   heading('TallyPrime for Claude — Check');
 
   // 1. Version and location. First question in every support conversation.
   line(`Version   ${readVersion()}`);
-  line(`Folder    ${PACKAGE_ROOT}`);
+  line(`Folder    ${INSTALL_ROOT}`);
+  reportPendingUpdate();
   blank();
 
   // Every problem found is recorded here, because the verdict at the bottom has
@@ -115,7 +119,7 @@ async function main() {
 function checkExport() {
   heading('The daily spreadsheet');
 
-  const folder = readEnvSetting(PACKAGE_ROOT, 'TALLY_EXPORT_FOLDER');
+  const folder = readEnvSetting(INSTALL_ROOT, 'TALLY_EXPORT_FOLDER');
   if (!folder) {
     line('Not set up. Claude will answer from TallyPrime directly, if the');
     line('connector is switched on.');
@@ -297,6 +301,34 @@ function claudeConfigPath() {
     return join(profile, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json');
   }
   return null;
+}
+
+/**
+ * Say whether a newer version is already downloaded and waiting.
+ *
+ * Worth a line here because it answers a support question before it is asked:
+ * somebody told an update was ready, who then reopens Claude and sees the old
+ * version number, needs to know whether the update failed or whether Claude was
+ * never actually restarted.
+ */
+function reportPendingUpdate() {
+  const state = readUpdateState(INSTALL_ROOT);
+
+  if (state.staged !== null) {
+    line(`Update    ${state.staged} is downloaded and waiting.`);
+    line('          Close Claude completely and reopen it to start using it.');
+    return;
+  }
+  if (state.refuse !== null) {
+    // A version that was tried and rolled back. Said plainly: this is the one
+    // case where staying on an older version is deliberate.
+    line(`Update    version ${state.refuse} would not start and was undone.`);
+    line('          This copy is still working. The next release will replace it.');
+    return;
+  }
+  if (state.lastFailure !== null) {
+    line(`Update    last check could not complete: ${state.lastFailure}`);
+  }
 }
 
 function readVersion() {
