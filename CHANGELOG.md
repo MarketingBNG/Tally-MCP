@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.8.0 — unreleased
+## 0.8.0 — 2026-08-21
 **New: it updates itself. No more replacing folders by hand.**
 Until now a new version meant somebody emailing you a 42MB zip and talking you
 through swapping a folder over — so copies drifted, and one sat two versions
