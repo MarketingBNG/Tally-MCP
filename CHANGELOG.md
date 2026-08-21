@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.7.0 — unreleased
+## 0.7.0 — 2026-08-21
 **New: your Tally data can now write itself to a spreadsheet, automatically.**
 Setup opens a folder picker — choose one inside Google Drive — and from then on a small
 job keeps an Excel workbook there up to date, one file per company, a tab per
