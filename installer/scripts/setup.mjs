@@ -210,8 +210,43 @@ async function main() {
   }
   blank();
 
-  heading('Last step');
   const configured = results.filter((result) => result.ok).map((result) => result.app);
+
+  /*
+   * What you now have, in four lines you cannot skim past.
+   *
+   * Every failure this install has actually produced was INVISIBLE rather than
+   * unhandled: a connector that was never switched on, a settings file written
+   * for the wrong user, an export nobody set up. Setup explained each of those
+   * in prose above, and prose above is exactly what somebody scrolls past when
+   * they are expecting the word "done".
+   *
+   * So the state is restated as a table at the end, including the NOTs. A line
+   * saying "Claude Desktop  NOT SET UP" is the one thing that would have caught
+   * every one of those failures at the moment it happened, rather than days
+   * later on somebody else's machine.
+   */
+  heading('What you now have');
+  const status = (label, on, detail) =>
+    line(`${label.padEnd(22)}${(on ? 'YES' : 'NOT SET UP').padEnd(12)}${detail}`);
+
+  status('Claude Desktop', configured.includes('Claude Desktop'), '');
+  status('Codex', configured.includes('Codex'), '');
+  status(
+    'Spreadsheet export',
+    exportChoice.folder !== undefined && exportChoice.folder !== null,
+    exportChoice.folder ?? ''
+  );
+  status('Runs by itself', exportChoice.scheduled === true, exportChoice.scheduled === true ? 'once an hour' : '');
+  blank();
+
+  if (!configured.includes('Claude Desktop')) {
+    line('Claude will NOT see your Tally data. To change that, run Setup again');
+    line('and answer Yes to the connector question.');
+    blank();
+  }
+
+  heading('Last step');
 
   if (configured.includes('Claude Desktop')) {
     line('Close Claude Desktop completely, then open it again.');
@@ -273,7 +308,7 @@ async function configureExport(companiesOpen) {
     line('Skipped: the automatic spreadsheet export needs someone at the keyboard');
     line('to choose a folder. Run Setup again from a window to set it up.');
     blank();
-    return { wantsConnector: true };
+    return { wantsConnector: true, folder: null, scheduled: false };
   }
 
   heading('The daily spreadsheet');
@@ -288,7 +323,7 @@ async function configureExport(companiesOpen) {
   if (!(await confirm('Set up the automatic spreadsheet export?', true))) {
     line('Skipped. Nothing was scheduled.');
     blank();
-    return { wantsConnector: true };
+    return { wantsConnector: true, folder: null, scheduled: false };
   }
 
   const folder = await chooseExportFolder();
@@ -297,7 +332,7 @@ async function configureExport(companiesOpen) {
     line('No folder chosen, so the export was not set up. Run Setup again when you');
     line('know where you want it.');
     blank();
-    return { wantsConnector: true };
+    return { wantsConnector: true, folder: null, scheduled: false };
   }
 
   // Shown back, spelled the way Tally spells them, so a typed name matches.
@@ -352,11 +387,13 @@ async function configureExport(companiesOpen) {
   line('it is.');
   blank();
 
+  let scheduled = false;
   if (await confirm('Schedule it to run automatically?', true)) {
     const result = registerTask({
       batPath: join(INSTALL_ROOT, 'Run-Export.bat'),
       everyMinutes: 60,
     });
+    scheduled = result.ok;
     if (result.ok) {
       line('Scheduled. It runs while you are logged on, which is also when');
       line('TallyPrime is open.');
@@ -401,7 +438,9 @@ async function configureExport(companiesOpen) {
   blank();
 
   const wantsConnector = await confirm('Switch the Tally connector on as well?', false);
-  return { wantsConnector };
+  // folder and scheduled travel back so the summary at the end can state what
+  // actually happened rather than what was offered.
+  return { wantsConnector, folder, scheduled };
 }
 
 /**

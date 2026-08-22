@@ -12,6 +12,12 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.5 — unreleased
+**Setup now ends with a summary of what it actually did**, including what it did
+NOT do. Every problem this install has caused was invisible rather than broken —
+a connector never switched on, an export nobody set up — and a four-line summary
+you cannot skim past is what catches that at the time rather than days later.
+
 ## 0.8.4 — 2026-08-22
 **You are now told when an update has been APPLIED, not only when one is
 waiting.** A note naming the version now in use appears in the install folder,
