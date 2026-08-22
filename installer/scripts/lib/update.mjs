@@ -176,10 +176,13 @@ export function digestFor(sumsText, fileName) {
   return null;
 }
 
-/** The layout an install has once it can update itself. See launch.mjs. */
+/**
+ * The two folder names this module needs. `app.previous` is deliberately absent:
+ * rollback is launch.mjs's job and it owns that name, so declaring it here as
+ * well would invite the two to drift apart.
+ */
 export const APP = 'app';
 export const NEXT = 'app.next';
-export const PREVIOUS = 'app.previous';
 
 /** Where the staged-version marker lives, beside the folders it describes. */
 export function statePath(packageRoot) {

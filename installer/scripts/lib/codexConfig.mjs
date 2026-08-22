@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { claudeConfigCandidates } from './paths.mjs';
 
@@ -165,26 +165,3 @@ export function isClaudeInstalled(env = process.env) {
   return env.LOCALAPPDATA ? existsSync(join(env.LOCALAPPDATA, 'AnthropicClaude')) : false;
 }
 
-/**
- * Best-effort path to codex.exe, for the "now restart it" instruction only.
- *
- * Nothing depends on finding it — the config is written directly. It is worth
- * looking because the desktop build hides it behind a per-version hash, so a
- * user told to "run codex" may not have it on PATH at all.
- */
-export function findCodexExecutable(env = process.env) {
-  const local = env.LOCALAPPDATA;
-  if (!local) return null;
-  const binRoot = join(local, 'OpenAI', 'Codex', 'bin');
-  if (!existsSync(binRoot)) return null;
-
-  try {
-    for (const entry of readdirSync(binRoot)) {
-      const candidate = join(binRoot, entry, 'codex.exe');
-      if (existsSync(candidate)) return candidate;
-    }
-  } catch {
-    // Unreadable directory is not an error: this is a convenience lookup.
-  }
-  return null;
-}
