@@ -91,6 +91,35 @@ function isCompletePayload(dir) {
 }
 
 /**
+ * Rename, retrying briefly through the locks Windows hands out at random.
+ *
+ * Observed while testing promotion: EPERM renaming a folder that had just been
+ * written, with nothing actually using it. Antivirus and the search indexer both
+ * open freshly created files for a moment, and a rename during that window fails
+ * even though nothing is wrong. Measured to clear well inside a second.
+ *
+ * Without this, a promotion loses the race, gives up, and the update simply does
+ * not happen — which looks exactly like an update that was never downloaded, and
+ * would recur every restart on a machine with an eager scanner.
+ *
+ * Synchronous by necessity: this runs before the server starts, and the whole
+ * point is that no other code touches these folders in between.
+ */
+function renameWithRetry(from, to, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      const transient = error?.code === 'EPERM' || error?.code === 'EBUSY' || error?.code === 'EACCES';
+      if (!transient || attempt >= attempts) throw error;
+      // 100ms, 200ms, 300ms, 400ms. Blocking, and deliberately so.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, attempt * 100);
+    }
+  }
+}
+
+/**
  * Promote a staged payload, if there is one.
  *
  * Returns the version string promoted, or null. Every failure path leaves the
@@ -123,13 +152,13 @@ function promote() {
   // A staged folder with no app/ beside it should be impossible, but promoting
   // into a gap is the one case where a crash leaves nothing runnable at all.
   if (!existsSync(APP)) {
-    renameSync(NEXT, APP);
+    renameWithRetry(NEXT, APP);
     return 'restored';
   }
 
   try {
     rmSync(PREVIOUS, { recursive: true, force: true });
-    renameSync(APP, PREVIOUS);
+    renameWithRetry(APP, PREVIOUS);
   } catch (error) {
     // Something still holds the current install — most likely an export that is
     // mid-run. Nothing has moved, so leaving it for the next start is safe.
@@ -138,10 +167,10 @@ function promote() {
   }
 
   try {
-    renameSync(NEXT, APP);
+    renameWithRetry(NEXT, APP);
   } catch (error) {
     // Put it back rather than leave the install headless.
-    renameSync(PREVIOUS, APP);
+    renameWithRetry(PREVIOUS, APP);
     note(`update failed, kept the current version: ${String(error?.message ?? error)}`);
     return null;
   }
@@ -150,23 +179,47 @@ function promote() {
 }
 
 /**
- * Remove the "UPDATE READY" note once the update it describes has been applied.
+ * Say what version is now in use, in a way that outlives a missed notification.
  *
- * Written by the updater so the news survives a suppressed notification; removed
- * here so the folder does not keep telling somebody to restart for a version
- * they are already running. Duplicated rather than imported from the payload for
- * the same reason as isCompletePayload: this must work even if the payload is
- * the thing that is broken.
+ * A version change is not a detail here. Figures an accountant cited last week
+ * came out of a particular version, so the moment it changes has to be visible
+ * afterwards, not only in a banner that may have been suppressed. One file,
+ * replaced each time rather than accumulated, beside Setup and Check-Tally.
+ *
+ * @param {string} name File name to write.
+ * @param {string[]} lines Body, one line each.
  */
-function clearUpdateMarkers() {
+function writeNote(name, lines) {
   try {
-    for (const name of readdirSync(ROOT)) {
-      if (/^UPDATE READY - version .*\.txt$/.test(name)) {
-        rmSync(join(ROOT, name), { force: true });
+    clearNotes();
+    writeFileSync(join(ROOT, name), `${lines.join('\r\n')}\r\n`, 'utf-8');
+  } catch {
+    // A note is never worth failing a launch over.
+  }
+}
+
+/** Remove every note this install writes, so only the newest is ever present. */
+function clearNotes() {
+  try {
+    for (const entry of readdirSync(ROOT)) {
+      if (/^(UPDATE READY|UPDATED|UPDATE FAILED) - .*\.txt$/.test(entry)) {
+        rmSync(join(ROOT, entry), { force: true });
       }
     }
   } catch {
     // A stale note is untidy, never harmful.
+  }
+}
+
+/** Raise a notification without blocking the launch. Best effort throughout. */
+async function notify(title, message) {
+  try {
+    const { toastDetached } = await import(
+      pathToFileURL(join(APP, 'scripts', 'lib', 'notify.mjs')).href
+    );
+    toastDetached(title, message);
+  } catch {
+    // The note on disk carries the same news and needs no Windows API.
   }
 }
 
@@ -208,12 +261,25 @@ function syncBootFiles() {
   }
 }
 
-/** Import a payload's server, or null if it cannot even be loaded. */
-async function start(payloadDir) {
+/**
+ * Import a payload's server.
+ *
+ * `attempt` exists for the rollback path, and it is not decoration. Node caches
+ * a module by its resolved URL — INCLUDING one that threw — so after a rollback
+ * puts the previous version back at the same path, a plain re-import replays the
+ * cached rejection rather than loading the file now on disk. The server would
+ * stay down until somebody restarted Claude a second time, which is precisely
+ * the manual step the rollback exists to avoid. A query suffix makes it a
+ * different URL and therefore a fresh load.
+ *
+ * Measured: without the suffix the restored version failed to start every time.
+ */
+async function start(payloadDir, attempt = 0) {
   const entry = join(payloadDir, 'dist', 'index.js');
   if (!existsSync(entry)) return { ok: false, error: `no server at ${entry}` };
   try {
-    await import(pathToFileURL(entry).href);
+    const url = pathToFileURL(entry).href + (attempt > 0 ? `?reload=${String(attempt)}` : '');
+    await import(url);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: String(error?.stack ?? error) };
@@ -294,9 +360,27 @@ if (promoted !== null) {
   patchState({ staged: null, stagedAt: null, promotedAt: new Date().toISOString() });
   // After promotion, so the launchers on disk match the version now active.
   syncBootFiles();
-  // The "an update is waiting" note has served its purpose. Leaving it would
-  // have somebody quitting Claude a second time to apply something already applied.
-  clearUpdateMarkers();
+
+  // Told, not just done. The "waiting" note is replaced by one naming the
+  // version now in use — otherwise the only evidence a version changed is the
+  // number in Check-Tally, which nobody thinks to compare against yesterday's.
+  const now = readVersion(APP);
+  writeNote(`UPDATED - now on version ${now ?? 'unknown'}.txt`, [
+    `TallyPrime for Claude has updated itself to version ${now ?? 'unknown'}.`,
+    '',
+    'Nothing needs doing. This note is here so the change is not invisible:',
+    'if you are checking a figure against one you took out earlier, it may have',
+    'come from the previous version.',
+    '',
+    'What changed in each version is listed at:',
+    '  https://github.com/MarketingBNG/Tally-MCP/blob/main/CHANGELOG.md',
+    '',
+    'This file is replaced by the next update and can be deleted at any time.',
+  ]);
+  void notify(
+    'TallyPrime for Claude has updated',
+    `Now running version ${now ?? 'a newer version'}. Nothing to do.`
+  );
 }
 
 let started = await start(APP);
@@ -313,10 +397,30 @@ if (!started.ok && promoted === 'promoted' && existsSync(PREVIOUS)) {
 
   // Remember what failed, so the hourly check does not download it again on a
   // loop and re-break the install every restart.
-  patchState({ rolledBackAt: new Date().toISOString(), refuse: readVersion(broken) });
+  const failedVersion = readVersion(broken);
+  patchState({ rolledBackAt: new Date().toISOString(), refuse: failedVersion });
   rmSync(broken, { recursive: true, force: true });
 
-  started = await start(APP);
+  // The MOST important of these to say out loud. Everything still works, but on
+  // the older version, and somebody expecting a fix that shipped in the newer
+  // one needs to know it is not there.
+  const kept = readVersion(APP);
+  writeNote(`UPDATE FAILED - staying on version ${kept ?? 'unknown'}.txt`, [
+    `Version ${failedVersion ?? 'a new version'} would not start, so it was undone.`,
+    '',
+    `This copy is working normally on version ${kept ?? 'the previous version'}.`,
+    'Nothing is broken and nothing needs doing.',
+    '',
+    'That version will not be tried again. The next release replaces it.',
+    'If you were waiting on something that was supposed to arrive in it, tell',
+    'whoever set this up for you and show them this file.',
+  ]);
+  void notify(
+    'TallyPrime for Claude: update undone',
+    `Version ${failedVersion ?? 'the new version'} would not start. Still working on ${kept ?? 'the previous version'}.`
+  );
+
+  started = await start(APP, 1);
 }
 
 if (!started.ok) {

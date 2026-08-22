@@ -12,6 +12,21 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.4 — unreleased
+**You are now told when an update has been APPLIED, not only when one is
+waiting.** A note naming the version now in use appears in the install folder,
+because a figure you took out last week may have come from the previous version
+and that should not be invisible. It replaces itself each time and can be
+deleted whenever you like.
+
+**If a new version will not start, it is undone and you are told that too** — in
+plain words, saying that nothing is broken and which version you are still on.
+
+**Two problems found by testing this against a real machine:** an update could
+fail to install because Windows had briefly locked the folder (antivirus and the
+search indexer both do this), and after an update was undone the connection
+would not come back until Claude was restarted a second time. Both fixed.
+
 ## 0.8.3 — 2026-08-22
 **You now get told when an update is ready, even if you never set up the
 spreadsheet.** Previously that notification only came from the spreadsheet job,
