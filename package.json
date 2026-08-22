@@ -38,7 +38,8 @@
     "preversion": "npm run verify && npm run check:build",
     "version": "node scripts/stamp-changelog.mjs && git add CHANGELOG.md",
     "postversion": "node -e \"console.log('\\nTagged v' + process.env.npm_package_version + '. Push it with:  git push --follow-tags\\nThen build a release with:  powershell -ExecutionPolicy Bypass -File installer\\\\package.ps1\\n')\"",
-    "verify:ship": "npm run verify && npm run check:build"
+    "verify:ship": "npm run verify && npm run check:build",
+    "prove:alterid": "node scripts/prove-alterid.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
