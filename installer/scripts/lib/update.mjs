@@ -355,17 +355,60 @@ export async function stageUpdate({ packageRoot, release, fetchImpl = fetch }) {
  * Returns a small record for the run log. `acted` is true only when something
  * new is now waiting on disk, which is what decides whether the user is told.
  */
-export async function checkForUpdate({ packageRoot, installed, fetchImpl = fetch, now = new Date() }) {
+export async function checkForUpdate({
+  packageRoot,
+  installed,
+  fetchImpl = fetch,
+  now = new Date(),
+  minIntervalMinutes = 0,
+}) {
   const state = readUpdateState(packageRoot);
+
+  /*
+   * Two callers now ask this question: the hourly export task, and the server at
+   * Desktop startup. Both are wanted — the startup one is the only thing that
+   * reaches an install where the export was never scheduled — but without a
+   * floor between them, opening Claude just after the task ran would download
+   * the same 40MB twice.
+   *
+   * A timestamp is the whole mechanism. It is deliberately not a lock: the cost
+   * of the rare double-check is one wasted download, and the cost of a stale
+   * lock file is an install that stops updating forever.
+   */
+  if (minIntervalMinutes > 0 && state.lastCheckedAt !== null) {
+    const since = (now.getTime() - Date.parse(state.lastCheckedAt)) / 60000;
+    if (Number.isFinite(since) && since >= 0 && since < minIntervalMinutes) {
+      return { acted: false, reason: 'checked recently' };
+    }
+  }
 
   try {
     const response = await fetchImpl(RELEASES_API, {
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'tally-mcp-updater' },
     });
-    if (!response.ok) return { acted: false, reason: `release check failed (HTTP ${String(response.status)})` };
+    /*
+     * Stamp the clock whenever GitHub actually ANSWERED, including when the
+     * answer is useless — an HTTP error, or a release published without its
+     * checksum file. Without this the interval never engages on those paths and
+     * every startup re-asks, which is the one way this could become a nuisance
+     * to somebody who has done nothing wrong.
+     *
+     * A network that could not be reached at all is deliberately NOT stamped:
+     * that is a laptop on a train, and it should check again as soon as it can
+     * rather than sitting out the next hour.
+     */
+    const stamp = () => writeUpdateState(packageRoot, { ...state, lastCheckedAt: now.toISOString() });
+
+    if (!response.ok) {
+      stamp();
+      return { acted: false, reason: `release check failed (HTTP ${String(response.status)})` };
+    }
 
     const release = parseRelease(await response.json());
-    if (release === null) return { acted: false, reason: 'no usable release published' };
+    if (release === null) {
+      stamp();
+      return { acted: false, reason: 'no usable release published' };
+    }
 
     const decision = chooseUpdate({
       installed,
@@ -373,7 +416,12 @@ export async function checkForUpdate({ packageRoot, installed, fetchImpl = fetch
       staged: state.staged,
       refuse: state.refuse,
     });
-    if (!decision.act) return { acted: false, reason: decision.reason, latest: release.version };
+    if (!decision.act) {
+      // Stamped even when there is nothing to do — otherwise the interval above
+      // never engages on a healthy install, which is the common case.
+      stamp();
+      return { acted: false, reason: decision.reason, latest: release.version };
+    }
 
     const result = await stageUpdate({ packageRoot, release, fetchImpl });
     if (result.error !== undefined) {

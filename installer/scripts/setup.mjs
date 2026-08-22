@@ -1,10 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { mergeServerIntoConfig, isPlainObject } from './lib/configMerge.mjs';
 import { probeTally } from './lib/probe.mjs';
 import { explainProbe } from './lib/explain.mjs';
-import { installRootFor, packageRootFor, isTemporaryLocation } from './lib/paths.mjs';
+import {
+  claudeConfigTargets,
+  installRootFor,
+  isWritable,
+  packageRootFor,
+  isTemporaryLocation,
+} from './lib/paths.mjs';
 import {
   codexConfigPath,
   isClaudeInstalled,
@@ -72,8 +78,29 @@ async function main() {
 
   const version = readVersion();
   line(`Version ${version}`);
-  line(`Folder  ${PACKAGE_ROOT}`);
+  line(`Folder  ${INSTALL_ROOT}`);
   blank();
+
+  // FIRST, before the folder check even: an elevated run would configure a
+  // different user's Claude and report success. See isElevated.
+  if (isElevated()) return fail(elevationBlock());
+
+  // Write access, tested rather than guessed from the path. Without it Setup
+  // fails partway and no update could ever land. See isWritable.
+  if (!isWritable(INSTALL_ROOT)) {
+    return fail([
+      'This folder cannot be written to, so Setup has changed nothing.',
+      '',
+      `Folder:  ${INSTALL_ROOT}`,
+      '',
+      'The connection needs to keep its settings here, and updates need to',
+      'unpack here. Windows is not allowing either. That is usual for a folder',
+      'under Program Files, or on a read-only network drive.',
+      '',
+      'What to do:  move this folder somewhere that belongs to you —',
+      'Documents is ideal — and double-click Setup there.',
+    ]);
+  }
 
   // Checked before anything is read or written: an install from a temp folder
   // must not half-happen.
@@ -652,10 +679,20 @@ function ask(question) {
  * not abandon the other: a user with both installed should still end up with a
  * working Claude connection when Codex's config turns out to be unreadable.
  */
+/**
+ * Write the server into every Claude Desktop settings file on this machine.
+ *
+ * NOT one file. The packaged (MSIX) build reads a virtualised copy under
+ * %LOCALAPPDATA%\Packages, and the older build reads %APPDATA%\Claude — and
+ * Claude's own "Edit Config" button opens the second one even when the first is
+ * what it reads. Writing only the documented path is why a connector installs
+ * successfully and never appears. See claudeConfigTargets.
+ */
 function configureClaude() {
   const app = 'Claude Desktop';
-  const configPath = claudeConfigPath();
-  if (!configPath) {
+  const targets = claudeConfigTargets();
+
+  if (targets.length === 0) {
     return {
       app,
       ok: false,
@@ -666,6 +703,24 @@ function configureClaude() {
     };
   }
 
+  const results = targets.map((target) => configureClaudeAt(target.path));
+  const failures = results.filter((result) => !result.ok);
+
+  // Any success counts, because the locations are alternatives rather than a
+  // set that must all work: whichever build the user launches reads one of them.
+  const ok = results.some((result) => result.ok);
+  const lines = ok
+    ? results.filter((r) => r.ok).flatMap((r) => r.lines)
+    : results.flatMap((r) => r.lines);
+
+  if (ok && failures.length > 0) {
+    lines.push(`  One other settings file could not be written, which is usually harmless.`);
+  }
+  return { app, ok, lines };
+}
+
+function configureClaudeAt(configPath) {
+  const app = 'Claude Desktop';
   let existing = null;
   if (existsSync(configPath)) {
     const raw = readFileSync(configPath, 'utf8');
@@ -707,7 +762,11 @@ function configureClaude() {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 
-  return { app, ok: true, lines: describe(app, replacedExisting, preservedServers, backupPath) };
+  return {
+    app,
+    ok: true,
+    lines: describe(app, replacedExisting, preservedServers, backupPath, configPath),
+  };
 }
 
 /**
@@ -758,11 +817,27 @@ function configureCodex() {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, text, 'utf8');
 
-  return { app, ok: true, lines: describe(app, replacedExisting, preservedServers, backupPath) };
+  return {
+    app,
+    ok: true,
+    lines: describe(app, replacedExisting, preservedServers, backupPath, configPath),
+  };
 }
 
-function describe(app, replacedExisting, preservedServers, backupPath) {
+function describe(app, replacedExisting, preservedServers, backupPath, configPath) {
   const lines = [replacedExisting ? `Updated the ${app} connection.` : `Connected to ${app}.`];
+
+  /*
+   * NAME THE FILE. Always, on success as well as failure.
+   *
+   * Without it "Connected to Claude Desktop." is unfalsifiable from the outside,
+   * and the failure that needs it most is invisible: Setup run as administrator
+   * resolves %APPDATA% to the ADMINISTRATOR'S profile, writes a perfectly valid
+   * config there, and reports success — while the user's own Claude, reading its
+   * own profile, never sees a thing. Diagnosing that over the phone is
+   * impossible unless the path is on screen.
+   */
+  if (configPath) lines.push(`  Written to:  ${configPath}`);
   if (preservedServers.length > 0) {
     lines.push(`  Left your other ${app} connections untouched: ${preservedServers.join(', ')}`);
   }
@@ -779,22 +854,56 @@ function backup(configPath) {
 }
 
 /**
- * %APPDATA%\Claude\claude_desktop_config.json on Windows.
+ * Is Setup running elevated, and therefore about to configure the wrong user?
  *
- * APPDATA is read rather than reconstructed from the user name, because it moves
- * on domain-joined and roaming-profile machines — which describes a lot of
- * accounting offices.
+ * THIS IS THE FAILURE THAT LOOKS LIKE SUCCESS. Right-click -> "Run as
+ * administrator" changes %APPDATA% to the administrator's profile. Setup then
+ * writes a valid config into a profile the person will never open Claude from,
+ * reports "Connected to Claude Desktop", and the connector appears to have
+ * silently not installed. Nothing downstream can detect it, because from inside
+ * the elevated process everything genuinely succeeded.
+ *
+ * Detected by attempting a write that only an administrator is permitted:
+ * creating a file directly in the Windows directory. Cheap, needs no extra
+ * tooling, and is removed immediately. A false NEGATIVE just means the warning
+ * is not shown, so the test failing closed costs nothing.
  */
-function claudeConfigPath() {
-  const appData = process.env.APPDATA;
-  if (appData && appData.trim().length > 0) {
-    return join(appData, 'Claude', 'claude_desktop_config.json');
+function isElevated() {
+  const probe = join(
+    process.env.SystemRoot ?? 'C:\\Windows',
+    `tally-elevation-probe-${String(process.pid)}`
+  );
+  try {
+    writeFileSync(probe, '', 'utf8');
+    unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
   }
-  const profile = process.env.USERPROFILE;
-  if (profile && profile.trim().length > 0) {
-    return join(profile, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json');
-  }
-  return null;
+}
+
+/**
+ * Refuse to configure the wrong profile, before anything is written.
+ *
+ * Refused rather than warned: an elevated run produces an install that looks
+ * finished and does nothing, which costs far more to diagnose later than
+ * starting over costs now — especially on somebody else's machine, over the
+ * phone.
+ */
+function elevationBlock() {
+  return [
+    'Setup is running as administrator, so it would configure the WRONG user.',
+    '',
+    'Windows gives an administrator its own settings folder. Claude would be',
+    'set up for the administrator account, not for you — it would report',
+    'success and then Claude would still not see your Tally data.',
+    '',
+    `Right now that folder is:  ${process.env.APPDATA ?? '(unknown)'}`,
+    '',
+    'What to do:  close this window. Then double-click Setup normally —',
+    'a plain double-click, NOT "Run as administrator". Nothing here needs',
+    'administrator rights.',
+  ];
 }
 
 function readVersion() {

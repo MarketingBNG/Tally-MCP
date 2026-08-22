@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // @ts-expect-error - plain ESM helper, shipped without type declarations because
 // it must run under the bundled Node runtime with no build step.
-import { findPackageRoot, isTemporaryLocation } from '../../installer/scripts/lib/paths.mjs';
+import {
+  claudeConfigCandidates,
+  claudeConfigTargets,
+  findPackageRoot,
+  installRootOf,
+  isTemporaryLocation,
+  isWritable,
+} from '../../installer/scripts/lib/paths.mjs';
 
 /**
  * The installer scripts sit at different depths in the source checkout than in
@@ -137,5 +144,75 @@ describe('findPackageRoot (edge)', () => {
 
     // The sandbox itself has no package.json, and neither does tmp.
     expect(findPackageRoot(orphan)).toBeNull();
+  });
+});
+
+describe('the install root, as opposed to the payload', () => {
+  it('resolves app/ up to the folder that survives an update', () => {
+    // .env and the update marker live at the install root. Resolving this wrong
+    // would put them inside the payload, where every update would wipe them.
+    expect(installRootOf(join('C:', 'x', 'TallyPrime for Claude', 'app'))).toBe(
+      join('C:', 'x', 'TallyPrime for Claude')
+    );
+  });
+
+  it('treats a flat install and a source checkout as their own root', () => {
+    expect(installRootOf(join('C:', 'x', 'TallyPrime for Claude'))).toBe(
+      join('C:', 'x', 'TallyPrime for Claude')
+    );
+  });
+
+  it('never points inside a staged payload', () => {
+    expect(installRootOf(join('C:', 'x', 'Tally', 'app.next'))).toBe(join('C:', 'x', 'Tally'));
+  });
+});
+
+describe('finding every Claude Desktop settings file', () => {
+  const env = {
+    APPDATA: join('C:', 'u', 'AppData', 'Roaming'),
+    LOCALAPPDATA: join('C:', 'u', 'AppData', 'Local'),
+  };
+
+  it('knows about the packaged build, not just the documented path', () => {
+    // The bug this pins: the MSIX build reads a virtualised copy under
+    // Packages\, so writing only %APPDATA% installs a connector that never
+    // appears — and Claude's own "Edit Config" opens the wrong file too.
+    const paths = claudeConfigCandidates(env).map((entry) => entry.path);
+    expect(paths).toContainEqual(
+      join(
+        env.LOCALAPPDATA,
+        'Packages',
+        'Claude_pzs8sxrjxfjjc',
+        'LocalCache',
+        'Roaming',
+        'Claude',
+        'claude_desktop_config.json'
+      )
+    );
+    expect(paths).toContainEqual(join(env.APPDATA, 'Claude', 'claude_desktop_config.json'));
+  });
+
+  it('falls back to the documented path when neither exists yet', () => {
+    // A machine where Claude has never been launched still has to be set up.
+    const targets = claudeConfigTargets(env);
+    expect(targets).toHaveLength(1);
+    expect(targets[0]?.kind).toBe('legacy');
+  });
+});
+
+describe('checking a folder is writable', () => {
+  it('accepts a folder it can write to', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'writable-'));
+    try {
+      expect(isWritable(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a folder that does not exist', () => {
+    // Stands in for Program Files and a read-only share: the point is that the
+    // answer comes from attempting the write, not from inspecting the path.
+    expect(isWritable(join(tmpdir(), 'definitely-not-here-9137'))).toBe(false);
   });
 });

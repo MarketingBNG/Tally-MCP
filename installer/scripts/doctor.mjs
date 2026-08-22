@@ -4,7 +4,13 @@ import { createInterface } from 'node:readline';
 import { probeTally } from './lib/probe.mjs';
 import { explainProbe } from './lib/explain.mjs';
 import { isPlainObject, SERVER_KEY } from './lib/configMerge.mjs';
-import { installRootFor, packageRootFor, isTemporaryLocation } from './lib/paths.mjs';
+import {
+  claudeConfigCandidates,
+  installRootFor,
+  packageRootFor,
+  isTemporaryLocation,
+} from './lib/paths.mjs';
+import { CODEX_SERVER_KEY, codexConfigPath } from './lib/codexConfig.mjs';
 import { readUpdateState } from './lib/update.mjs';
 import { buildFreshness } from './lib/buildFreshness.mjs';
 import { readEnvSetting, taskExists } from './lib/exportSetup.mjs';
@@ -62,6 +68,11 @@ async function main() {
   // was moved or a second copy was unzipped is otherwise invisible.
   const wiring = checkClaudeWiring();
   if (!wiring.ok) problems.push(wiring.problem);
+
+  // Codex, but only if this machine has it. Setup can configure either, so a
+  // check that silently covers one of them is a check that lies by omission.
+  const codex = checkCodexWiring();
+  if (codex !== null && !codex.ok) problems.push(codex.problem);
 
   // Developer-only, and silent in a shipped folder: a dist/ older than src/
   // means Claude is running last build's code, which has already cost a day.
@@ -197,19 +208,106 @@ function checkExport() {
 }
 
 /**
+ * The Codex half of the same question, skipped where Codex is absent.
+ *
+ * Read as TEXT rather than parsed: this only has to answer "is our block there,
+ * and does it point here", and a full TOML parser is a dependency the shipped
+ * folder does not carry. `renderServerBlock` in lib/codexConfig.mjs is what
+ * writes the shape being matched.
+ *
+ * @returns {{ok: boolean, problem?: string}|null} Null when Codex is not installed.
+ */
+function checkCodexWiring() {
+  const configPath = codexConfigPath();
+  if (!configPath || !existsSync(configPath)) return null;
+
+  heading('Codex');
+  line(`Settings file:  ${configPath}`);
+  blank();
+
+  let text;
+  try {
+    text = readFileSync(configPath, 'utf8');
+  } catch {
+    line("Codex's settings file could not be read.");
+    blank();
+    return { ok: false, problem: "Codex's settings file could not be read" };
+  }
+
+  if (!text.includes(`[mcp_servers.${CODEX_SERVER_KEY}]`)) {
+    line('Codex does not know about Tally yet.');
+    blank();
+    line('What to do:  run Setup (in this same folder) and choose Codex.');
+    blank();
+    return { ok: false, problem: 'Codex does not know about Tally yet' };
+  }
+
+  // The args line inside our own block carries the entry point Codex will run.
+  const block = text.slice(text.indexOf(`[mcp_servers.${CODEX_SERVER_KEY}]`));
+  const args = /args\s*=\s*\[\s*['"]([^'"]*)['"]/.exec(block);
+  const registered = args ? args[1] : '';
+  const acceptable = [join(INSTALL_ROOT, 'launch.mjs'), join(PACKAGE_ROOT, 'dist', 'index.js')];
+
+  if (!acceptable.some((path) => normalize(registered) === normalize(path))) {
+    line('Codex is pointed at a different copy of this program.');
+    blank();
+    line('It is currently using:');
+    line(`   ${registered || '(nothing readable)'}`);
+    blank();
+    line('This folder is:');
+    line(`   ${existsSync(acceptable[0]) ? acceptable[0] : acceptable[1]}`);
+    blank();
+    line('What to do:  run Setup in THIS folder and choose Codex.');
+    blank();
+    return { ok: false, problem: 'Codex is pointed at a different copy' };
+  }
+
+  line('Connected, and pointed at this folder.');
+  blank();
+  return { ok: true };
+}
+
+/**
  * Returns {ok, problem} rather than printing and returning nothing, so the
  * verdict at the bottom of the window can account for what it found.
  */
 function checkClaudeWiring() {
   heading('Claude Desktop');
 
-  const configPath = claudeConfigPath();
-  if (!configPath || !existsSync(configPath)) {
+  /*
+   * EVERY settings file, not the documented one.
+   *
+   * The packaged (MSIX) build of Claude Desktop reads a virtualised copy under
+   * %LOCALAPPDATA%\Packages; the older build reads %APPDATA%\Claude. Checking
+   * only the second reports a working install as broken on a modern machine, and
+   * — worse — reports a BROKEN one as fine, because the file it read is not the
+   * file Claude uses. Both are inspected and the one carrying Tally wins.
+   */
+  const candidates = claudeConfigCandidates().filter((entry) => existsSync(entry.path));
+
+  if (candidates.length === 0) {
     line('Not set up yet.');
     blank();
     line('What to do:  run Setup (in this same folder) once, then come back.');
     blank();
     return { ok: false, problem: 'Claude Desktop is not set up yet' };
+  }
+
+  const configured = candidates.find((entry) => {
+    try {
+      const parsed = JSON.parse(readFileSync(entry.path, 'utf8'));
+      return isPlainObject(parsed) && isPlainObject(parsed.mcpServers) && parsed.mcpServers[SERVER_KEY];
+    } catch {
+      return false;
+    }
+  });
+
+  const configPath = (configured ?? candidates[0]).path;
+  if (candidates.length > 1) {
+    // Said out loud, because two files with different contents is the single
+    // most confusing state this install can be in.
+    line(`Settings file:  ${configPath}`);
+    blank();
   }
 
   let config;
@@ -237,16 +335,28 @@ function checkClaudeWiring() {
   }
 
   const registeredPath = Array.isArray(entry.args) ? String(entry.args[0] ?? '') : '';
-  const expectedPath = join(PACKAGE_ROOT, 'dist', 'index.js');
 
-  if (normalize(registeredPath) !== normalize(expectedPath)) {
+  /*
+   * Either entry point counts as "pointed here".
+   *
+   * An install that can update itself registers launch.mjs at the stable root,
+   * because that path has to survive every future version; a source checkout and
+   * an older flat install register dist\index.js directly. Accepting only one
+   * would report a correctly configured install as broken, which is worse than
+   * useless — it sends somebody re-running Setup to fix a problem they do not
+   * have, and teaches them to ignore this check.
+   */
+  const acceptable = [join(INSTALL_ROOT, 'launch.mjs'), join(PACKAGE_ROOT, 'dist', 'index.js')];
+  const expectedPath = acceptable[0];
+
+  if (!acceptable.some((path) => normalize(registeredPath) === normalize(path))) {
     line('Claude Desktop is pointed at a different copy of this program.');
     blank();
     line('It is currently using:');
     line(`   ${registeredPath || '(nothing readable)'}`);
     blank();
     line('This folder is:');
-    line(`   ${expectedPath}`);
+    line(`   ${existsSync(expectedPath) ? expectedPath : acceptable[1]}`);
     blank();
     line('This happens when the folder is moved or renamed, or when a newer');
     line('version is unzipped somewhere else.');
@@ -289,18 +399,6 @@ function checkBuildFreshness() {
 /** Windows paths differ by case and by trailing separators without differing. */
 function normalize(path) {
   return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-}
-
-function claudeConfigPath() {
-  const appData = process.env.APPDATA;
-  if (appData && appData.trim().length > 0) {
-    return join(appData, 'Claude', 'claude_desktop_config.json');
-  }
-  const profile = process.env.USERPROFILE;
-  if (profile && profile.trim().length > 0) {
-    return join(profile, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json');
-  }
-  return null;
 }
 
 /**

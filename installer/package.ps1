@@ -119,6 +119,11 @@ Copy-Item (Join-Path $RepoRoot 'package.json') $AppDir
 
 # Stable: the launchers a user double-clicks, the runtime, and the indirection
 # Claude Desktop is pointed at. Their paths must never change across versions.
+#
+# They are ALSO copied into appoot\ below, which is what lets an update
+# refresh them. Without that copy, launch.mjs is frozen at whatever version was
+# installed by hand -- and a bug in the file that performs updates would be the
+# one bug no update could ever fix. See syncBootFiles in launch.mjs.
 Copy-Item (Join-Path $InstallerDir 'Setup.bat') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'Check-Tally.bat') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'Run-Export.bat') $PayloadDir
@@ -128,6 +133,20 @@ Copy-Item (Join-Path $InstallerDir 'Run-Export-Hidden.vbs') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'launch.mjs') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'READ ME FIRST.txt') $PayloadDir
 Copy-Item (Join-Path $RepoRoot 'LICENSE') $PayloadDir
+
+# The canonical copies of the stable root files, carried inside the payload so a
+# promotion can refresh them. See syncBootFiles in launch.mjs.
+$BootDir = Join-Path $AppDir 'boot'
+New-Item -ItemType Directory -Path $BootDir -Force | Out-Null
+foreach ($name in @(
+    'launch.mjs',
+    'Setup.bat',
+    'Check-Tally.bat',
+    'Run-Export.bat',
+    'Run-Export-Hidden.vbs'
+  )) {
+  Copy-Item (Join-Path $InstallerDir $name) $BootDir
+}
 
 # package.ps1 is a developer tool and must never reach a user's folder. It lives
 # beside scripts\ rather than inside it, so this is belt-and-braces.

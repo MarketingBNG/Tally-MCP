@@ -393,3 +393,77 @@ describe('the hourly check', () => {
     expect(readUpdateState(root).lastFailure).toMatch(/HTTP 500/);
   });
 });
+
+describe('not checking twice in a row', () => {
+  const release = {
+    tag_name: 'v0.9.0',
+    assets: [
+      {
+        name: 'TallyPrime-for-Claude-0.9.0.zip',
+        browser_download_url: 'https://example.invalid/a.zip',
+      },
+      { name: 'SHA256SUMS.txt', browser_download_url: 'https://example.invalid/s.txt' },
+    ],
+  };
+
+  it('skips when the last check was inside the interval', async () => {
+    // Two callers ask this question now — the hourly task and the server at
+    // startup. Without the floor, opening Claude just after a scheduled run
+    // downloads the same 40MB a second time.
+    const root = mkdtempSync(join(tmpdir(), 'throttle-'));
+    try {
+      let calls = 0;
+      const fetchImpl = () => {
+        calls += 1;
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(release) });
+      };
+
+      const first = await checkForUpdate({
+        packageRoot: root,
+        installed: '0.9.0',
+        fetchImpl: fetchImpl as never,
+        now: new Date('2026-08-22T10:00:00Z'),
+        minIntervalMinutes: 60,
+      });
+      expect(first.reason).toBe('already-current');
+
+      const second = await checkForUpdate({
+        packageRoot: root,
+        installed: '0.9.0',
+        fetchImpl: fetchImpl as never,
+        now: new Date('2026-08-22T10:30:00Z'),
+        minIntervalMinutes: 60,
+      });
+
+      expect(second.reason).toBe('checked recently');
+      // The point: GitHub was asked once, not twice.
+      expect(calls).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('checks again once the interval has passed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'throttle2-'));
+    try {
+      const fetchImpl = () => Promise.resolve({ ok: true, json: () => Promise.resolve(release) });
+      await checkForUpdate({
+        packageRoot: root,
+        installed: '0.9.0',
+        fetchImpl: fetchImpl as never,
+        now: new Date('2026-08-22T10:00:00Z'),
+        minIntervalMinutes: 60,
+      });
+      const later = await checkForUpdate({
+        packageRoot: root,
+        installed: '0.9.0',
+        fetchImpl: fetchImpl as never,
+        now: new Date('2026-08-22T11:30:00Z'),
+        minIntervalMinutes: 60,
+      });
+      expect(later.reason).toBe('already-current');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

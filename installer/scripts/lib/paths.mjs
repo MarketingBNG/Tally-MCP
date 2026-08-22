@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, parse } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -155,4 +155,97 @@ export function installRootOf(packageRoot) {
   // which nothing should — but resolving it to the same root is the harmless
   // answer, and pointing at a folder inside the payload is not.
   return name === 'app' || name === 'app.next' ? dirname(packageRoot) : packageRoot;
+}
+
+/**
+ * Can this install actually write to its own folder?
+ *
+ * Tested rather than inferred from the path. A folder under Program Files is the
+ * common case — a standard user cannot write there — but a read-only network
+ * share, a locked-down managed machine and a folder someone made read-only all
+ * fail the same way, and no list of paths would catch them.
+ *
+ * It matters because this install keeps state beside itself: the `.env` holding
+ * the export folder, the run log, and the staged next version an update unpacks.
+ * Without write access Setup fails partway and updates can never land, so it is
+ * worth one file create and delete to say so before anything is changed.
+ *
+ * @param {string} dir Folder to test.
+ * @returns {boolean}
+ */
+export function isWritable(dir) {
+  const probe = join(dir, `.tally-write-probe-${String(process.pid)}`);
+  try {
+    writeFileSync(probe, '', 'utf8');
+    unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Every place Claude Desktop might keep claude_desktop_config.json.
+ *
+ * THERE ARE TWO, and writing only the documented one is why a connector can be
+ * installed successfully and never appear.
+ *
+ * The MSIX build — the one Windows installs now, and what the Microsoft Store
+ * ships — is packaged, so its %APPDATA% is virtualised into its own package
+ * container. It reads:
+ *
+ *   %LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude *
+ * The older unpackaged build, and every tutorial and doc page, uses:
+ *
+ *   %APPDATA%\Claude *
+ * Claude Desktop's own "Edit Config" button still opens the second one even on
+ * the MSIX build, so a person can edit a file, see their change saved, restart,
+ * and find nothing — which is exactly the failure this install kept hitting.
+ *
+ * Both are returned, existing ones first. The caller writes to every location
+ * that is already there, because a machine can carry both builds and there is no
+ * reliable way to know from outside which one the user actually launches. Writing
+ * two small JSON files is far cheaper than guessing wrong.
+ *
+ * @param {Record<string, string|undefined>} [env] Defaults to process.env.
+ * @returns {{path: string, kind: 'packaged'|'legacy', present: boolean}[]}
+ */
+export function claudeConfigCandidates(env = process.env) {
+  const out = [];
+  const local = env.LOCALAPPDATA;
+  const appData = env.APPDATA ?? (env.USERPROFILE ? join(env.USERPROFILE, 'AppData', 'Roaming') : undefined);
+
+  if (local) {
+    out.push({
+      kind: 'packaged',
+      dir: join(local, 'Packages', 'Claude_pzs8sxrjxfjjc', 'LocalCache', 'Roaming', 'Claude'),
+    });
+  }
+  if (appData) out.push({ kind: 'legacy', dir: join(appData, 'Claude') });
+
+  return out
+    .map((entry) => ({
+      path: join(entry.dir, 'claude_desktop_config.json'),
+      kind: entry.kind,
+      present: existsSync(entry.dir),
+    }))
+    .sort((a, b) => Number(b.present) - Number(a.present));
+}
+
+/**
+ * The locations Setup should actually write.
+ *
+ * Every candidate whose folder already exists — that folder existing is the only
+ * honest evidence that build has been run. If none has, the legacy path is
+ * created, because it is the documented default and an unpackaged install is
+ * still perfectly possible.
+ *
+ * @param {Record<string, string|undefined>} [env] Defaults to process.env.
+ * @returns {{path: string, kind: 'packaged'|'legacy', present: boolean}[]}
+ */
+export function claudeConfigTargets(env = process.env) {
+  const candidates = claudeConfigCandidates(env);
+  const present = candidates.filter((entry) => entry.present);
+  if (present.length > 0) return present;
+  return candidates.filter((entry) => entry.kind === 'legacy');
 }

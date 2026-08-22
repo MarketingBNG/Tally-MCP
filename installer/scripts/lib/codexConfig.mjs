@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { claudeConfigCandidates } from './paths.mjs';
 
 /**
  * Writing this server into Codex's `~/.codex/config.toml`.
@@ -152,13 +153,16 @@ export function isCodexInstalled(env = process.env) {
  * setting up before first launch.
  */
 export function isClaudeInstalled(env = process.env) {
-  const appData = env.APPDATA;
-  const profile = env.USERPROFILE;
-  const candidates = [];
-  if (appData) candidates.push(join(appData, 'Claude'));
-  if (profile) candidates.push(join(profile, 'AppData', 'Roaming', 'Claude'));
-  if (env.LOCALAPPDATA) candidates.push(join(env.LOCALAPPDATA, 'AnthropicClaude'));
-  return candidates.some((path) => existsSync(path));
+  // The packaged (MSIX) build keeps its settings under %LOCALAPPDATA%\Packages,
+  // so a machine carrying ONLY that build has no %APPDATA%\Claude at all and
+  // would be reported as "Claude not found" while Claude is sitting in the task
+  // bar. claudeConfigCandidates knows both locations; reusing it keeps the two
+  // answers from drifting apart again.
+  if (claudeConfigCandidates(env).some((entry) => entry.present)) return true;
+
+  // The unpackaged installer's program folder, as a last resort: it exists even
+  // if the app has never been launched, and therefore has no settings yet.
+  return env.LOCALAPPDATA ? existsSync(join(env.LOCALAPPDATA, 'AnthropicClaude')) : false;
 }
 
 /**

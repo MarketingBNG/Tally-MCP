@@ -41,3 +41,6 @@ Tally-MCP-Tool-Reference.docx
 # machine-specific and usually contains the user's name. See README for the
 # template to copy.
 .mcp.json
+
+# Update bookkeeping, written beside an install (and by a probe run from here).
+update-state.json

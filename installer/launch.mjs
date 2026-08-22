@@ -31,7 +31,15 @@
  * not immediately re-stage the version that just failed.
  */
 
-import { existsSync, renameSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -66,6 +74,23 @@ function patchState(changes) {
 }
 
 /**
+ * Does this folder hold everything a working payload needs?
+ *
+ * The same four things update.mjs checks, kept in step with it by hand. A
+ * shorter list would let a broken folder through; a longer one would refuse a
+ * good payload after a future reorganisation, which is the worse mistake — it
+ * would strand every install on its current version with no way to say why.
+ */
+function isCompletePayload(dir) {
+  return [
+    join(dir, 'package.json'),
+    join(dir, 'dist', 'index.js'),
+    join(dir, 'node_modules'),
+    join(dir, 'scripts', 'export.mjs'),
+  ].every((path) => existsSync(path));
+}
+
+/**
  * Promote a staged payload, if there is one.
  *
  * Returns the version string promoted, or null. Every failure path leaves the
@@ -75,6 +100,25 @@ function patchState(changes) {
  */
 function promote() {
   if (!existsSync(NEXT)) return null;
+
+  /*
+   * Verify before promoting, even though the updater already verified before
+   * staging.
+   *
+   * The check there was of the DOWNLOAD; this is a check of what is on disk now.
+   * Between the two sits a rename, a possible power cut, an antivirus quarantine
+   * and anything else that can empty a folder. Promoting a half-payload swaps a
+   * working install for one that cannot start, and it would do so at Desktop
+   * launch — the least diagnosable moment there is. Deliberately duplicated
+   * rather than inlined from the payload's own code, because the payload is the
+   * thing being replaced and cannot be trusted to vet itself.
+   */
+  if (!isCompletePayload(NEXT)) {
+    note('a staged update was incomplete and has been discarded');
+    rmSync(NEXT, { recursive: true, force: true });
+    patchState({ staged: null, stagedAt: null, lastFailure: 'the staged update was incomplete' });
+    return null;
+  }
 
   // A staged folder with no app/ beside it should be impossible, but promoting
   // into a gap is the one case where a crash leaves nothing runnable at all.
@@ -105,6 +149,44 @@ function promote() {
   return 'promoted';
 }
 
+/**
+ * Refresh the files that live OUTSIDE the payload, from copies inside it.
+ *
+ * Without this, `launch.mjs` and the .bat launchers are frozen at whatever
+ * version was manually installed, because promotion only swaps `app/`. That
+ * leaves the worst possible gap: a bug in THIS file — the one that performs
+ * updates — would be the one thing an update could never fix, and every install
+ * would need a human to reinstall it by hand.
+ *
+ * So each release carries canonical copies in `app/boot/`, and they are copied
+ * out after a successful promotion. Byte-compared first, so the normal case
+ * writes nothing at all.
+ *
+ * Replacing this very file while it runs is safe: Node has already read it, and
+ * the new copy simply takes effect at the next start — which is exactly the
+ * cadence everything else here works on. `node.exe`, `.env` and the update
+ * bookkeeping are never touched, because only what the packager puts in `boot/`
+ * is eligible.
+ */
+function syncBootFiles() {
+  const bootDir = join(APP, 'boot');
+  if (!existsSync(bootDir)) return;
+
+  for (const name of readdirSync(bootDir)) {
+    const from = join(bootDir, name);
+    const to = join(ROOT, name);
+    try {
+      if (existsSync(to) && readFileSync(from).equals(readFileSync(to))) continue;
+      copyFileSync(from, to);
+      note(`refreshed ${name}`);
+    } catch (error) {
+      // One file failing must not stop the others, and none of them is worth
+      // failing the launch over — the server is about to start regardless.
+      note(`could not refresh ${name}: ${String(error?.message ?? error)}`);
+    }
+  }
+}
+
 /** Import a payload's server, or null if it cannot even be loaded. */
 async function start(payloadDir) {
   const entry = join(payloadDir, 'dist', 'index.js');
@@ -117,9 +199,61 @@ async function start(payloadDir) {
   }
 }
 
+/**
+ * Look for a new version once per Desktop session, in the background.
+ *
+ * ## Why here, when the hourly export task already checks
+ *
+ * Because that task only exists if somebody set up the spreadsheet export. An
+ * install that only uses the live connector never wakes on a schedule, so before
+ * this it could never learn about a new version — the one case where a copy
+ * stays stranded forever. Desktop starting the server is the one event every
+ * install has in common.
+ *
+ * ## Three rules it must not break
+ *
+ * - NOTHING ON STDOUT. That is the MCP protocol channel; one stray byte and
+ *   Desktop reports the server as broken.
+ * - NOTHING BLOCKING. It is started after the server is already serving, and it
+ *   is never awaited, so a slow or hanging network cannot delay a single answer.
+ * - NOTHING FATAL. Every failure is swallowed. Being offline is the normal state
+ *   of a laptop, not an error worth surfacing.
+ *
+ * The one-hour floor stops this and the hourly task both downloading the same
+ * release when Claude happens to be opened just after a scheduled run.
+ */
+function checkForUpdatesInBackground() {
+  const timer = setTimeout(() => {
+    void (async () => {
+      try {
+        const { checkForUpdate } = await import(
+          pathToFileURL(join(APP, 'scripts', 'lib', 'update.mjs')).href
+        );
+        const installed = readVersion(APP);
+        if (installed === null) return;
+
+        const result = await checkForUpdate({
+          packageRoot: ROOT,
+          installed,
+          minIntervalMinutes: 60,
+        });
+        if (result.acted) note(`version ${result.staged} is ready for the next restart`);
+      } catch {
+        // Offline, a firewall, a payload without the updater. All ordinary.
+      }
+    })();
+  }, 5000);
+
+  // Never hold the process open on this account. The server decides how long it
+  // lives; a pending update check must not extend that by a single second.
+  timer.unref?.();
+}
+
 const promoted = promote();
 if (promoted !== null) {
   patchState({ staged: null, stagedAt: null, promotedAt: new Date().toISOString() });
+  // After promotion, so the launchers on disk match the version now active.
+  syncBootFiles();
 }
 
 let started = await start(APP);
@@ -146,6 +280,9 @@ if (!started.ok) {
   note(`could not start the server: ${started.error}`);
   process.exit(1);
 }
+
+// LAST, and only once the server is answering. See the notes above.
+checkForUpdatesInBackground();
 
 /** A payload's version, for the refusal record. Best effort by design. */
 function readVersion(payloadDir) {
