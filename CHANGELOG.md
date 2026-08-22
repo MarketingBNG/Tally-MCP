@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.8.2 — unreleased
+## 0.8.2 — 2026-08-22
 **Updates now actually install themselves.** Version 0.8.1 could find a new
 version and download it, but could not unpack it — so nothing ever updated. If
 you are reading this in 0.8.1, it will not update on its own; install this
