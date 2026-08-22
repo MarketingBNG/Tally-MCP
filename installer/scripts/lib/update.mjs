@@ -278,19 +278,33 @@ function extractZip(zipPath, intoDir) {
 /**
  * The payload inside an extracted archive.
  *
- * The zip wraps everything in a single "TallyPrime for Claude" folder so that
- * unzipping it by hand does not spray files across a Downloads folder. That
- * wrapper is found rather than assumed, because renaming the release folder
- * would otherwise break every update silently.
+ * Three places are tried, because the archive's shape is not the payload's shape:
+ *
+ *   TallyPrime-for-Claude-x.y.z.zip
+ *     TallyPrime for Claude/        <- wrapper, so unzipping by hand is tidy
+ *       node/, launch.mjs, *.bat    <- the stable root, NOT the payload
+ *       app/                        <- THE PAYLOAD: what app.next must become
+ *
+ * The wrapper exists so that unzipping into a Downloads folder does not spray
+ * files everywhere, and `app/` exists so an update is a folder rename. Together
+ * they put what is being staged two levels down, which is why this searches
+ * rather than assuming — the layout has already moved once, and a hardcoded hop
+ * would have failed silently again.
+ *
+ * Found rather than assumed also means renaming the release folder cannot break
+ * every install at once.
  */
 function payloadWithin(extractedDir) {
-  if (payloadIsComplete(extractedDir)) return extractedDir;
+  const candidates = [extractedDir];
 
   for (const entry of readdirSync(extractedDir)) {
-    const candidate = join(extractedDir, entry);
-    if (statSync(candidate).isDirectory() && payloadIsComplete(candidate)) return candidate;
+    const child = join(extractedDir, entry);
+    if (!statSync(child).isDirectory()) continue;
+    // The wrapper itself, then the payload folder inside it.
+    candidates.push(child, join(child, APP));
   }
-  return null;
+
+  return candidates.find((path) => existsSync(path) && payloadIsComplete(path)) ?? null;
 }
 
 /**

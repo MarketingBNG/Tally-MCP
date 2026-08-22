@@ -207,10 +207,27 @@ describe('staging a download', () => {
   let root: string;
   let zipBytes: Buffer;
 
-  /** A real zip of a real payload, so extraction is genuinely exercised. */
+  /**
+   * A real zip in the REAL shipped shape, so extraction is genuinely exercised.
+   *
+   * The nesting is the point. A release wraps everything in a folder so that
+   * unzipping by hand stays tidy, and the payload sits in `app/` inside that so
+   * an update is a folder rename. That puts what gets staged TWO levels down.
+   *
+   * The bug this pins shipped in 0.8.1 and was found only by updating from a
+   * real release: the extractor looked one level deep, found the wrapper, and
+   * reported "the archive did not contain a complete install" — which meant no
+   * install could ever update itself, the exact failure this feature exists to
+   * prevent.
+   */
   const buildZip = (version: string): Buffer => {
     const scratch = mkdtempSync(join(tmpdir(), 'zipsrc-'));
-    const inner = join(scratch, 'TallyPrime for Claude');
+    const wrapper = join(scratch, 'TallyPrime for Claude');
+    // The stable root: present, and deliberately NOT the payload.
+    mkdirSync(join(wrapper, 'node'), { recursive: true });
+    writeFileSync(join(wrapper, 'launch.mjs'), '// launcher');
+
+    const inner = join(wrapper, 'app');
     mkdirSync(join(inner, 'dist'), { recursive: true });
     mkdirSync(join(inner, 'node_modules'), { recursive: true });
     mkdirSync(join(inner, 'scripts'), { recursive: true });
