@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.8.3 — unreleased
+## 0.8.3 — 2026-08-22
 **You now get told when an update is ready, even if you never set up the
 spreadsheet.** Previously that notification only came from the spreadsheet job,
 so anyone using just the live connector had updates appear and apply with
