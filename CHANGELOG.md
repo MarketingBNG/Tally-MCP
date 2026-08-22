@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.8.6 — unreleased
+## 0.8.6 — 2026-08-22
 **The spreadsheet now refreshes every five minutes instead of every hour.** The
 hourly setting was based on a mistake: it was chosen to guard against Tally
 possibly not flagging a deleted voucher, but the interval makes no difference to
