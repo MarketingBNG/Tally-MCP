@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.8.1 — unreleased
+## 0.8.1 — 2026-08-22
 **If Setup said it worked but Claude still could not see your Tally data, this is
 the fix.** Recent versions of Claude Desktop keep their settings in a different
 place than they used to, and Setup was writing to the old one. It said
