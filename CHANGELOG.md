@@ -12,6 +12,37 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.1 — unreleased
+**If Setup said it worked but Claude still could not see your Tally data, this is
+the fix.** Recent versions of Claude Desktop keep their settings in a different
+place than they used to, and Setup was writing to the old one. It said
+"Connected", and Claude never saw it. Setup now writes wherever Claude is
+actually reading from, and tells you the exact file it wrote.
+
+**Check-Tally is worth trusting again.** It was reporting a perfectly good
+install as broken, and — worse — could report a broken one as fine, because it
+was reading a settings file Claude no longer uses. It now also checks Codex,
+which it never mentioned at all, and prints which settings file it looked at.
+
+**Setup will now stop and explain instead of half-working:**
+
+- If it was started with "Run as administrator" it stops. Windows gives an
+  administrator its own settings folder, so it would have set Claude up for the
+  wrong account and cheerfully reported success. Nothing here needs
+  administrator rights — a plain double-click is correct.
+- If the folder cannot be written to — anything under Program Files, or a
+  read-only network drive — it says so before changing anything, rather than
+  failing halfway through.
+
+**Updates keep working even if you never set up the spreadsheet.** Previously the
+hourly spreadsheet job was the only thing that looked for new versions, so an
+install using only the live connector would never have found one. It now also
+checks when you open Claude.
+
+**And updates can now fix the updater itself.** Each version carries fresh copies
+of its own launcher files, so a problem in the part that installs updates is no
+longer something only a manual reinstall could repair.
+
 ## 0.8.0 — 2026-08-21
 **New: it updates itself. No more replacing folders by hand.**
 Until now a new version meant somebody emailing you a 42MB zip and talking you
