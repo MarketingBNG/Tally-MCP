@@ -237,7 +237,7 @@ async function main() {
     exportChoice.folder !== undefined && exportChoice.folder !== null,
     exportChoice.folder ?? ''
   );
-  status('Runs by itself', exportChoice.scheduled === true, exportChoice.scheduled === true ? 'once an hour' : '');
+  status('Runs by itself', exportChoice.scheduled === true, exportChoice.scheduled === true ? 'every 5 minutes' : '');
   blank();
 
   if (!configured.includes('Claude Desktop')) {
@@ -356,12 +356,11 @@ async function configureExport(companiesOpen) {
 
   const settings = {
     TALLY_EXPORT_FOLDER: folder,
-    // HOURLY, not the every-minute design. The minute cadence depends on the
-    // change check being sound, and that rests on TallyPrime's ALTERID moving on
-    // every edit including deletions — not yet proven at a real screen. If it
-    // does not hold, the exporter skips runs while the books move and the
-    // workbook reports itself current while being stale. Hourly is merely slow.
-    TALLY_EXPORT_INTERVAL_MINUTES: '60',
+    // Five minutes. The check costs about a fifth of a second, so twelve an
+    // hour is nothing, and nobody waits long for a figure. See the reasoning in
+    // src/config/config.ts — an earlier default of sixty was justified by a risk
+    // the interval turns out not to affect.
+    TALLY_EXPORT_INTERVAL_MINUTES: '5',
   };
   if (companies !== '') settings.TALLY_EXPORT_COMPANIES = companies;
 
@@ -381,17 +380,17 @@ async function configureExport(companiesOpen) {
 
   // The schedule is offered, never assumed: it changes the machine's task
   // list, and a policy on a managed machine may forbid it outright.
-  line('It can run once an hour. Each time it asks TallyPrime whether anything');
-  line('has changed, and writes a fresh workbook only if the books actually');
-  line('moved — plus once a day regardless, so the file never looks older than');
-  line('it is.');
+  line('It can run every five minutes. Each time it asks TallyPrime whether');
+  line('anything has changed, and writes a fresh workbook only if the books');
+  line('actually moved — plus once a day regardless, so the file never looks');
+  line('older than it is.');
   blank();
 
   let scheduled = false;
   if (await confirm('Schedule it to run automatically?', true)) {
     const result = registerTask({
       batPath: join(INSTALL_ROOT, 'Run-Export.bat'),
-      everyMinutes: 60,
+      everyMinutes: 5,
     });
     scheduled = result.ok;
     if (result.ok) {

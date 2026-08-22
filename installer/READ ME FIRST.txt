@@ -94,10 +94,10 @@
      - You have an actual spreadsheet, which you can open, filter and send to
        somebody, rather than figures retyped out of a chat.
 
-  It runs quietly in the background. Once an hour it asks Tally one very
-  small question -- has anything changed? -- and stops there. It only writes
-  a new spreadsheet when your books have actually moved, plus once a day so
-  the file never looks newer than it is.
+  It runs quietly in the background. Every few minutes it asks Tally one
+  very small question -- has anything changed? -- and stops there. It only
+  writes a new spreadsheet when your books have actually moved, plus once a
+  day so the file never looks newer than it is.
 
   TWO THINGS TO KNOW BEFORE YOU RELY ON IT
 

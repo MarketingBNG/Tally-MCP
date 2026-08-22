@@ -12,6 +12,15 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.6 — unreleased
+**The spreadsheet now refreshes every five minutes instead of every hour.** The
+hourly setting was based on a mistake: it was chosen to guard against Tally
+possibly not flagging a deleted voucher, but the interval makes no difference to
+that at all — a missed deletion is missed just as much either way, and what
+limits it is the guaranteed daily export. So hourly cost an hour of freshness
+and bought nothing. Five minutes is the sensible trade; the check itself takes
+about a fifth of a second.
+
 ## 0.8.5 — 2026-08-22
 **Setup now ends with a summary of what it actually did**, including what it did
 NOT do. Every problem this install has caused was invisible rather than broken —

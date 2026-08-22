@@ -257,25 +257,32 @@ const configSchema = z.object({
    * cheap "has anything changed?" question, exporting only when the answer is
    * yes.
    *
-   * SIXTY IS THE DEFAULT, deliberately slower than the design, because the
-   * every-minute cadence is only worth having if the change check is sound. That
-   * check rests on `ALTERID` moving on every edit INCLUDING deletions, which
-   * needs a human at a TallyPrime screen to prove — alter a voucher, add one,
-   * delete one, comparing the fingerprint after each (see
-   * scripts/probe-alterid.mjs). If it does not hold, the exporter skips runs
-   * while the books move and the workbook reports itself current while being
-   * stale, which is the one failure an accountant cannot see and cannot forgive.
-   * A fixed hourly export is merely slow.
+   * FIVE IS THE DEFAULT, and the reasoning for it is worth writing down because
+   * an earlier version of this comment got it wrong.
    *
-   * Once it IS proven, set this to 1 and the design cadence is back — the
-   * machinery is already here and unchanged.
+   * It once said sixty, on the grounds that the change check rests on `ALTERID`
+   * moving on every edit — including a deletion — which is unproven. That was a
+   * mistake: the interval does not affect that risk at all. If a deletion goes
+   * unnoticed, it is missed exactly as much at sixty minutes as at one. What
+   * bounds the damage is the guaranteed daily export, which runs at any
+   * interval. Sixty bought nothing in safety and cost an hour of staleness.
+   *
+   * So the interval is what it always should have been: a straight trade between
+   * how fresh the spreadsheet is and how often TallyPrime is asked a cheap
+   * question. Five minutes is that trade struck sensibly — the check costs about
+   * a fifth of a second, so twelve an hour is nothing, and nobody waits long for
+   * a figure.
+   *
+   * One is the design's own answer and is still available. The ALTERID check
+   * (scripts/prove-alterid.mjs) remains worth running on a licensed install, but
+   * as a question about whether the change check is SOUND, not about the cadence.
    */
   tallyExportIntervalMinutes: z.coerce
     .number()
     .int()
     .min(1, 'TALLY_EXPORT_INTERVAL_MINUTES must be at least 1.')
     .max(1440, 'TALLY_EXPORT_INTERVAL_MINUTES must be at most 1440.')
-    .default(60),
+    .default(5),
 
   /**
    * Force an export even when the fingerprint says nothing changed.

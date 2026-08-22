@@ -114,20 +114,24 @@ maximum cannot see a deletion: remove any record other than the highest and the
 maximum is unchanged, so a workbook validated on one would keep serving a
 voucher that no longer exists.
 
-> **The prerequisite, which is not optional — and why the default is hourly.**
-> All of that rests on `ALTERID` moving on **every** edit, including deletions.
-> That is unproven, so Setup ships `TALLY_EXPORT_INTERVAL_MINUTES=60`: an hourly
-> export does less work than the design intends, but it cannot skip a change it
-> failed to notice. Set it to 1 once the check below has been run.
+> **The prerequisite, which is not optional.** All of that rests on `ALTERID`
+> moving on **every** edit, including deletions. That is unproven, and it is a
+> question about whether the change check is SOUND — not about the interval.
 >
-> To prove it, somebody has to be at a TallyPrime screen: run
-> `node scripts/probe-alterid.mjs` on a **scratch company**, then alter a
-> voucher, add one, and delete one,
-> running `--compare` after each. **All three must report MOVED.** If any does
-> not, set `TALLY_EXPORT_INTERVAL_MINUTES=60` for a fixed hourly export and
-> record the finding in `docs/known-limitations.md`. A change check that misses
-> an edit produces a workbook that looks current and is wrong, which is worse
-> than a slow schedule.
+> An earlier version of this section claimed the default was hourly *because* of
+> this risk. That was wrong. The interval does not affect it: a deletion that
+> goes unnoticed is missed exactly as much at sixty minutes as at one. What
+> bounds the damage is the guaranteed daily export, which runs at any interval.
+> Hourly bought nothing in safety and cost an hour of freshness, so the default
+> is now five minutes.
+>
+> To settle the real question, somebody has to be at a **licensed** TallyPrime —
+> the Educational version cannot make the edits — and run
+> `npm run prove:alterid` on a **scratch company**. It asks for one edit at a
+> time (alter, add, delete) and reports MOVED or DID NOT MOVE after each. If any
+> step fails, record it in `docs/known-limitations.md`: a change check that
+> misses an edit produces a workbook that looks current and is wrong, and no
+> interval fixes that.
 
 ### When it fails
 
@@ -373,7 +377,7 @@ fix.
 | `TALLY_CACHE_TTL_MS` | `300000` | Reuse an identical Tally response, and the records parsed from it, for this long. **The biggest lever on audit speed** — see below. `0` disables caching |
 | `TALLY_EXPORT_FOLDER` | *(unset)* | Where the scheduled export writes its workbooks. An ordinary **local** folder — nothing here calls a Google API. Put it inside a folder Google Drive Desktop syncs and Drive's own client uploads it. Unset means no export is configured |
 | `TALLY_EXPORT_COMPANIES` | *(all open)* | Which companies to export, semicolon-separated. Naming them is what stops a workbook being labelled one company and read from another. A named company TallyPrime does not have open is refused by name, never skipped silently |
-| `TALLY_EXPORT_INTERVAL_MINUTES` | `1` | How often the scheduled task wakes. Most wakes cost one ~200ms question and stop there. Set to `60` for a fixed hourly export — see the prerequisite below |
+| `TALLY_EXPORT_INTERVAL_MINUTES` | `5` | How often the scheduled task wakes. Most wakes cost one ~200ms question and stop there. `1` is the design's own cadence; raise it if TallyPrime is under load |
 | `TALLY_EXPORT_FORCE` | `false` | Export even when nothing changed. What `Run-Export.bat --force` sets |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, `debug` |
 
@@ -921,7 +925,7 @@ TallyPrime for Claude/        <- stable; never replaced
     package.json, dist/, scripts/, node_modules/
 ```
 
-- The hourly export task also asks GitHub whether a newer release exists
+- The export task also asks GitHub whether a newer release exists
   ([update.mjs](installer/scripts/lib/update.mjs)). If so it downloads it,
   verifies the checksum, and unpacks it to `app.next/`. **Nothing touches the
   running `app/`**, so a failed or corrupt update is a no-op rather than a
@@ -930,7 +934,7 @@ TallyPrime for Claude/        <- stable; never replaced
   start — the one moment nothing holds the current version open — keeping the
   old one as `app.previous/`.
 - If the promoted version cannot even be imported, the launcher restores the
-  previous one and records the bad version so the hourly check will not fetch it
+  previous one and records the bad version so the next check will not fetch it
   again. A later release supersedes the refusal.
 
 Because `.env` lives above `app/`, an update cannot reset the export folder or
