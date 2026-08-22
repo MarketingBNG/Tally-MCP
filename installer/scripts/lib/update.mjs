@@ -184,6 +184,35 @@ export function digestFor(sumsText, fileName) {
 export const APP = 'app';
 export const NEXT = 'app.next';
 
+/**
+ * A plain file saying an update is waiting, written where somebody will see it.
+ *
+ * The toast is ephemeral and easy to miss — Focus assist and Do Not Disturb
+ * suppress banners outright, and the code that raises one deliberately swallows
+ * its own failures, so nothing reports a notification that never arrived. The
+ * exporter already learned this and leaves a `LAST RUN FAILED ...` file beside
+ * the spreadsheets; this is the same idea for updates.
+ *
+ * It sits in the install folder, which is the folder people already open to run
+ * Setup or Check-Tally, and it is removed once the update has been applied.
+ */
+export function updateMarkerPath(packageRoot, version) {
+  return join(packageRoot, `UPDATE READY - version ${version}.txt`);
+}
+
+/** Remove any update marker, whatever version it names. */
+export function clearUpdateMarkers(packageRoot) {
+  try {
+    for (const name of readdirSync(packageRoot)) {
+      if (/^UPDATE READY - version .*\.txt$/.test(name)) {
+        rmSync(join(packageRoot, name), { force: true });
+      }
+    }
+  } catch {
+    // Best effort: a stale marker is untidy, never harmful.
+  }
+}
+
 /** Where the staged-version marker lives, beside the folders it describes. */
 export function statePath(packageRoot) {
   return join(packageRoot, 'update-state.json');
@@ -456,6 +485,29 @@ export async function checkForUpdate({
       lastCheckedAt: now.toISOString(),
       lastFailure: null,
     });
+
+    // The durable half of the news. See updateMarkerPath.
+    try {
+      clearUpdateMarkers(packageRoot);
+      writeFileSync(
+        updateMarkerPath(packageRoot, result.staged),
+        [
+          `Version ${result.staged} has been downloaded and is ready.`,
+          '',
+          'It will start being used the next time you FULLY QUIT Claude and open',
+          'it again — right-click the Claude icon near the clock and choose Quit.',
+          'Closing the window is not enough.',
+          '',
+          'Nothing needs to be installed by hand, and this file disappears once',
+          'the new version is in use.',
+          '',
+        ].join('\r\n'),
+        'utf-8'
+      );
+    } catch {
+      // The toast and Check-Tally still carry it.
+    }
+
     return { acted: true, reason: 'staged', staged: result.staged, latest: release.version };
   } catch (error) {
     // Offline, DNS failure, a firewall swallowing github.com. All ordinary, and

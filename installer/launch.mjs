@@ -150,6 +150,27 @@ function promote() {
 }
 
 /**
+ * Remove the "UPDATE READY" note once the update it describes has been applied.
+ *
+ * Written by the updater so the news survives a suppressed notification; removed
+ * here so the folder does not keep telling somebody to restart for a version
+ * they are already running. Duplicated rather than imported from the payload for
+ * the same reason as isCompletePayload: this must work even if the payload is
+ * the thing that is broken.
+ */
+function clearUpdateMarkers() {
+  try {
+    for (const name of readdirSync(ROOT)) {
+      if (/^UPDATE READY - version .*\.txt$/.test(name)) {
+        rmSync(join(ROOT, name), { force: true });
+      }
+    }
+  } catch {
+    // A stale note is untidy, never harmful.
+  }
+}
+
+/**
  * Refresh the files that live OUTSIDE the payload, from copies inside it.
  *
  * Without this, `launch.mjs` and the .bat launchers are frozen at whatever
@@ -273,6 +294,9 @@ if (promoted !== null) {
   patchState({ staged: null, stagedAt: null, promotedAt: new Date().toISOString() });
   // After promotion, so the launchers on disk match the version now active.
   syncBootFiles();
+  // The "an update is waiting" note has served its purpose. Leaving it would
+  // have somebody quitting Claude a second time to apply something already applied.
+  clearUpdateMarkers();
 }
 
 let started = await start(APP);
