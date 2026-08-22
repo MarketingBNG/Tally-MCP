@@ -18,6 +18,12 @@ spreadsheet.** Previously that notification only came from the spreadsheet job,
 so anyone using just the live connector had updates appear and apply with
 nothing to explain why the version number changed.
 
+**And a note is left in the folder, so the news survives a missed notification.**
+Windows Focus assist hides notification banners entirely, which would make a
+waiting update invisible. An `UPDATE READY - version ...txt` file now appears in
+the same folder as Setup and Check-Tally, and disappears by itself once the new
+version is in use.
+
 ## 0.8.2 — 2026-08-22
 **Updates now actually install themselves.** Version 0.8.1 could find a new
 version and download it, but could not unpack it — so nothing ever updated. If
