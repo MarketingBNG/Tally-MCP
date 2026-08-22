@@ -203,7 +203,22 @@ describe('a payload folder', () => {
   });
 });
 
-describe('staging a download', () => {
+/**
+ * WINDOWS ONLY, and not as a convenience.
+ *
+ * Staging unpacks a zip, and the extractor it uses is Windows by construction:
+ * System32	ar.exe with a PowerShell Expand-Archive fallback. Neither exists on
+ * Linux, so these tests cannot run there — and the product cannot either, since
+ * it ships a bundled node.exe, registers a Windows scheduled task and talks to
+ * Claude Desktop on Windows.
+ *
+ * Skipped rather than made cross-platform on purpose. Building the zip with
+ * whatever archiver each platform happens to have would test a code path that
+ * never ships, and the CI matrix runs Windows precisely so these DO execute
+ * somewhere real. Linux is in the matrix to catch case-sensitive import paths,
+ * which is a different job.
+ */
+describe.skipIf(process.platform !== 'win32')('staging a download', () => {
   let root: string;
   let zipBytes: Buffer;
 
