@@ -12,6 +12,12 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.3 — unreleased
+**You now get told when an update is ready, even if you never set up the
+spreadsheet.** Previously that notification only came from the spreadsheet job,
+so anyone using just the live connector had updates appear and apply with
+nothing to explain why the version number changed.
+
 ## 0.8.2 — 2026-08-22
 **Updates now actually install themselves.** Version 0.8.1 could find a new
 version and download it, but could not unpack it — so nothing ever updated. If

@@ -237,7 +237,26 @@ function checkForUpdatesInBackground() {
           installed,
           minIntervalMinutes: 60,
         });
-        if (result.acted) note(`version ${result.staged} is ready for the next restart`);
+        if (!result.acted) return;
+
+        note(`version ${result.staged} is ready for the next restart`);
+
+        /*
+         * Tell the user, here as well as from the exporter.
+         *
+         * The exporter's notification only reaches installs that set up the
+         * spreadsheet. Everyone else would have an update silently appear and
+         * silently apply at some later restart, with nothing to explain why the
+         * version number moved. Detached, because a blocking toast would stall
+         * the server's event loop for as long as PowerShell takes.
+         */
+        const { toastDetached } = await import(
+          pathToFileURL(join(APP, 'scripts', 'lib', 'notify.mjs')).href
+        );
+        toastDetached(
+          'TallyPrime for Claude has an update ready',
+          `Version ${result.staged} will be used the next time you fully quit and reopen Claude.`
+        );
       } catch {
         // Offline, a firewall, a payload without the updater. All ordinary.
       }
