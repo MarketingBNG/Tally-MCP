@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.8.7 — unreleased
+## 0.8.7 — 2026-08-24
 **"The publisher could not be verified" no longer keeps appearing.** Windows
 marks every file it unpacks from a downloaded zip, and then asks permission each
 time one of them runs — so the export, which checks Tally every five minutes,
