@@ -1,0 +1,103 @@
+<!--
+  An ordinary chart of accounts covering the groups the tool tests file their
+  ledgers under.
+
+  WHY THIS EXISTS. The tools that scope a ledger filter by group — outstanding,
+  confirmations, GST, TDS, fixed assets — read the group collection so that a
+  ledger in a SUB-group of the group asked for is still found. When a test
+  registers no handler for that request, the mock 501s it, the fetch degrades to
+  the old direct-parent match, and the test passes while exercising the fallback
+  instead of the real path. Registering this keeps those suites on the path that
+  ships.
+
+  The hierarchy here is real but INERT: no ledger in any suite that loads this
+  is filed below a group those suites ask for, so every result is identical to
+  the old direct-parent behaviour and adding this fixture changed no assertion.
+  Nesting that actually changes an answer is tested on its own chart in
+  tests/tools/subGroupScoping.test.ts — putting it here would make unrelated
+  suites' expectations depend on this file's shape.
+
+  "Tangible Assets" is deliberately ABSENT even though Fixed Assets is present:
+  fixedAssets.test.ts asks for it precisely to prove that a group name this
+  company does not use returns an empty schedule with a warning rather than an
+  error. Adding it would turn that test into something else.
+
+  "SALARY PAYABLE" and "Unclassified" are groups some ledger fixtures name but
+  Tally would not create; they are included so the chart is complete with
+  respect to those fixtures rather than half-covering them.
+
+  All values are invented. See tests/fixtures/README.md.
+-->
+<ENVELOPE>
+ <HEADER>
+  <VERSION>1</VERSION>
+  <STATUS>1</STATUS>
+ </HEADER>
+ <BODY>
+  <DESC>
+   <CMPINFO>
+    <COMPANY>0</COMPANY>
+    <GROUP>0</GROUP>
+   </CMPINFO>
+  </DESC>
+  <DATA>
+   <COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="7">
+    <GROUP NAME="Current Assets" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Current Liabilities" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">No</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Sundry Debtors" RESERVEDNAME="">
+     <PARENT TYPE="String">Current Assets</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Sundry Creditors" RESERVEDNAME="">
+     <PARENT TYPE="String">Current Liabilities</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">No</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Bank Accounts" RESERVEDNAME="">
+     <PARENT TYPE="String">Current Assets</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Duties &amp; Taxes" RESERVEDNAME="">
+     <PARENT TYPE="String">Current Liabilities</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">No</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="SALARY PAYABLE" RESERVEDNAME="">
+     <PARENT TYPE="String">Current Liabilities</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">No</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Fixed Assets" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Sales Accounts" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <ISREVENUE TYPE="Logical">Yes</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">No</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Indirect Expenses" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <ISREVENUE TYPE="Logical">Yes</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+    <GROUP NAME="Unclassified" RESERVEDNAME="">
+     <PARENT TYPE="String">Primary</PARENT>
+     <ISREVENUE TYPE="Logical">No</ISREVENUE>
+     <ISDEEMEDPOSITIVE TYPE="Logical">Yes</ISDEEMEDPOSITIVE>
+    </GROUP>
+   </COLLECTION>
+  </DATA>
+ </BODY>
+</ENVELOPE>

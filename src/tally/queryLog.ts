@@ -104,6 +104,74 @@ export function withoutQueryLog<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Run `fn` while ALSO recording its provenance separately, for a caller that
+ * intends to replay it later.
+ *
+ * ## Why this exists
+ *
+ * `fetchCollection` memoises the parsed collection, so a second identical fetch
+ * within the TTL never reaches `TallyClient.send` — and `send` is the one place
+ * a request reports itself. Left alone, the cached answer would come back with
+ * its request body missing from `source_query` and dated by nothing: a figure
+ * presented as sourced that cannot be re-derived.
+ *
+ * Replaying needs a record of what the live path reported, and it must be the
+ * WHOLE record, not just the collection response. Producing a parse also reads
+ * the company's currency, which is older than the collection fetch and decides
+ * the label on every amount. Dating a cache hit by the collection response
+ * alone would claim the answer is fresher than the currency it is labelled in.
+ *
+ * ## Why not a plain `withQueryLog` child
+ *
+ * A replaced scope would hide these requests from the caller until the replay,
+ * and — worse — would not share the caller's `inFlight` memo, so the currency
+ * lookup inside would become a second real round trip. This forwards every note
+ * to the parent as it happens AND keeps a copy, so the live call behaves exactly
+ * as it did before and only the cached path gains anything.
+ */
+export async function captureProvenance<T>(
+  fn: () => Promise<T>
+): Promise<{ value: T; provenance: RecordedProvenance }> {
+  const parent = storage.getStore();
+  const child: QueryScope = {
+    queries: [],
+    oldestFetchAt: null,
+    ...(parent?.inFlight === undefined ? {} : { inFlight: parent.inFlight }),
+  };
+
+  const value = await storage.run(child, fn);
+
+  // Forward to the parent, so the live call records exactly what it always did.
+  if (parent !== undefined) {
+    parent.queries.push(...child.queries);
+    if (child.oldestFetchAt !== null) {
+      if (parent.oldestFetchAt === null || child.oldestFetchAt < parent.oldestFetchAt) {
+        parent.oldestFetchAt = child.oldestFetchAt;
+      }
+    }
+  }
+
+  return { value, provenance: { queries: child.queries, oldestFetchAt: child.oldestFetchAt } };
+}
+
+/** What one production reported, kept so a later cache hit can report the same. */
+export interface RecordedProvenance {
+  queries: string[];
+  oldestFetchAt: number | null;
+}
+
+/**
+ * Report a previously captured provenance record as the current answer's.
+ *
+ * The counterpart to `captureProvenance`: what the live path told the query log,
+ * told again on behalf of an answer served from a memoised parse.
+ */
+export function replayProvenance(provenance: RecordedProvenance): void {
+  for (const body of provenance.queries) noteQuery(body);
+  if (provenance.oldestFetchAt !== null) noteDataFetchedAt(provenance.oldestFetchAt);
+}
+
+/**
  * Record when data contributing to the current answer was read from Tally.
  *
  * Called with the original fetch time on a cache hit, not the time of the hit —

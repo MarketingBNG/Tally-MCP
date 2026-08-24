@@ -30,6 +30,7 @@ function build(): ToolRegistry {
 
 function serveTdsLedgers(): void {
   mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('<ID>Groups</ID>', { body: fixture('groups-common.xml') });
   mock.onBodyContaining('<FETCH>*</FETCH>', { body: fixture('ledger-list-tds.xml') });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list-tds.xml') });
 }
@@ -128,6 +129,7 @@ describe('tally_get_tds summary', () => {
   it('reports an unconfigured company as a finding rather than a failure', async () => {
     mock.reset();
     mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+    mock.onBodyContaining('<ID>Groups</ID>', { body: fixture('groups-common.xml') });
     mock.onBodyContaining('<FETCH>*</FETCH>', { body: fixture('ledger-list-allfields.xml') });
     mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list-allfields.xml') });
 

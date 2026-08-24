@@ -10,6 +10,8 @@ import {
 } from '../schemas/common.js';
 import { resolvePeriodForCompany, runTool, whole, type ToolDeps } from './toolResult.js';
 import { fetchLedgers } from './ledgers.js';
+import { fetchGroupsForScoping } from './groups.js';
+import { ledgersUnderGroups } from '../model/groupTree.js';
 import { fetchVouchers } from './vouchers.js';
 
 /**
@@ -131,18 +133,27 @@ export function registerFixedAssetTools(server: McpServer, deps: ToolDeps): void
         const hints = (args.depreciationHints ?? [...DEFAULT_DEPRECIATION_HINTS]).map((hint) =>
           hint.toLowerCase()
         );
-        const groupSet = new Set(groups.map((group) => group.toLowerCase()));
-
-        const period = await resolvePeriodForCompany(deps, args.fromDate, args.toDate, args.company);
-        const { ledgers, warnings: ledgerWarnings } = await fetchLedgers(deps, args.company);
+        const period = await resolvePeriodForCompany(
+          deps,
+          args.fromDate,
+          args.toDate,
+          args.company
+        );
+        const [{ ledgers, warnings: ledgerWarnings }, { groups: chart, warnings: groupWarnings }] =
+          await Promise.all([fetchLedgers(deps, args.company), fetchGroupsForScoping(deps, args.company)]);
         const { vouchers, warnings: voucherWarnings } = await fetchVouchers(
           deps,
           args.company,
           period
         );
 
-        const assetLedgers = ledgers.filter((ledger) =>
-          groupSet.has((ledger.parent ?? '').toLowerCase())
+        // At or under the requested groups. Fixed assets are routinely filed
+        // in sub-groups by class, so the direct-parent match this replaces
+        // missed most registers that bother to organise themselves.
+        const { matched: assetLedgers, warnings: assetGroupWarnings } = ledgersUnderGroups(
+          ledgers,
+          chart,
+          groups
         );
         const assetNames = new Map(
           assetLedgers.map((ledger) => [ledger.name.toLowerCase(), ledger.name])
@@ -262,7 +273,12 @@ export function registerFixedAssetTools(server: McpServer, deps: ToolDeps): void
           };
         });
 
-        const warnings = [...ledgerWarnings, ...voucherWarnings];
+        const warnings = [
+          ...ledgerWarnings,
+          ...voucherWarnings,
+          ...groupWarnings,
+          ...assetGroupWarnings,
+        ];
 
         if (assetLedgers.length === 0) {
           warnings.push(

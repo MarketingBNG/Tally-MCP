@@ -28,6 +28,27 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
 
+      /**
+       * A ceiling on module length, so the 2026-08 split does not silently undo
+       * itself.
+       *
+       * Ten files had passed 600 lines and the largest was 1,623. Each had grown
+       * by accretion rather than by decision — toolResult.ts alone held company
+       * resolution, period resolution, response-size guarding, provenance,
+       * currency and a generic filter, and was imported by 31 files. Splitting
+       * them was a pure move; keeping them split needs a rule.
+       *
+       * 600 with the largest file at 555, which leaves room to add to a module
+       * without a fight but not room to grow another 1,000-line one. Comments
+       * count deliberately: the reasoning in this codebase is load-bearing and
+       * must not be what gets deleted to satisfy a linter — if a file is over,
+       * the answer is to split it, not to trim its explanation.
+       *
+       * Tests are exempt below: a test file is a list of independent cases, and
+       * splitting one to satisfy a line count buys nothing.
+       */
+      'max-lines': ['error', { max: 600, skipBlankLines: false, skipComments: false }],
+
       // This server speaks MCP over stdio: stdout IS the protocol channel.
       // Anything written there corrupts the transport, so console is banned
       // outright — use the logger in src/utils/logger.ts, which writes to stderr.
@@ -52,6 +73,9 @@ export default tseslint.config(
     files: ['tests/**/*.ts', 'mock-tally/**/*.ts'],
     rules: {
       'no-console': 'off',
+      // A test file is a list of independent cases. Splitting one to satisfy a
+      // line count moves cases around without making anything clearer.
+      'max-lines': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
       // The setup helpers are plain ESM with no declarations, so anything a
@@ -102,6 +126,10 @@ export default tseslint.config(
     },
     rules: {
       'no-console': 'off',
+      // setup.mjs is one linear installer script: it does its steps in order,
+      // and the order is the logic. Splitting it into modules would hide the
+      // sequence a reader needs to follow.
+      'max-lines': 'off',
     },
   },
   prettier

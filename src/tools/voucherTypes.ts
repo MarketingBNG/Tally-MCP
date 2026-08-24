@@ -25,6 +25,7 @@ export async function fetchVoucherTypes(
   company: string | undefined
 ): Promise<{ voucherTypes: VoucherType[]; warnings: string[] }> {
   const { data, warnings } = await fetchCollection<VoucherType>(deps, company, {
+    kind: 'voucherType',
     build: (options) => buildVoucherTypeListRequest(options, true),
     normalize: normalizeVoucherTypes,
   });

@@ -21,7 +21,7 @@ import {
 } from './toolResult.js';
 import { fetchLedgers } from './ledgers.js';
 import { fetchVouchers } from './vouchers.js';
-import { buildMovements, type LedgerMovement } from './ledgerMovements.js';
+import { buildMovements, sortVouchersByDate, type LedgerMovement } from './ledgerMovements.js';
 import { voucherMatchesAnyField } from './voucherFilters.js';
 import { matchesText } from '../utils/text.js';
 
@@ -202,8 +202,12 @@ export function registerPartyStatementTools(server: McpServer, deps: ToolDeps): 
           ...(await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company))
         );
 
+        // Sorted ONCE for every matched ledger. The order buildMovements needs
+        // does not depend on which ledger is being read, so sorting inside it
+        // meant copying and re-sorting the whole population per ledger.
+        const byDate = sortVouchersByDate(vouchers);
         const ledgers = matchedLedgers.map((ledger) =>
-          buildLedgerStatement(vouchers, ledger, warnings)
+          buildLedgerStatement(byDate, ledger, warnings)
         );
 
         const totalMovements = ledgers.reduce((sum, ledger) => sum + ledger.movementCount, 0);
@@ -276,7 +280,7 @@ function buildLedgerStatement(
   ledger: Ledger,
   warnings: string[]
 ): LedgerStatement {
-  const movements = buildMovements(vouchers, ledger.name, ledger.openingBalance, warnings);
+  const movements = buildMovements(vouchers, ledger.name, ledger.openingBalance, warnings, true);
   const currency = ledger.openingBalance?.currency ?? DEFAULT_CURRENCY;
 
   let totalDebit = new Decimal(0);

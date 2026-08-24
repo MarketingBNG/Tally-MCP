@@ -105,6 +105,81 @@ function adaptSource(
  * real state, and it has to land on one side to be representable at all. It is
  * flagged so nobody reads a nil credit as a positive assertion.
  */
+/**
+ * Marker for "this balance was nil", carrying only the label.
+ *
+ * Not a message: `foldNilBalanceNotes` turns however many of these accumulate
+ * into one sentence. The prefix is deliberately not something a real warning
+ * could start with, so folding can never swallow an unrelated note — and it is
+ * plain ASCII rather than a control character, so a marker that ever escaped
+ * the fold would still be readable text rather than a NUL byte in a JSON
+ * payload.
+ */
+const NIL_BALANCE_TAG = '[[nil-balance]] ';
+
+/**
+ * How many nil balances are named before the rest are counted.
+ *
+ * Enough to see what kind of account this is happening to, few enough that the
+ * note stays readable.
+ */
+const NIL_BALANCES_NAMED = 5;
+
+/**
+ * Collapse the per-balance nil markers into a single counted note.
+ *
+ * ## Why this exists
+ *
+ * The note is one fixed explanatory sentence — a nil balance has no side, so it
+ * is reported as a zero credit — and it was emitted once per nil balance. On a
+ * real book (AGBV Nutrition, measured live 2026-08-22) that was 354 opening and
+ * 170 closing notes: **83 KB of one repeated paragraph**, out of an 88 KB
+ * warnings block, in a tie-out whose actual results are about 1 KB.
+ *
+ * It broke the tool rather than merely bloating it. `tally_check_tie_out` across
+ * four companies produced a 189 KB response against a 150 KB ceiling and failed
+ * with RESPONSE_TOO_LARGE — the data fetched fine and could not be returned.
+ *
+ * ## What is kept
+ *
+ * The count, and up to `NIL_BALANCES_NAMED` of the labels. Nothing is silently
+ * dropped: the note says how many there are and how many are not named, so a
+ * reader knows the full extent even though they are not all listed. The
+ * explanation itself is stated once, which is all it was ever saying.
+ *
+ * Returns a new array; the order of other warnings is preserved, with the folded
+ * note taking the position of the first marker so it stays near its context.
+ */
+export function foldNilBalanceNotes(warnings: readonly string[]): string[] {
+  const labels = warnings
+    .filter((w) => w.startsWith(NIL_BALANCE_TAG))
+    .map((w) => w.slice(NIL_BALANCE_TAG.length));
+
+  if (labels.length === 0) return [...warnings];
+
+  const named = labels.slice(0, NIL_BALANCES_NAMED);
+  const rest = labels.length - named.length;
+  const note =
+    `${String(labels.length)} balance(s) are nil: ${named.join('; ')}` +
+    (rest > 0 ? `, and ${String(rest)} more` : '') +
+    '. A nil balance has no natural side, so each is reported as a zero credit; ' +
+    'do not read the side as meaningful.';
+
+  const out: string[] = [];
+  let placed = false;
+  for (const w of warnings) {
+    if (!w.startsWith(NIL_BALANCE_TAG)) {
+      out.push(w);
+      continue;
+    }
+    if (!placed) {
+      out.push(note);
+      placed = true;
+    }
+  }
+  return out;
+}
+
 export function toSignedAmount(
   money: Money | null,
   label: string,
@@ -123,9 +198,11 @@ export function toSignedAmount(
   }
 
   if (value.isZero()) {
-    warnings.push(
-      `${label} is nil. A nil balance has no natural side, so it is reported as a zero credit; do not read the side as meaningful.`
-    );
+    // Tagged, not spelled out. The explanation is identical every time and the
+    // only varying part is which balance it was, so the sentence is assembled
+    // ONCE by `foldNilBalanceNotes` from however many of these accumulate. See
+    // that function for what the unfolded version cost.
+    warnings.push(`${NIL_BALANCE_TAG}${label}`);
   }
 
   return {
@@ -307,7 +384,7 @@ export function adaptAccounts(
     });
   }
 
-  return { data: accounts, warnings };
+  return { data: accounts, warnings: foldNilBalanceNotes(warnings) };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import { Decimal } from 'decimal.js';
 import type { NestedRecord } from '../tally/TallyResponseParser.js';
 import type { Voucher } from '../tally/normalize.js';
+import { matchesText } from '../utils/text.js';
 
 /**
  * Client-side voucher filtering, shared by every tool that searches vouchers.
@@ -31,17 +32,21 @@ export interface VoucherFilters {
 
 /** True when the voucher satisfies every supplied filter. */
 export function matchesVoucherFilters(voucher: Voucher, filters: VoucherFilters): boolean {
-  if (filters.query !== undefined) {
-    const haystack = [
+  if (
+    filters.query !== undefined &&
+    !matchesText(
+      filters.query,
       voucher.voucherNumber,
       voucher.partyLedgerName,
       voucher.narration,
-      ...voucher.entries.map((entry) => entry.ledgerName),
-    ]
-      .filter((value): value is string => value !== null)
-      .join(' ')
-      .toLowerCase();
-    if (!haystack.includes(filters.query.toLowerCase())) return false;
+      ...voucher.entries.map((entry) => entry.ledgerName)
+    )
+  ) {
+    // Per value rather than against one joined string: a needle spanning the gap
+    // between two fields — the tail of a narration and the head of a ledger name
+    // — used to match, which is a hit no caller could account for. `matchesText`
+    // skips nulls rather than coercing them, so an absent field cannot match.
+    return false;
   }
 
   if (
@@ -53,24 +58,19 @@ export function matchesVoucherFilters(voucher: Voucher, filters: VoucherFilters)
 
   if (
     filters.ledger !== undefined &&
-    !voucher.entries.some((entry) =>
-      entry.ledgerName.toLowerCase().includes(filters.ledger!.toLowerCase())
+    !matchesText(
+      filters.ledger,
+      ...voucher.entries.map((entry) => entry.ledgerName)
     )
   ) {
     return false;
   }
 
-  if (
-    filters.party !== undefined &&
-    !(voucher.partyLedgerName ?? '').toLowerCase().includes(filters.party.toLowerCase())
-  ) {
+  if (filters.party !== undefined && !matchesText(filters.party, voucher.partyLedgerName)) {
     return false;
   }
 
-  if (
-    filters.narration !== undefined &&
-    !(voucher.narration ?? '').toLowerCase().includes(filters.narration.toLowerCase())
-  ) {
+  if (filters.narration !== undefined && !matchesText(filters.narration, voucher.narration)) {
     return false;
   }
 

@@ -59,8 +59,27 @@ export interface TallyResponse {
 /** Upper bound on distinct cache entries, so a long session cannot grow this unboundedly. */
 const MAX_CACHE_ENTRIES = 200;
 
+/**
+ * Upper bound on the BYTES this cache holds, which is the bound that matters.
+ *
+ * A count of 200 is not a memory bound when the entries are Tally responses.
+ * Measured live 2026-08-22 on a 330-ledger book, one all-fields ledger response
+ * was 5.22 MB — 200 of those is about 1 GB — and the voucher responses recorded
+ * in requests.ts run to 39 MB and 79 MB, where 200 entries is more memory than
+ * the machine has. The count was never reached in practice, so nothing evicted,
+ * so the ceiling was whatever the session happened to ask for.
+ *
+ * 64 MB, so a working set of the ordinary requests (a curated ledger fetch is
+ * 190 KB, a company list 649 bytes) all fit comfortably while two large voucher
+ * payloads cannot sit here unnoticed. Both bounds apply: the count still stops a
+ * long session accumulating thousands of tiny entries.
+ */
+const MAX_CACHE_BYTES = 64 * 1024 * 1024;
+
 interface CacheEntry {
   expiresAt: number;
+  /** Payload size, so eviction can bound bytes without re-measuring. */
+  bytes: number;
   /**
    * When this response was actually read from TallyPrime. Reported as provenance
    * on every cache hit, so an answer served from memory is dated by when its
@@ -76,6 +95,8 @@ export class TallyClient {
   readonly #queue: RequestQueue;
   readonly #fetchImpl: typeof fetch;
   readonly #cache = new Map<string, CacheEntry>();
+  /** Running total of `bytes` across #cache, kept in step with every add and delete. */
+  #cacheBytes = 0;
 
   constructor(
     config: AppConfig,
@@ -203,13 +224,39 @@ export class TallyClient {
     /** When the data was read. The TTL runs from then, not from this store. */
     fetchedAt: number
   ): void {
-    if (this.#cache.size >= MAX_CACHE_ENTRIES) {
-      // Oldest insertion order — Map preserves it — is close enough to LRU
-      // for a bound whose only job is to stop unbounded growth.
+    const bytes = response.body.length;
+
+    // Replacing a key: drop the old weight before adding the new.
+    this.#forget(key);
+
+    // Both bounds, oldest first. Insertion order — which Map preserves — is
+    // close enough to LRU for a bound whose only job is to stop unbounded
+    // growth. The byte loop can evict several entries for one large arrival,
+    // which is the point: without it a single 79 MB voucher response sat here
+    // until the TTL expired, however little else fitted alongside it.
+    while (this.#cache.size >= MAX_CACHE_ENTRIES || this.#cacheBytes + bytes > MAX_CACHE_BYTES) {
       const oldest = this.#cache.keys().next().value;
-      if (oldest !== undefined) this.#cache.delete(oldest);
+      if (oldest === undefined) break;
+      this.#forget(oldest);
     }
-    this.#cache.set(key, { expiresAt: fetchedAt + ttlMs, fetchedAt, response });
+
+    // A single payload larger than the whole budget is not cached at all rather
+    // than emptying the cache to hold one thing it will evict again shortly.
+    if (bytes > MAX_CACHE_BYTES) {
+      this.#logger.debug('response too large to cache', { bytes });
+      return;
+    }
+
+    this.#cache.set(key, { expiresAt: fetchedAt + ttlMs, fetchedAt, bytes, response });
+    this.#cacheBytes += bytes;
+  }
+
+  /** Remove one entry and its weight together, so the running total cannot drift. */
+  #forget(key: string): void {
+    const existing = this.#cache.get(key);
+    if (existing === undefined) return;
+    this.#cacheBytes -= existing.bytes;
+    this.#cache.delete(key);
   }
 
   async #sendNow(body: string, requestClass: RequestClass): Promise<TallyResponse> {

@@ -10,6 +10,8 @@ import {
 import { paginate, resolvePagination } from '../utils/pagination.js';
 import { fromPage, runTool, type ToolDeps } from './toolResult.js';
 import { fetchLedgers } from './ledgers.js';
+import { fetchGroupsForScoping } from './groups.js';
+import { ledgersUnderGroups } from '../model/groupTree.js';
 
 /**
  * `tally_get_confirmation_list`: the parties to send balance confirmations to.
@@ -36,7 +38,7 @@ import { fetchLedgers } from './ledgers.js';
  */
 
 const PROCESS_NOTICE =
-  'THE CONFIRMATION PROCESS IS THE AUDITOR\'S, NOT THIS TOOL\'S. Under SA 505 the auditor must ' +
+  "THE CONFIRMATION PROCESS IS THE AUDITOR'S, NOT THIS TOOL'S. Under SA 505 the auditor must " +
   'control the sending and receiving of requests — the client must not handle them. This tool ' +
   'only lists candidates and their recorded balances. It does not draft requests, does not ' +
   'decide the sample, and cannot know whether a reply is genuine. Selecting which parties to ' +
@@ -75,7 +77,12 @@ const DESCRIPTION = [
   READ_ONLY_NOTICE,
 ].join('\n');
 
-const DEFAULT_GROUPS = ['Sundry Debtors', 'Sundry Creditors', 'Accounts Receivable', 'Accounts Payable'];
+const DEFAULT_GROUPS = [
+  'Sundry Debtors',
+  'Sundry Creditors',
+  'Accounts Receivable',
+  'Accounts Payable',
+];
 
 export function registerConfirmationTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -117,20 +124,30 @@ export function registerConfirmationTools(server: McpServer, deps: ToolDeps): vo
     async (args) =>
       runTool('tally_get_confirmation_list', deps, async () => {
         const groups = args.partyGroups ?? [...DEFAULT_GROUPS];
-        const groupSet = new Set(groups.map((group) => group.toLowerCase()));
         const direction = args.direction ?? 'both';
         const pagination = resolvePagination(args.page, args.pageSize);
 
         // Full fields: the contact details are not in the curated set.
-        const { ledgers, warnings } = await fetchLedgers(deps, args.company, true);
+        const [{ ledgers, warnings }, { groups: chart, warnings: groupWarnings }] =
+          await Promise.all([
+            fetchLedgers(deps, args.company, true),
+            fetchGroupsForScoping(deps, args.company),
+          ]);
+
+        // At or under the requested groups. A party filed one level deeper than
+        // the group named here is still a party to circularise.
+        const { matched: parties, warnings: partyWarnings } = ledgersUnderGroups(
+          ledgers,
+          chart,
+          groups
+        );
 
         let zeroBalance = 0;
         let unreadableBalance = 0;
         let belowMinimum = 0;
         let uncontactable = 0;
 
-        const rows = ledgers
-          .filter((ledger) => groupSet.has((ledger.parent ?? '').toLowerCase()))
+        const rows = parties
           .map((ledger) => {
             const raw = ledger.closingBalance?.amount ?? null;
             if (raw === null) {
@@ -176,7 +193,7 @@ export function registerConfirmationTools(server: McpServer, deps: ToolDeps): vo
           .filter((row): row is NonNullable<typeof row> => row !== null)
           .sort((a, b) => new Decimal(b.magnitude).comparedTo(new Decimal(a.magnitude)));
 
-        const allWarnings = [...warnings];
+        const allWarnings = [...warnings, ...groupWarnings, ...partyWarnings];
         if (rows.length === 0) {
           allWarnings.push(
             `No party under ${groups.map((g) => `"${g}"`).join(', ')} met the criteria. Check ` +

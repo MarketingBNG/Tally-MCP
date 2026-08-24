@@ -20,7 +20,15 @@ import {
   type ToolDeps,
 } from './toolResult.js';
 import { fetchLedgers } from './ledgers.js';
+import { fetchGroupsForScoping } from './groups.js';
+import { ledgersUnderGroups } from '../model/groupTree.js';
 import { fetchVouchers } from './vouchers.js';
+import {
+  DEFAULT_TAX_GROUPS,
+  isInformativeValue,
+  taxGroupsDescription,
+  taxKeyMatcher,
+} from './taxFields.js';
 
 /**
  * GST tools.
@@ -93,8 +101,7 @@ const DESCRIPTION = [
   READ_ONLY_NOTICE,
 ].join('\n');
 
-/** Tally group names for tax ledgers. Overridable, since companies rename groups. */
-const DEFAULT_TAX_GROUPS = ['Duties & Taxes'];
+
 
 /**
  * Field-name fragments that mark GST content.
@@ -147,24 +154,13 @@ function isCompanyLevelGstKey(key: string): boolean {
   return upper.startsWith('CMP') || COMPANY_GST_FIELD_NAMES.has(upper);
 }
 
-/**
- * Values that carry no information even on a GST field.
- *
- * Tally populates GST fields with explicit negatives on transactions that have
- * no GST at all, so presence alone does not indicate GST content.
- */
-const UNINFORMATIVE_VALUES = new Set(['', 'not applicable', 'no', '0', '0.00', 'unknown']);
-
-function isGstKey(key: string): boolean {
-  const upper = key.toUpperCase();
-  if (FALSE_POSITIVE_KEYS.has(upper)) return false;
-  return GST_FIELD_HINTS.some((hint) => upper.includes(hint));
-}
+/** See taxKeyMatcher: hints plus the denylist that corrects them. */
+const isGstKey = taxKeyMatcher(GST_FIELD_HINTS, FALSE_POSITIVE_KEYS);
 
 /** A GST field that says something about THIS transaction. */
 function isTransactionGstEntry([key, value]: [string, string]): boolean {
   if (!isGstKey(key) || isCompanyLevelGstKey(key)) return false;
-  return !UNINFORMATIVE_VALUES.has(value.trim().toLowerCase());
+  return isInformativeValue(value);
 }
 
 export function registerGstTools(server: McpServer, deps: ToolDeps): void {
@@ -178,7 +174,7 @@ export function registerGstTools(server: McpServer, deps: ToolDeps): void {
           .array(z.string().min(1))
           .optional()
           .describe(
-            `summary only. Groups holding tax ledgers. Defaults to ${DEFAULT_TAX_GROUPS.map((g) => `"${g}"`).join(', ')}. Override if this company uses different group names.`
+            taxGroupsDescription(DEFAULT_TAX_GROUPS)
           ),
         company: companySchema,
         ...dateRangeSchema,
@@ -198,22 +194,26 @@ async function fetchGstSummary(
   args: { taxGroups?: string[] | undefined; company?: string | undefined }
 ): Promise<ToolBodyResult> {
   const groups = args.taxGroups ?? [...DEFAULT_TAX_GROUPS];
-  const groupSet = new Set(groups.map((group) => group.toLowerCase()));
 
   // Full fields: GST registration detail is not in the curated set.
-  const { ledgers, warnings } = await fetchLedgers(deps, args.company, true);
+  const [{ ledgers, warnings }, { groups: chart, warnings: groupWarnings }] = await Promise.all([
+    fetchLedgers(deps, args.company, true),
+    fetchGroupsForScoping(deps, args.company),
+  ]);
 
-  const taxLedgers = ledgers
-    .filter((ledger) => groupSet.has((ledger.parent ?? '').toLowerCase()))
-    .map((ledger) => ({
-      name: ledger.name,
-      group: ledger.parent,
-      closingBalance: ledger.closingBalance,
-      gstFields: Object.fromEntries(
-        Object.entries(ledger.fields ?? {}).filter(([key]) => isGstKey(key))
-      ),
-      source: ledger.source,
-    }));
+  // At or under the requested groups. Tax ledgers nest under "Duties & Taxes"
+  // by tax type in most GST setups, which the direct-parent match missed.
+  const { matched: inScope, warnings: scopeWarnings } = ledgersUnderGroups(ledgers, chart, groups);
+
+  const taxLedgers = inScope.map((ledger) => ({
+    name: ledger.name,
+    group: ledger.parent,
+    closingBalance: ledger.closingBalance,
+    gstFields: Object.fromEntries(
+      Object.entries(ledger.fields ?? {}).filter(([key]) => isGstKey(key))
+    ),
+    source: ledger.source,
+  }));
 
   // Registration details as recorded on party ledgers, with counts, so
   // it is visible how widely each value is actually used.
@@ -225,7 +225,7 @@ async function fetchGstSummary(
 
   const partiesWithGstin = ledgers.filter((ledger) => ledger.gstin !== null).length;
 
-  const allWarnings = [...warnings];
+  const allWarnings = [...warnings, ...groupWarnings, ...scopeWarnings];
   if (taxLedgers.length === 0) {
     allWarnings.push(
       `No ledgers were found under ${groups.map((g) => `"${g}"`).join(', ')}. Either this company records no tax ledgers, or it groups them differently — check tally_get_masters type "ledger".`
@@ -279,7 +279,7 @@ async function fetchGstTransactions(
   for (const voucher of vouchers) {
     for (const [key, value] of Object.entries(voucher.fields ?? {})) {
       if (!isGstKey(key) || !isCompanyLevelGstKey(key)) continue;
-      if (UNINFORMATIVE_VALUES.has(value.trim().toLowerCase())) continue;
+      if (!isInformativeValue(value)) continue;
       companyGstRegistration[key] ??= value;
     }
   }

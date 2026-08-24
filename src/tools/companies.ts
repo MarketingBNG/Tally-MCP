@@ -2,19 +2,17 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { DEFAULT_CURRENCY } from '../utils/numbers.js';
 import {
-  buildCompanyListRequest,
   buildLedgerListRequest,
   buildStockItemListRequest,
 } from '../tally/requests.js';
 import {
-  normalizeCompanies,
   normalizeLedgers,
   normalizeStockItems,
   type Company,
 } from '../tally/normalize.js';
 import { TallyError } from '../tally/TallyError.js';
 import { companySchema, READ_ONLY_NOTICE, UNTRUSTED_CONTENT_NOTICE } from '../schemas/common.js';
-import { runTool, whole, type ToolDeps } from './toolResult.js';
+import { companyList, runTool, whole, type ToolDeps } from './toolResult.js';
 
 /**
  * How many distinct values are retained per field before counting stops.
@@ -99,10 +97,9 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
     { description: DESCRIPTION, inputSchema: z.object({}) },
     async () =>
       runTool('tally_list_companies', deps, async () => {
-        const response = await deps.client.send(buildCompanyListRequest(), 'standard');
-        const { data, warnings } = normalizeCompanies(response.body);
-
-        const allWarnings = [...response.repairs, ...warnings];
+        const { companies: data, warnings: allWarnings } = await companyList(deps, {
+          recordProvenance: true,
+        });
         return whole(
           {
             companies: data,
@@ -131,8 +128,9 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
     },
     async (args) =>
       runTool('tally_get_company', deps, async () => {
-        const listResponse = await deps.client.send(buildCompanyListRequest(), 'standard');
-        const companies = normalizeCompanies(listResponse.body).data;
+        const { companies, warnings: listWarnings } = await companyList(deps, {
+          recordProvenance: true,
+        });
 
         // Never `companies[0]` on the unnamed path. This tool's whole output —
         // ledger count, groups in use, which features the data shows — is a
@@ -279,7 +277,7 @@ export function registerCompanyTools(server: McpServer, deps: ToolDeps): void {
           b: [string, { ledgers: number }]
         ): number => b[1].ledgers - a[1].ledgers || a[0].localeCompare(b[0]);
 
-        const allWarnings = [...listResponse.repairs, ...ledgerResponse.repairs, ...warnings];
+        const allWarnings = [...listWarnings, ...ledgerResponse.repairs, ...warnings];
 
         let features: unknown;
         if (args.includeFeatures === true) {

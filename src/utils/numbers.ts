@@ -152,3 +152,46 @@ export function isNegative(money: Money): boolean {
 export function absolute(money: Money): Money {
   return { amount: new Decimal(money.amount).abs().toFixed(), currency: money.currency };
 }
+
+/**
+ * Add money, refusing to label a total in a currency that not every component
+ * shares.
+ *
+ * This module had `toMoney`, `absolute` and `isNegative` but no add, so every
+ * caller that needed a total rolled its own — and each one took the currency
+ * from the FIRST component and applied it to the whole. That is the exact
+ * mislabelling the currency-resolution machinery exists to prevent: this
+ * project has already shipped dollar balances labelled INR once, and a total
+ * summed across two currencies is the same error with arithmetic on top.
+ *
+ * So the disagreement is REPORTED rather than resolved. `mixedCurrencies` lists
+ * every distinct currency seen when there is more than one, and the total's
+ * label falls back to `UNKNOWN_CURRENCY` — a word that cannot be mistaken for a
+ * real currency — instead of quietly picking a winner. A caller that gets a
+ * non-empty `mixedCurrencies` has a figure it must not present as a plain
+ * total; the honest move is to warn, which is why this returns the fact rather
+ * than throwing.
+ *
+ * The arithmetic itself is Decimal throughout, never float.
+ */
+export function sumMoney(
+  amounts: readonly Money[],
+  fallbackCurrency: string = DEFAULT_CURRENCY
+): { total: Money; mixedCurrencies: string[] } {
+  const total = amounts.reduce(
+    (running, money) => running.plus(new Decimal(money.amount)),
+    new Decimal(0)
+  );
+
+  const seen = [...new Set(amounts.map((money) => money.currency))];
+  const mixedCurrencies = seen.length > 1 ? seen : [];
+
+  return {
+    total: {
+      amount: total.toFixed(),
+      currency:
+        mixedCurrencies.length > 0 ? UNKNOWN_CURRENCY : (seen[0] ?? fallbackCurrency),
+    },
+    mixedCurrencies,
+  };
+}

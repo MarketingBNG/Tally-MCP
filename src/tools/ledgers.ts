@@ -19,6 +19,7 @@ export async function fetchLedgers(
   allFields = false
 ): Promise<{ ledgers: Ledger[]; warnings: string[] }> {
   const { data, warnings } = await fetchCollection<Ledger>(deps, company, {
+    kind: 'ledger',
     build: (options) => buildLedgerListRequest(options, allFields),
     normalize: (xml, currency) => normalizeLedgers(xml, allFields, currency),
     timeoutClass: allFields ? 'report' : 'standard',

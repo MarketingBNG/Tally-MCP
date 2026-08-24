@@ -31,6 +31,8 @@ import {
   type ToolDeps,
 } from './toolResult.js';
 import { fetchLedgers } from './ledgers.js';
+import { fetchGroupsForScoping } from './groups.js';
+import { ledgersUnderGroups } from '../model/groupTree.js';
 import { fetchVouchers } from './vouchers.js';
 import type { Voucher } from '../tally/normalize.js';
 
@@ -229,7 +231,8 @@ export async function executeOutstanding(
     ageingAsOn?: string | undefined;
     ageingBuckets?: number[] | undefined;
     ageingPreset?: 'days' | 'schedule_iii' | undefined;
-    creditTerms?: { party?: string | undefined; group?: string | undefined; days: number }[] | undefined;
+    creditTerms?:
+      { party?: string | undefined; group?: string | undefined; days: number }[] | undefined;
     company?: string | undefined;
     fromDate?: string | undefined;
     toDate?: string | undefined;
@@ -250,13 +253,14 @@ export async function executeOutstanding(
   const ageingAsOnEarly = args.ageingAsOn;
 
   const groups = args.groups ?? [...spec.defaultGroups];
-  const groupSet = new Set(groups.map((group) => group.toLowerCase()));
 
-  const { ledgers, warnings: ledgerWarnings } = await fetchLedgers(deps, args.company);
+  const [{ ledgers, warnings: ledgerWarnings }, { groups: chart, warnings: groupWarnings }] =
+    await Promise.all([fetchLedgers(deps, args.company), fetchGroupsForScoping(deps, args.company)]);
 
-  const parties = ledgers.filter((ledger) =>
-    groupSet.has((ledger.parent ?? '').toLowerCase())
-  );
+  // At or under the requested groups, not filed directly beneath them. A
+  // debtor under "Sundry Debtors > Domestic" is a receivable; the direct-parent
+  // match this replaces dropped it from the list without saying so.
+  const { matched: parties, warnings: partyWarnings } = ledgersUnderGroups(ledgers, chart, groups);
 
   // Bill references live in nested structures on vouchers, so full
   // detail is needed to read them.
@@ -307,9 +311,7 @@ export async function executeOutstanding(
     else if (term.group !== undefined) creditByGroup.set(term.group.toLowerCase(), term.days);
   }
   const creditDaysFor = (name: string, group: string | null): number | null =>
-    creditByParty.get(name.toLowerCase()) ??
-    creditByGroup.get((group ?? '').toLowerCase()) ??
-    null;
+    creditByParty.get(name.toLowerCase()) ?? creditByGroup.get((group ?? '').toLowerCase()) ?? null;
 
   const rows: PartyOutstanding[] = parties
     .filter((ledger) => {
@@ -349,8 +351,16 @@ export async function executeOutstanding(
   const warnings = [
     // Bills come from the period's vouchers, so an empty defaulted
     // period silently strips every bill reference off these balances.
-    ...(await noteEmptyDefaultedPeriod(deps, period, periodWasDefaulted(args.fromDate, args.toDate), vouchers.length, args.company)),
+    ...(await noteEmptyDefaultedPeriod(
+      deps,
+      period,
+      periodWasDefaulted(args.fromDate, args.toDate),
+      vouchers.length,
+      args.company
+    )),
     ...ledgerWarnings,
+    ...groupWarnings,
+    ...partyWarnings,
     ...voucherWarnings,
     ...ageingWarnings,
   ];
@@ -373,7 +383,6 @@ export async function executeOutstanding(
       `No ledgers were found under ${groups.map((g) => `"${g}"`).join(', ')}. This company may file its parties under different group names — check tally_get_masters type "ledger" for the groups actually in use.`
     );
   }
-
 
   return {
     side: args.side,

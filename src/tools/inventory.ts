@@ -76,6 +76,7 @@ export async function fetchStockItems(
   allFields: boolean
 ): Promise<{ items: StockItem[]; warnings: string[] }> {
   const { data, warnings } = await fetchCollection<StockItem>(deps, company, {
+    kind: 'stockItem',
     build: (options) => buildStockItemListRequest(options, allFields),
     normalize: normalizeStockItems,
     timeoutClass: allFields ? 'report' : 'standard',

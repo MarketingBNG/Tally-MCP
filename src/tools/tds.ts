@@ -20,7 +20,15 @@ import {
   type ToolDeps,
 } from './toolResult.js';
 import { fetchLedgers } from './ledgers.js';
+import { fetchGroupsForScoping } from './groups.js';
+import { ledgersUnderGroups } from '../model/groupTree.js';
 import { fetchVouchers } from './vouchers.js';
+import {
+  DEFAULT_TAX_GROUPS,
+  isInformativeValue,
+  taxGroupsDescription,
+  taxKeyMatcher,
+} from './taxFields.js';
 
 /**
  * TDS and TCS tools.
@@ -115,8 +123,7 @@ const DESCRIPTION = [
   READ_ONLY_NOTICE,
 ].join('\n');
 
-/** Tally group names for tax ledgers. Overridable, since companies rename groups. */
-const DEFAULT_TAX_GROUPS = ['Duties & Taxes'];
+
 
 /**
  * Field-name fragments that mark TDS/TCS content.
@@ -147,30 +154,12 @@ const FALSE_POSITIVE_KEYS = new Set(['CROSSSECTION']);
 /** Nested structures Tally uses for TDS detail. */
 const TDS_STRUCTURE_HINTS = ['TDS', 'TCS', 'DEDUCT', 'NATUREOFPAYMENT'];
 
-/**
- * Values that carry no information even on a TDS field.
- *
- * This matters more here than for GST. Tally stamps `ISTDSAPPLICABLE: "No"` and
- * `TDSDEDUCTEESPECIALRATE: "0"` onto every ledger in the company, including
- * companies that have never deducted tax in their lives. Treating presence as
- * evidence would report all 330 ledgers as TDS-configured.
- */
-const UNINFORMATIVE_VALUES = new Set(['', 'not applicable', 'no', '0', '0.00', 'unknown']);
-
-function isTdsKey(key: string): boolean {
-  const upper = key.toUpperCase();
-  if (FALSE_POSITIVE_KEYS.has(upper)) return false;
-  return TDS_FIELD_HINTS.some((hint) => upper.includes(hint));
-}
-
-function isInformative(value: string | undefined): boolean {
-  if (value === undefined) return false;
-  return !UNINFORMATIVE_VALUES.has(value.trim().toLowerCase());
-}
+/** See taxKeyMatcher: hints plus the denylist that corrects them. */
+const isTdsKey = taxKeyMatcher(TDS_FIELD_HINTS, FALSE_POSITIVE_KEYS);
 
 /** A TDS field that says something about THIS record. */
 function isInformativeTdsEntry([key, value]: [string, string]): boolean {
-  return isTdsKey(key) && isInformative(value);
+  return isTdsKey(key) && isInformativeValue(value);
 }
 
 /**
@@ -275,7 +264,7 @@ export function registerTdsTools(server: McpServer, deps: ToolDeps): void {
           .array(z.string().min(1))
           .optional()
           .describe(
-            `summary only. Groups holding tax ledgers. Defaults to ${DEFAULT_TAX_GROUPS.map((g) => `"${g}"`).join(', ')}. Override if this company uses different group names.`
+            taxGroupsDescription(DEFAULT_TAX_GROUPS)
           ),
         company: companySchema,
         ...dateRangeSchema,
@@ -310,7 +299,9 @@ function asConfigured(ledger: {
     name: ledger.name,
     group: ledger.parent,
     closingBalance: ledger.closingBalance,
-    tdsFields: Object.fromEntries(Object.entries(ledger.fields ?? {}).filter(isInformativeTdsEntry)),
+    tdsFields: Object.fromEntries(
+      Object.entries(ledger.fields ?? {}).filter(isInformativeTdsEntry)
+    ),
     source: ledger.source,
   };
 }
@@ -320,10 +311,12 @@ async function fetchTdsSummary(
   args: { taxGroups?: string[] | undefined; company?: string | undefined }
 ): Promise<ToolBodyResult> {
   const groups = args.taxGroups ?? [...DEFAULT_TAX_GROUPS];
-  const groupSet = new Set(groups.map((group) => group.toLowerCase()));
 
   // Full fields: none of the TDS flags are in the curated set.
-  const { ledgers, warnings } = await fetchLedgers(deps, args.company, true);
+  const [{ ledgers, warnings }, { groups: chart, warnings: groupWarnings }] = await Promise.all([
+    fetchLedgers(deps, args.company, true),
+    fetchGroupsForScoping(deps, args.company),
+  ]);
 
   // The company's own country, for the jurisdiction gate below. Served from
   // TallyClient's cache alongside every other guard's company lookup, and a
@@ -333,13 +326,15 @@ async function fetchTdsSummary(
   const country = (await companyNamed(deps, args.company))?.country ?? null;
 
   const flaggedYes = (ledger: { fields?: Record<string, string> | undefined }, field: string) =>
-    isInformative(ledger.fields?.[field]);
+    isInformativeValue(ledger.fields?.[field]);
 
   // Tax ledgers holding TDS/TCS. Matched on TAXTYPE first — Tally's own
   // classification — and on the ledger name only as a fallback, because a
   // company that renames "TDS Payable" to something else still classifies it.
-  const taxLedgers = ledgers
-    .filter((ledger) => groupSet.has((ledger.parent ?? '').toLowerCase()))
+  // At or under the requested groups — see ledgersUnderGroups().
+  const { matched: inScope, warnings: scopeWarnings } = ledgersUnderGroups(ledgers, chart, groups);
+
+  const taxLedgers = inScope
     .filter((ledger) => {
       const taxType = (ledger.fields?.TAXTYPE ?? '').toUpperCase();
       return taxType.includes('TDS') || taxType.includes('TCS') || isTdsKey(ledger.name);
@@ -359,7 +354,7 @@ async function fetchTdsSummary(
     .filter((l) => flaggedYes(l, 'IGNORETDSEXEMPT'))
     .map(asConfigured);
 
-  const allWarnings = [...warnings];
+  const allWarnings = [...warnings, ...groupWarnings, ...scopeWarnings];
   const anyConfigured =
     taxLedgers.length +
       deducteeLedgers.length +

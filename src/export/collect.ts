@@ -228,6 +228,7 @@ async function fetchCurrencies(
   company: string | undefined
 ): Promise<{ currencies: Currency[]; warnings: string[] }> {
   const { data, warnings } = await fetchCollection<Currency>(deps, company, {
+    kind: 'currency',
     build: buildCurrencyListRequest,
     normalize: (xml) => normalizeCurrencies(xml),
   });
@@ -430,6 +431,8 @@ export async function collectCompany(
     const title = MASTER_TAB_TITLES[type];
     const fetched = await optional(deps, warnings, `the ${title.toLowerCase()} masters`, () =>
       fetchCollection<SimpleMaster>(deps, company.name, {
+        // Per master type: one `kind` per collection, not one for all of them.
+        kind: `simpleMaster:${type}`,
         build: (options) => buildSimpleMasterRequest(type, options),
         normalize: (xml) => normalizeSimpleMasters(xml, type.toUpperCase(), 'group', `the ${title.toLowerCase()} masters`),
       })

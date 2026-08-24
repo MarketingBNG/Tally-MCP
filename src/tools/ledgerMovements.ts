@@ -38,16 +38,41 @@ export interface LedgerMovement {
  * order, and a running balance that follows an unsorted sequence is arithmetic
  * nonsense even though every individual figure is right.
  */
+/**
+ * The date order `buildMovements` needs, done once for a whole population.
+ *
+ * Exported so a caller looping over many ledgers can sort once and pass
+ * `alreadySortedByDate`, rather than each call re-sorting the same list. Same
+ * comparator, so the two paths cannot drift apart.
+ */
+export function sortVouchersByDate(vouchers: readonly Voucher[]): Voucher[] {
+  return [...vouchers].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+}
+
 export function buildMovements(
   vouchers: readonly Voucher[],
   ledgerName: string,
   openingBalance: Money | null,
-  warnings: string[]
+  warnings: string[],
+  /**
+   * Set when the caller has already sorted this population by date.
+   *
+   * The sort does not depend on `ledgerName`, so a caller running this once per
+   * ledger was copying and re-sorting the identical voucher list every time —
+   * `tally_get_party_statement` does exactly that, ten times by default and more
+   * on request, at O(V log V) and a full array copy each. It stays the default
+   * because getting it wrong is silent: an unsorted population yields running
+   * balances that are arithmetic nonsense while every individual figure looks
+   * right, so the caller has to say so deliberately.
+   */
+  alreadySortedByDate = false
 ): LedgerMovement[] {
   const target = ledgerName.toLowerCase();
   const movements: LedgerMovement[] = [];
 
-  const sorted = [...vouchers].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+  const sorted = alreadySortedByDate
+    ? vouchers
+    : [...vouchers].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
 
   let running: Decimal | null = new Decimal(openingBalance?.amount ?? 0);
   const currency = openingBalance?.currency ?? DEFAULT_CURRENCY;
