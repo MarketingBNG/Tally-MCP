@@ -260,11 +260,6 @@ async function main() {
   }
 
   process.exitCode = failed.length > 0 ? 1 : 0;
-
-  // LAST, and deliberately after the exit code is set. Keeping the workbook
-  // current is this task's job; fetching a new version is a convenience, and it
-  // must never be the reason a successful export reports failure.
-  await maybeUpdate();
 }
 
 /**
@@ -358,16 +353,41 @@ function fail(lines) {
   process.exitCode = 1;
 }
 
-main().catch((error) => {
-  // Never show a stack trace to this audience.
-  if (!QUIET) {
-    heading('The export could not finish');
-    line('Something unexpected went wrong.');
-    blank();
-    line(`Technical detail:  ${error?.message ?? String(error)}`);
-    blank();
-    line('Send that line to whoever set this up for you.');
-    blank();
-  }
-  process.exitCode = 1;
-});
+main()
+  .catch((error) => {
+    // Never show a stack trace to this audience.
+    if (!QUIET) {
+      heading('The export could not finish');
+      line('Something unexpected went wrong.');
+      blank();
+      line(`Technical detail:  ${error?.message ?? String(error)}`);
+      blank();
+      line('Send that line to whoever set this up for you.');
+      blank();
+    }
+    process.exitCode = 1;
+  })
+  /*
+   * THE UPDATE CHECK RUNS ON EVERY PATH, INCLUDING EVERY FAILURE, AND THAT IS
+   * THE WHOLE POINT OF IT BEING HERE RATHER THAN AT THE END OF main().
+   *
+   * It used to be the last line of main(), which meant a run that returned
+   * early never reached it. Every early return is a failure -- Tally not
+   * reachable, no export folder, no company open -- so an install with a
+   * problem stopped looking for the fix to that problem. Found on a real
+   * install, 2026-08-24: it sat on 0.8.6 with lastCheckedAt frozen two days
+   * earlier, because its probe of 127.0.0.1 was refused by a Tally listening on
+   * IPv6 only. The version that fixes exactly that was published and it could
+   * not see it. The export was broken, and being broken is what stopped it
+   * being repaired.
+   *
+   * That is the worst shape a bug can have: self-sealing. Claude Desktop's
+   * launcher checks too, which is the only reason such installs were not
+   * permanently frozen -- but a spreadsheet-only install never starts the
+   * server, so for those it was the only path there was.
+   *
+   * Fetching a new version cannot fail the run either: `maybeUpdate` swallows
+   * its own errors, and this link in the chain neither reads nor sets
+   * process.exitCode, which main() has already decided.
+   */
+  .finally(() => maybeUpdate());
