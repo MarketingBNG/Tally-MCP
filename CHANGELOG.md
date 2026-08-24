@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.8.8 — unreleased
+## 0.8.8 — 2026-08-24
 **Ledgers filed in a sub-group were being left out of five different lists, and
 this is the most important fix in a while.** If your chart of accounts files
 suppliers under something like `Sundry Creditors > Unclassified` — perfectly
