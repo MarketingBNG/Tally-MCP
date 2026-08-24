@@ -178,7 +178,7 @@
 
 **Purpose:** Cross-match vouchers/ledgers against a user-supplied related-party list to surface related-party transactions for disclosure/scrutiny.
 
-**When a CA would use it:** Related-party transaction identification and disclosure checking — directly the kind of finding already surfaced manually in the AgEx Pharma audit.
+**When a CA would use it:** Related-party transaction identification and disclosure checking — directly the kind of finding that has had to be surfaced by hand on real engagements.
 
 **Data source:** `tally_get_vouchers` / `tally_get_party_statement` cross-referenced against a caller-supplied list — Tally has no native "related party" flag, so this MUST take the related-party list as an explicit input parameter rather than attempting to infer it (inferring related parties from data alone is unreliable and risks false negatives on a compliance-sensitive check).
 
@@ -245,7 +245,7 @@
 **Scope — one sub-view per clause, selectable via `clause` parameter:**
 - **Clause 16** — amounts credited/debited that should be reported but aren't routed through normal P&L heads (e.g., capital receipts credited to revenue, or vice versa) — surfaced as candidate entries for the CA to review, not an automatic classification.
 - **Clause 17(h)** — payments/provisions to specified persons under section 40A(2)(b) — this directly overlaps with, and can reuse, `tally_flag_related_party` (tool #7), scoped to expense-side transactions only.
-- **Clause 21** — amounts inadmissible under the Income Tax Act (e.g., personal expenses booked as business costs, penalties, donations routed through P&L) — flagged as candidates by matching against known inadmissible-expense ledger patterns (e.g., "penalty," "fine," "personal") the caller can extend, similar in spirit to the personal-expenses-booked-as-company-costs finding already surfaced manually in the AgEx Pharma audit.
+- **Clause 21** — amounts inadmissible under the Income Tax Act (e.g., personal expenses booked as business costs, penalties, donations routed through P&L) — flagged as candidates by matching against known inadmissible-expense ledger patterns (e.g., "penalty," "fine," "personal") the caller can extend, similar in spirit to findings of this kind that have had to be surfaced by hand on real engagements.
 - **Clause 24(a)/(b)** — loans/deposits/specified sums received or repaid other than by account payee cheque/bank transfer, above the prescribed limit — checkable from voucher payment mode fields where Tally records them.
 - **Clause 27** — CENVAT/GST credit availed, utilised, and any statutory dues outstanding at year end — overlaps with the existing `tally_get_gst` tool; this view reformats that data for the 3CD annexure layout specifically.
 
