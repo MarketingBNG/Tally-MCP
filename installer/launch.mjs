@@ -361,6 +361,35 @@ if (promoted !== null) {
   // After promotion, so the launchers on disk match the version now active.
   syncBootFiles();
 
+  /*
+   * And take Windows' download mark off them, which is what stops the scheduled
+   * export raising "The publisher could not be verified" once a minute.
+   *
+   * Setup does this too, but an install made BEFORE that existed has already
+   * been set up: its dialogs are firing now and nobody is going to be told to
+   * run Setup again. An update is the one moment such a folder runs our code
+   * with write access to itself, so it is repaired here. Files syncBootFiles
+   * just rewrote are clean already (a copy does not carry the stream); the ones
+   * it skipped as unchanged are exactly the ones that need this.
+   *
+   * Belt-and-braces rather than the main repair path: the copy of THIS file
+   * running during a promotion is the outgoing version's, so this line only
+   * takes effect from the release after the one that adds it. The exporter
+   * covers the same ground immediately, because it lives inside app/. See
+   * unblockOnce, which is why both callers are cheap enough to sit here.
+   *
+   * Best-effort by design: the import is of the newly promoted version, so a
+   * folder somehow missing it must still start the server. See
+   * scripts/lib/unblock.mjs.
+   */
+  try {
+    const { unblockOnce } = await import(pathToFileURL(join(APP, 'scripts', 'lib', 'unblock.mjs')));
+    const cleared = unblockOnce(ROOT).cleared;
+    if (cleared > 0) note(`cleared the download mark from ${cleared} file(s)`);
+  } catch (error) {
+    note(`could not clear the download mark: ${String(error?.message ?? error)}`);
+  }
+
   // Told, not just done. The "waiting" note is replaced by one naming the
   // version now in use — otherwise the only evidence a version changed is the
   // number in Check-Tally, which nobody thinks to compare against yesterday's.

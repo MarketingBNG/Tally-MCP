@@ -12,6 +12,24 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.7 — unreleased
+**"The publisher could not be verified" no longer keeps appearing.** Windows
+marks every file it unpacks from a downloaded zip, and then asks permission each
+time one of them runs — so the export, which checks Tally every five minutes,
+was raising that box over and over on some machines. Setup now takes the mark
+off the folder, which is the same thing as right-clicking each file and choosing
+Unblock. Installs that already have the problem are repaired the next time they
+update themselves; nothing needs doing by hand.
+
+**A closed TallyPrime is now mentioned once, and then left alone.** If Tally is
+not open when the spreadsheet is due to refresh, you get one notification saying
+so — and that is the last you hear of it, on that machine, permanently. Tally
+being closed in the evening or over a weekend is normal, and a message about it
+every day is a message you learn to ignore. Nothing else changes: the refresh
+keeps checking quietly in the background, so the spreadsheet starts updating
+again on its own the moment Tally is open, and you can double-click Run-Export
+whenever you want it immediately.
+
 ## 0.8.6 — 2026-08-22
 **The spreadsheet now refreshes every five minutes instead of every hour.** The
 hourly setting was based on a mistake: it was chosen to guard against Tally

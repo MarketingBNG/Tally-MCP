@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { mergeServerIntoConfig, isPlainObject } from './lib/configMerge.mjs';
 import { probeTally } from './lib/probe.mjs';
+import { unblockOnce } from './lib/unblock.mjs';
 import { explainProbe } from './lib/explain.mjs';
 import {
   claudeConfigTargets,
@@ -151,6 +152,27 @@ async function main() {
       'file out, that is the usual cause — right-click the .zip and choose',
       '"Extract All" instead.',
     ]);
+  }
+
+  /*
+   * Before any of the questions: take Windows' download mark off this folder.
+   *
+   * Explorer stamps every file it extracts from a downloaded zip, and a stamped
+   * Run-Export-Hidden.vbs makes the scheduled task raise "The publisher could
+   * not be verified" on the desktop once a minute, forever. Doing it here means
+   * it is done before the task that would trip over it is ever registered.
+   *
+   * Silent when there was nothing to clear, which is the usual case on a re-run
+   * — Setup has enough to say without narrating a no-op. See lib/unblock.mjs.
+   */
+  const unblocked = unblockOnce(INSTALL_ROOT);
+  if (unblocked.cleared > 0) {
+    line(`Cleared Windows' download warning from ${unblocked.cleared} file(s) in this folder.`);
+    blank();
+  }
+  if (unblocked.failed > 0) {
+    line(`${unblocked.failed} file(s) kept it — Windows may still ask before running those.`);
+    blank();
   }
 
   // Tally is asked FIRST now, not last. The export questions below need the

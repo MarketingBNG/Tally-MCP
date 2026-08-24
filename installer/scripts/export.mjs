@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { installRootFor, packageRootFor } from './lib/paths.mjs';
 import { probeTally } from './lib/probe.mjs';
 import { loadEnvFile } from './lib/exportSetup.mjs';
 import { toast } from './lib/notify.mjs';
+import { notifyOnce } from './lib/notifyOnce.mjs';
+import { unblockOnce } from './lib/unblock.mjs';
 import { explainProbe } from './lib/explain.mjs';
 import { checkForUpdate } from './lib/update.mjs';
 
@@ -35,13 +37,27 @@ import { checkForUpdate } from './lib/update.mjs';
  *
  *   - `LAST RUN FAILED - TallyPrime was not open - 2026-08-19 18-05.txt`
  *   - a line in `run-log.txt`
- *   - a Windows toast, but ONLY on a change of state
+ *   - a Windows toast — but a sparing one, under one of two rules
  *
- * The change-of-state rule is not a nicety. At a one-minute cadence, notifying
- * every failure would fire once a minute for as long as somebody leaves the
+ * Being sparing is not a nicety. At a five-minute cadence, notifying every
+ * failure would fire twelve times an hour for as long as somebody leaves the
  * workbook open in Excel — which trains people to ignore it, and then the
- * failure that matters is ignored too. First failure notifies, repeats go
- * quietly to the log, recovery notifies once.
+ * failure that matters is ignored too.
+ *
+ * The two rules, and the difference between them matters:
+ *
+ *   - A failure DURING a company's export — the workbook locked, a sheet gone —
+ *     follows a change-of-state rule: notify the first one, log the repeats,
+ *     notify the recovery. These are faults, and a fault that comes back is
+ *     news each time.
+ *
+ *   - A failure BEFORE any company is reached — almost always a closed
+ *     TallyPrime — is notified ONCE PER INSTALL AND NEVER AGAIN. A closed Tally
+ *     is not a fault; it is every evening and every weekend. See
+ *     lib/notifyOnce.mjs, which carries the full reasoning.
+ *
+ * The console output obeys neither rule: a run somebody started by hand always
+ * prints everything, because they are standing there watching it.
  */
 
 const PACKAGE_ROOT = packageRootFor(import.meta.url);
@@ -91,6 +107,21 @@ async function main() {
    */
   process.env.TALLY_REPORT_TIMEOUT_MS ??= '600000';
 
+  /*
+   * Once per install, and the reason it is HERE is in unblockOnce: this is the
+   * only code path that reaches an existing install as the new version. It
+   * takes Windows' download mark off the folder, which is what stops
+   * "The publisher could not be verified" appearing every five minutes when the
+   * task launches Run-Export-Hidden.vbs.
+   *
+   * Before anything that can fail, and silent either way — a repair is not news.
+   */
+  const unblocked = unblockOnce(INSTALL_ROOT);
+  if (!QUIET && unblocked.cleared > 0) {
+    line(`Cleared Windows' download warning from ${unblocked.cleared} file(s).`);
+    blank();
+  }
+
   // The server's own modules, so nothing here re-derives a figure or a request.
   const { loadConfig } = await load(dist, 'config/config.js');
   const { TallyClient } = await load(dist, 'tally/TallyClient.js');
@@ -126,7 +157,7 @@ async function main() {
   const probe = await probeTally({ host: config.tallyHost, port: config.tallyPort });
   if (probe.status !== 'ok') {
     const explained = explainProbe(probe, { host: config.tallyHost, port: config.tallyPort });
-    notifyIfChanged(
+    notifyOnceAbout(
       config.tallyExportFolder,
       probe.status === 'no-listener' ? 'TallyPrime was not open' : explained.headline
     );
@@ -178,8 +209,8 @@ async function main() {
   } catch (error) {
     // A failure OUTSIDE any company folder — the export folder itself being
     // gone is the realistic one. There is nowhere per-company to record it, so
-    // it is notified here under the same change-of-state rule.
-    notifyIfChanged(config.tallyExportFolder, 'the export folder could not be reached');
+    // it is notified here, once, under the same rule as a closed Tally.
+    notifyOnceAbout(config.tallyExportFolder, 'the export folder could not be reached');
     return fail([error?.message ?? String(error)]);
   }
 
@@ -290,28 +321,17 @@ async function load(dist, relative) {
 }
 
 /**
- * Notify about a Tally-level failure, respecting the change-of-state rule.
+ * Notify about a failure that happened BEFORE any company was reached — a
+ * closed TallyPrime being the overwhelmingly common one.
  *
- * This one cannot use the per-company state file, because it fires before any
- * company folder is known. So it keeps its own one-line marker beside the
- * export folder — same rule, smaller scope.
+ * Once per reason per install, and then never again: a closed Tally is normal
+ * evening-and-weekend behaviour, not a fault, and notifying about it on a
+ * schedule is how somebody learns to ignore every notification this tool
+ * raises. The reasoning, and what deliberately does NOT stop, are in
+ * lib/notifyOnce.mjs.
  */
-function notifyIfChanged(exportFolder, reason) {
-  const marker = join(exportFolder, 'last-failure.txt');
-  try {
-    mkdirSync(exportFolder, { recursive: true });
-    let previous = null;
-    try {
-      previous = readFileSync(marker, 'utf8').trim();
-    } catch {
-      previous = null;
-    }
-    if (previous === reason) return;
-    writeFileSync(marker, reason, 'utf8');
-    toast('TallyPrime export failed', reason);
-  } catch {
-    // Best effort, as everywhere in this file.
-  }
+function notifyOnceAbout(exportFolder, reason) {
+  notifyOnce({ installRoot: INSTALL_ROOT, exportFolder, reason });
 }
 
 function heading(text) {
