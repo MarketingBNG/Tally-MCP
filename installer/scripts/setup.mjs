@@ -69,7 +69,7 @@ const LAUNCHER = join(INSTALL_ROOT, 'launch.mjs');
 const SERVER_ENTRY = existsSync(LAUNCHER) ? LAUNCHER : join(PACKAGE_ROOT, 'dist', 'index.js');
 
 const DEFAULT_ENV = {
-  TALLY_HOST: '127.0.0.1',
+  TALLY_HOST: 'localhost',
   TALLY_PORT: '9000',
   LOG_LEVEL: 'info',
 };

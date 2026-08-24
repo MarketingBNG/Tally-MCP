@@ -10,7 +10,7 @@ describe('loadConfig', () => {
   it('applies the documented defaults when nothing is set', () => {
     const config = loadConfig(env());
 
-    expect(config.tallyHost).toBe('127.0.0.1');
+    expect(config.tallyHost).toBe('localhost');
     expect(config.tallyPort).toBe(9000);
     expect(config.tallyProtocol).toBe('http');
     expect(config.tallyTimeoutMs).toBe(30_000);
@@ -20,11 +20,31 @@ describe('loadConfig', () => {
   });
 
   it('derives a usable base URL', () => {
-    expect(loadConfig(env()).tallyBaseUrl).toBe('http://127.0.0.1:9000');
+    expect(loadConfig(env()).tallyBaseUrl).toBe('http://localhost:9000');
     expect(
       loadConfig(env({ TALLY_PROTOCOL: 'https', TALLY_HOST: 'tally.local', TALLY_PORT: '8000' }))
         .tallyBaseUrl
     ).toBe('https://tally.local:8000');
+  });
+
+  /**
+   * MEASURED on a live install, 2026-08-24: TallyPrime's HTTP server was
+   * listening on `::` — every IPv6 address and no IPv4 one — so
+   * `http://127.0.0.1:9000` was REFUSED while `localhost` and `[::1]` both
+   * answered HTTP 200. Dialling the IPv4 literal made a running Tally report as
+   * "not open", so a loopback literal is normalised to a name that resolves to
+   * both families. A remote host is left exactly as given.
+   */
+  it('never pins loopback to one IP family, whatever form it was written in', () => {
+    for (const literal of ['127.0.0.1', '::1', '[::1]', '0.0.0.0', ' 127.0.0.1 ']) {
+      expect(loadConfig(env({ TALLY_HOST: literal })).tallyHost).toBe('localhost');
+    }
+  });
+
+  it('leaves a real host alone — this is a loopback fix, not a rewrite', () => {
+    for (const host of ['tally.local', '192.168.1.50', 'server-01']) {
+      expect(loadConfig(env({ TALLY_HOST: host })).tallyHost).toBe(host);
+    }
   });
 
   it('defaults the report timeout to four times the base timeout', () => {

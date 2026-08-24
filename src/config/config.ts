@@ -20,8 +20,45 @@ const portSchema = z.coerce
   .min(1, 'TALLY_PORT must be between 1 and 65535.')
   .max(65535, 'TALLY_PORT must be between 1 and 65535.');
 
+/**
+ * Ways of writing "this machine" that pin one IP family, and so can be refused
+ * by a Tally listening on the other. See tallyHost below.
+ */
+const LOOPBACK_LITERALS = new Set(['127.0.0.1', '::1', '[::1]', '0.0.0.0']);
+
 const configSchema = z.object({
-  tallyHost: z.string().min(1, 'TALLY_HOST must not be empty.').default('127.0.0.1'),
+  /**
+   * The machine TallyPrime is on. `localhost`, not `127.0.0.1`, and the
+   * difference is not cosmetic — it decides whether a local install works at
+   * all on some machines.
+   *
+   * MEASURED, 2026-08-24, on a machine with TallyPrime running and a company
+   * loaded. Tally's HTTP server was listening on `::` — every IPv6 address, and
+   * NO IPv4 one:
+   *
+   *   http://127.0.0.1:9000   ECONNREFUSED
+   *   http://[::1]:9000       HTTP 200
+   *   http://localhost:9000   HTTP 200
+   *
+   * So dialling the IPv4 literal was refused while Tally sat there answering
+   * perfectly. The whole product then reports "TallyPrime was not open" — a
+   * confident, wrong, and completely undiagnosable message, because Tally IS
+   * open and the user is looking straight at it.
+   *
+   * `localhost` resolves to both families and Node tries them in turn (Happy
+   * Eyeballs, on by default since Node 20), so it connects whichever way Tally
+   * chose to listen. There is no matching downside: a Tally listening on IPv4
+   * only is reached just the same.
+   *
+   * A loopback literal is normalised to `localhost` for the same reason —
+   * .env files already on disk say `127.0.0.1`, and nobody choosing it meant
+   * "fail if Tally happens to be on IPv6".
+   */
+  tallyHost: z
+    .string()
+    .min(1, 'TALLY_HOST must not be empty.')
+    .default('localhost')
+    .transform((host) => (LOOPBACK_LITERALS.has(host.trim().toLowerCase()) ? 'localhost' : host)),
   tallyPort: portSchema.default(9000),
   tallyProtocol: z.enum(['http', 'https']).default('http'),
 

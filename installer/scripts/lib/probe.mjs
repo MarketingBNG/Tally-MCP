@@ -45,6 +45,29 @@ async function loadProbeRequest() {
  * @param {{host: string, port: number, timeoutMs?: number}} options
  * @returns {Promise<ProbeResult>}
  */
+/**
+ * Ways of writing "this machine" that pin one IP family. See loopbackSafeHost.
+ */
+const LOOPBACK_LITERALS = new Set(['127.0.0.1', '::1', '[::1]', '0.0.0.0']);
+
+/**
+ * Turn a loopback literal into `localhost`.
+ *
+ * MEASURED, 2026-08-24, with TallyPrime running and a company loaded: its HTTP
+ * server was listening on `::` -- every IPv6 address and no IPv4 one. So
+ * `127.0.0.1:9000` was REFUSED while `[::1]:9000` and `localhost:9000` both
+ * answered HTTP 200. Dialling the IPv4 literal made a perfectly healthy Tally
+ * report as "not open", which is the worst kind of wrong answer: confident, and
+ * contradicted by what the user can see on their own screen.
+ *
+ * `localhost` resolves to both families and Node tries them in turn, so it
+ * reaches Tally whichever way it chose to listen. Kept in step with
+ * LOOPBACK_LITERALS in src/config/config.ts, which does the same for the server.
+ */
+export function loopbackSafeHost(host) {
+  return LOOPBACK_LITERALS.has(String(host ?? '').trim().toLowerCase()) ? 'localhost' : host;
+}
+
 export async function probeTally({ host, port, timeoutMs = 15_000 }) {
   const body = await loadProbeRequest();
   if (body === null) {
@@ -58,7 +81,9 @@ export async function probeTally({ host, port, timeoutMs = 15_000 }) {
   return new Promise((resolvePromise) => {
     const request = http.request(
       {
-        host,
+        // Never the raw literal: a loopback IPv4 address is refused outright by
+        // a Tally listening only on IPv6. See loopbackSafeHost.
+        host: loopbackSafeHost(host),
         port,
         method: 'POST',
         path: '/',

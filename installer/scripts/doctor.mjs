@@ -80,7 +80,7 @@ async function main() {
 
   // 3. Is Tally reachable, with books open?
   heading('TallyPrime');
-  const host = '127.0.0.1';
+  const host = 'localhost';
   const port = 9000;
   const probe = await probeTally({ host, port });
   const explained = explainProbe(probe, { host, port });

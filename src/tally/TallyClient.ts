@@ -369,7 +369,7 @@ export class TallyClient {
       return new TallyError(
         'TALLY_CONNECTION_FAILED',
         `The host "${this.#config.tallyHost}" could not be resolved.`,
-        { suggestion: 'Check TALLY_HOST. For a local install this should be 127.0.0.1.', cause: error }
+        { suggestion: 'Check TALLY_HOST. For a local install this should be localhost.', cause: error }
       );
     }
 
