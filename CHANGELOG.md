@@ -12,6 +12,27 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.8 — unreleased
+**Ledgers filed in a sub-group were being left out of five different lists, and
+this is the most important fix in a while.** If your chart of accounts files
+suppliers under something like `Sundry Creditors > Unclassified` — perfectly
+ordinary, and what Tally encourages — those ledgers were missing from the
+payables list, the confirmation list, the GST and TDS summaries and the
+fixed-asset register. They were not flagged or counted as excluded; they were
+simply absent, from a result that described itself as complete.
+
+Measured on the four companies open here when this was fixed: 28 creditors
+worth ₹4,51,501.92 were missing from one company's payables, and 203 ledgers
+from another company's current assets. **If you have relied on those lists,
+please re-run them.**
+
+**"TallyPrime was not open" when TallyPrime was plainly open.** On some machines
+Tally's connection listens on the newer style of network address only, and this
+software was asking for the older one — so it was refused, and reported Tally as
+closed while you were looking straight at it. Check-Tally said the same wrong
+thing. It now asks in a way that works either way. Nothing to change at your
+end.
+
 ## 0.8.7 — 2026-08-24
 **"The publisher could not be verified" no longer keeps appearing.** Windows
 marks every file it unpacks from a downloaded zip, and then asks permission each
