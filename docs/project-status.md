@@ -436,7 +436,7 @@ arithmetically faithful.
 
 ## Inventory reports unblocked, 2026-08-14
 
-A third company — **AGBV Nutrition GmbH**, German, calendar-year books from
+A third company — a German company on calendar-year books from
 2023-01-01 — was loaded specifically to re-probe the six report IDs that were
 confirmed valid but returned nothing (next-steps item 2). **Two of six opened
 up.**
@@ -527,7 +527,7 @@ the workbook's age.
 reuses each tool's own fetch path rather than growing a second way to get the
 same figure. The existing tool tests are the regression check and all pass.
 
-**Verified live** against MUDALS TECHNOLOGIES PRIVATE LIMITED on 2026-08-19:
+**Verified live** against an Indian test company on 2026-08-19:
 
 | Check | Result |
 |---|---|
@@ -568,7 +568,7 @@ guard, and four tests pin the behaviour.
 
 **Verified running unattended**, 2026-08-19 17:11-17:15: the registered task
 fired on the minute, found nothing changed twice in a row, and — when a second
-company (AgEx Pharma LLC) was opened in TallyPrime mid-session — picked it up on
+company (a US test company) was opened in TallyPrime mid-session — picked it up on
 the next minute and exported it as a first run, without anyone touching Setup.
 
 **One real bug caught by the tests rather than in the field:** the fingerprint

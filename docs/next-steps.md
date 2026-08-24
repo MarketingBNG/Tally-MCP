@@ -19,7 +19,7 @@ company probed so far, so there is no way to know what their data looks like.
 This is the only real blocker, and no amount of code fixes it.
 
 **Still true after 2026-08-14**, on the point that matters. A third company —
-AGBV Nutrition GmbH, German, calendar-year — was probed (item 2 below) and it
+a German company on calendar-year books — was probed (item 2 below) and it
 too records **no cost centres and no bill-wise details**. It does maintain
 inventory across a godown, which is what finally made `Stock Summary` and
 `Godown Summary` return data. So the remaining ask is narrower than it was:
@@ -72,7 +72,7 @@ nine live-verified IDs, in
 `Ratio Analysis`, `Sales Register`, `Purchase Register` and `Journal Register` are
 in it and return real content. `Negative Ledgers` — the audit-grade one, and the
 reason the tool was worth building — returns content on all three companies (4 rows
-on AgEx, 67 on MUDALS, 34 on AGBV).
+on the US company, 67 on the Indian company, 34 on the German company).
 
 Four IDs are in the enum with their **row shape still unverified**: `Negative Stock`,
 `Bills Receivable`, `Bills Payable` and `Cost Category Summary`. TallyPrime accepts
@@ -183,7 +183,7 @@ run already covers the space of reasonable guesses.
 
 ## 2. Re-probe the six empty report IDs — RUN 2026-08-14, two of six opened up
 
-Probed against **AGBV Nutrition GmbH** (German, calendar-year books from
+Probed against a German test company (German, calendar-year books from
 2023-01-01) with [scripts/probe-empty-reports.ts](../scripts/probe-empty-reports.ts).
 Both controls passed and TallyPrime answered every health probe, so the verdicts
 below are trustworthy.

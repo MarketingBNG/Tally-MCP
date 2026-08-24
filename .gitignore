@@ -44,3 +44,9 @@ Tally-MCP-Tool-Reference.docx
 
 # Update bookkeeping, written beside an install (and by a probe run from here).
 update-state.json
+
+# Internal notes: probe findings and coverage tables carry client company
+# names, book date ranges and ledger counts. Kept on disk, out of the public
+# repo. See docs/project-status.md for what may be published.
+docs/probe-findings-*.md
+docs/coverage.md
