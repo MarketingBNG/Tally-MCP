@@ -21,10 +21,9 @@ payables list, the confirmation list, the GST and TDS summaries and the
 fixed-asset register. They were not flagged or counted as excluded; they were
 simply absent, from a result that described itself as complete.
 
-Measured on the four companies open here when this was fixed: 28 creditors
-worth ₹4,51,501.92 were missing from one company's payables, and 203 ledgers
-from another company's current assets. **If you have relied on those lists,
-please re-run them.**
+Checked against real books before release, and it was not a rare edge case:
+every company tested had ledgers going missing this way, dozens of them in
+some lists. **If you have relied on any of those lists, please re-run them.**
 
 **"TallyPrime was not open" when TallyPrime was plainly open.** On some machines
 Tally's connection listens on the newer style of network address only, and this
