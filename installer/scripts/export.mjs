@@ -126,7 +126,7 @@ async function main() {
   const { loadConfig } = await load(dist, 'config/config.js');
   const { TallyClient } = await load(dist, 'tally/TallyClient.js');
   const { createLogger } = await load(dist, 'utils/logger.js');
-  const { runExport, resolveExportCompanies } = await load(dist, 'export/run.js');
+  const { runExport, resolveExportCompanies, markFoldersFailed } = await load(dist, 'export/run.js');
 
   if (FORCE) process.env.TALLY_EXPORT_FORCE = 'true';
 
@@ -150,6 +150,10 @@ async function main() {
     ]);
   }
 
+  // One timestamp for the whole run, taken before anything can fail: the status
+  // files written on a failure path use it too.
+  const now = new Date();
+
   // Checked BEFORE the fingerprint request, so "Tally was not open" is diagnosed
   // in plain words rather than surfacing as a connection error from deep inside
   // a fetch. This is the single most common failure and it deserves the good
@@ -157,10 +161,12 @@ async function main() {
   const probe = await probeTally({ host: config.tallyHost, port: config.tallyPort });
   if (probe.status !== 'ok') {
     const explained = explainProbe(probe, { host: config.tallyHost, port: config.tallyPort });
-    notifyOnceAbout(
-      config.tallyExportFolder,
-      probe.status === 'no-listener' ? 'TallyPrime was not open' : explained.headline
-    );
+    const reason = probe.status === 'no-listener' ? 'TallyPrime was not open' : explained.headline;
+    notifyOnceAbout(config.tallyExportFolder, reason);
+    // Say so in the folders somebody READS, not only here. Without this each
+    // company folder keeps the status file from the last run that worked, so a
+    // stale workbook sits beside a note claiming success. See markFoldersFailed.
+    markFoldersFailed(config.tallyExportFolder, now, reason);
     return fail([explained.headline, '', ...explained.lines]);
   }
 
@@ -185,7 +191,6 @@ async function main() {
   const logger = createLogger(process.env.LOG_LEVEL ? config.logLevel : 'error');
   const client = new TallyClient(config, logger);
   const deps = { client, config, logger };
-  const now = new Date();
 
   let companies;
   try {
@@ -195,6 +200,7 @@ async function main() {
   }
 
   if (companies.length === 0) {
+    markFoldersFailed(config.tallyExportFolder, now, 'no company was open in TallyPrime');
     return fail([
       'TallyPrime has no company open, so there was nothing to export.',
       '',

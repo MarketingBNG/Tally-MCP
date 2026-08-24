@@ -138,6 +138,49 @@ export function writeStatusFile(folder: string, now: Date, failure: string | nul
   }
 }
 
+/**
+ * Mark every company folder as failing, when the run never got far enough to
+ * visit them one by one.
+ *
+ * ## THE FOLDER WAS LYING, AND THAT IS THE POINT OF THIS
+ *
+ * `writeStatusFile` above is called per company from inside the export. If the
+ * run dies BEFORE that — TallyPrime unreachable, no company open, the export
+ * folder itself gone — no status file is touched at all, and each folder keeps
+ * the one from the last run that worked. So a folder can sit there saying
+ * `LAST RUN OK - 22 Aug` next to a workbook nobody has refreshed since, and
+ * every failure after that is silent in the only place the reader looks.
+ *
+ * Observed exactly that on 2026-08-24: the export had been failing every five
+ * minutes for two days, the Drive folder still said OK, and the workbook was two
+ * days stale while presenting itself as current. An accountant quoting a figure
+ * out of it had nothing to warn them.
+ *
+ * The failure notification cannot cover this. It goes to the machine running the
+ * export, once; the person reading the workbook is somewhere else entirely,
+ * opening a file out of a shared drive.
+ *
+ * A folder is anything holding `export-state.json` — written by a real export,
+ * so it identifies a company folder without needing the company list, which is
+ * often exactly what could not be fetched.
+ *
+ * Best effort throughout: this runs on a path that is already failing, and it
+ * must not turn a diagnosable failure into a crash.
+ */
+export function markFoldersFailed(exportRoot: string, now: Date, failure: string): void {
+  try {
+    for (const entry of readdirSync(exportRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const folder = join(exportRoot, entry.name);
+      if (!existsSync(join(folder, 'export-state.json'))) continue;
+      writeStatusFile(folder, now, failure);
+    }
+  } catch {
+    // An unreachable export root is itself one of the failures that brings us
+    // here; there is nothing to mark and nothing to report.
+  }
+}
+
 export function formatLogLine(
   now: Date,
   outcome: RunOutcome,

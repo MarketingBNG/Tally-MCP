@@ -14,5 +14,5 @@
  * the cloud copy is stale, and only Drive's own icon will say so.
  */
 
-export { plainReason, type RunOutcome } from './run/state.js';
+export { markFoldersFailed, plainReason, type RunOutcome } from './run/state.js';
 export { resolveExportCompanies, runExport } from './run/orchestrate.js';

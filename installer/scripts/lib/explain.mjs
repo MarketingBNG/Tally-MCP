@@ -24,6 +24,21 @@ export const TALLY_PORT_INSTRUCTIONS = [
 ];
 
 /**
+ * Say, for a loopback name, that BOTH kinds of local address were tried.
+ *
+ * Worth the words: "nothing answered at localhost:9000" invites the reply "but
+ * Tally is right there on 9000", and this closes that off — if both families
+ * were refused, the port genuinely has nothing on it. It is also the sentence
+ * that would have saved a day on 2026-08-24, when only one family was tried and
+ * the message blamed the user's settings.
+ */
+function loopbackNote(host) {
+  return String(host ?? '').trim().toLowerCase() === 'localhost'
+    ? '  (this computer, tried both kinds of local address)'
+    : '';
+}
+
+/**
  * @param {import('./probe.mjs').ProbeResult} probe
  * @param {{host: string, port: number}} endpoint
  * @returns {{ ok: boolean, headline: string, lines: string[] }}
@@ -57,19 +72,42 @@ export function explainProbe(probe, endpoint) {
         ],
       };
 
+    /*
+     * WHY THIS SAYS WHAT WAS TRIED, AND WHY IT NO LONGER SAYS "ALMOST ALWAYS".
+     *
+     * This message used to open by naming two causes and calling the second —
+     * Tally's connection setting being off — "the most common cause". On
+     * 2026-08-24 it said exactly that to somebody whose TallyPrime was open,
+     * configured correctly, and answering perfectly: it was listening on IPv6
+     * and we were dialling the IPv4 literal. The message sent them to a
+     * settings screen that was already right, and there was no way to tell from
+     * it that the fault was ours.
+     *
+     * So it now states the address it tried, and offers the causes without
+     * ranking one as near-certain. A confident wrong diagnosis costs more than
+     * an honest list: it sends somebody to change a setting that was correct,
+     * and if they "fix" it they have broken a working install.
+     */
     case 'no-listener':
       return {
         ok: false,
         headline: 'Cannot reach TallyPrime.',
         lines: [
-          `Nothing is answering on ${endpoint.host} port ${endpoint.port}.`,
+          `Nothing answered at  ${endpoint.host}:${endpoint.port}${loopbackNote(endpoint.host)}`,
           '',
-          'This is almost always one of two things:',
+          'Any of these would explain it:',
           '',
           '   A. TallyPrime is not open. Start it, then run this check again.',
           '',
           '   B. TallyPrime is open, but its connection setting is switched off.',
-          '      This is the most common cause, and it is off by default.',
+          '      It is off by default, so on a new machine this is worth checking',
+          '      first.',
+          '',
+          '   C. Tally is set to a different port than the one above, or this',
+          '      software has been pointed at the wrong address. If TallyPrime',
+          '      itself looks correctly set up, suspect this one — and send',
+          '      whoever set this up the address line above, which says exactly',
+          '      what was asked.',
           '',
           ...TALLY_PORT_INSTRUCTIONS,
         ],
