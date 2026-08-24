@@ -87,6 +87,39 @@ jobs:
           "size=$mb MB"           | Out-File $env:GITHUB_OUTPUT -Append
           Write-Host "$($zip.Name) — $mb MB — SHA256 $hash"
 
+      # NOT OPTIONAL, and not a courtesy to the recipient either.
+      #
+      # An installed copy refuses to unpack a download whose SHA-256 it cannot
+      # check against this file (parseRelease in scripts/lib/update.mjs returns
+      # null when the asset is absent). So a release published without it is a
+      # release NO existing install will take — and the failure is silent, since
+      # "no usable release" looks exactly like "no new release".
+      #
+      # package.ps1 writes one locally, but the zip published here is the one
+      # this job just built, so the digest is recomputed from that file rather
+      # than trusting a checksum for different bytes. Two spaces before the
+      # name, which is the format `sha256sum -c` expects and what digestFor
+      # parses.
+      - name: Write the checksum for the zip that is actually being published
+        id: sums
+        shell: pwsh
+        run: |
+          $path = 'release\SHA256SUMS.txt'
+          $line = '${{ steps.artefact.outputs.sha256 }}'.ToLower() + '  ' + '${{ steps.artefact.outputs.name }}'
+          Set-Content -Path $path -Value $line -Encoding ascii
+          "path=$((Resolve-Path $path).Path)" | Out-File $env:GITHUB_OUTPUT -Append
+          Write-Host $line
+
+      # Proves the pair agrees before it is published, rather than leaving a
+      # mismatch to be discovered as "nobody is updating" a week later.
+      - name: Verify the checksum matches
+        shell: pwsh
+        run: |
+          $expected = (Get-Content '${{ steps.sums.outputs.path }}' -Raw).Trim().Split(' ')[0]
+          $actual = (Get-FileHash '${{ steps.artefact.outputs.path }}' -Algorithm SHA256).Hash.ToLower()
+          if ($expected -ne $actual) { throw "SHA256SUMS.txt says $expected but the zip is $actual." }
+          Write-Host "Checksum agrees: $actual"
+
       # Kept even for a dry run, so a rehearsal can be downloaded and checked.
       - uses: actions/upload-artifact@v4
         with:
@@ -100,7 +133,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.artefact.outputs.path }}
+          # BOTH files, every time. See the checksum step above for why the
+          # second one is what makes the release installable at all.
+          files: |
+            ${{ steps.artefact.outputs.path }}
+            ${{ steps.sums.outputs.path }}
           generate_release_notes: true
           body: |
             **${{ steps.artefact.outputs.name }}** — ${{ steps.artefact.outputs.size }}
