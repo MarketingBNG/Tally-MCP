@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.8.9 — unreleased
+## 0.8.9 — 2026-08-24
 **A folder could say "LAST RUN OK" while the spreadsheet in it went stale, and
 that is now fixed.** If the refresh could not start at all — TallyPrime closed,
 no company open — none of the folders were updated, so each one kept the note
