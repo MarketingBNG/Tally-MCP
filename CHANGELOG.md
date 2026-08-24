@@ -12,6 +12,27 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.8.9 — unreleased
+**A folder could say "LAST RUN OK" while the spreadsheet in it went stale, and
+that is now fixed.** If the refresh could not start at all — TallyPrime closed,
+no company open — none of the folders were updated, so each one kept the note
+from the last refresh that worked. Days of failures could pass with the folder
+still saying OK beside a workbook nobody had refreshed. Those folders now say
+plainly that the last refresh did not finish, and that the workbook is the older
+one. **If you saw a "LAST RUN OK" note in the last few days, check the as-at
+date on the workbook's Manifest tab before relying on it.**
+
+**A copy that had stopped working also stopped looking for the fix.** The check
+for new versions ran only at the end of a successful refresh, so any install
+with a problem — Tally unreachable, export folder gone — sat there unable to
+receive the very update that would repair it. It now checks whatever happened.
+
+**And when the connection fails, the message no longer guesses.** It used to say
+your Tally connection setting was "the most common cause", which sent people to
+a screen that was already set correctly. It now tells you the exact address it
+tried and lists the possible causes without pretending to know which one it is —
+including that the fault may be at this end rather than in your Tally.
+
 ## 0.8.8 — 2026-08-24
 **Ledgers filed in a sub-group were being left out of five different lists, and
 this is the most important fix in a while.** If your chart of accounts files
