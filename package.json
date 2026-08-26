@@ -1,6 +1,6 @@
 {
   "name": "tally-mcp",
-  "version": "0.8.9",
+  "version": "0.9.0",
   "description": "Read-only MCP server exposing TallyPrime accounting data to Claude Desktop",
   "license": "MIT",
   "type": "module",

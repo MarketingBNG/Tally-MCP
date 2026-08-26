@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.9.0 — unreleased
+## 0.9.0 — 2026-08-26
 **Updates now install themselves while Claude is closed, instead of waiting for
 you to restart it.** A new version was always downloaded automatically, but it
 could only be swapped in at the moment Claude started up — Windows will not
