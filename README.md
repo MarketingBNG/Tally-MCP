@@ -109,6 +109,13 @@ changed?** A collection fetching only `AlterId,MasterId` costs about **537KB in
 answer is yes does it do the real work — plus once a day regardless, so the
 as-at stamp always advances and a stale file cannot masquerade as a current one.
 
+Before any of that it spends a moment on something unrelated: if a new version
+has been downloaded and Claude is closed, it applies it — see
+[promote.mjs](installer/promote.mjs). That is the only work the task does that is
+not about the spreadsheet, and it is here because a run while Claude is closed is
+the one regular moment an update can be swapped in without asking the user for a
+restart.
+
 It compares the **set** of `(MasterId, AlterId)` pairs, not the maximum. A
 maximum cannot see a deletion: remove any record other than the highest and the
 maximum is unchanged, so a workbook validated on one would keep serving a
@@ -920,6 +927,7 @@ TallyPrime for Claude/        <- stable; never replaced
   Setup.bat, Check-Tally.bat, Run-Export.bat
   node/node.exe               <- the bundled runtime
   launch.mjs                  <- what Claude Desktop is pointed at
+  promote.mjs                 <- applies a staged update while Claude is closed
   .env, update-state.json     <- the user's settings and update bookkeeping
   app/                        <- replaced on every update
     package.json, dist/, scripts/, node_modules/
@@ -931,8 +939,17 @@ TallyPrime for Claude/        <- stable; never replaced
   running `app/`**, so a failed or corrupt update is a no-op rather than a
   broken install.
 - [launch.mjs](installer/launch.mjs) promotes `app.next/` at the next Desktop
-  start — the one moment nothing holds the current version open — keeping the
-  old one as `app.previous/`.
+  start — a moment nothing holds the current version open — keeping the old one
+  as `app.previous/`.
+- [promote.mjs](installer/promote.mjs) does the same during any export run that
+  finds Claude closed, so an install that is never restarted still updates.
+  Before this, a staged update waited for a Desktop start that might not come
+  for weeks, and that reads to the user as an update that never arrived.
+  Run-Export.bat runs it BEFORE `export.mjs`, and it imports nothing from
+  `app/`: Node holds an open handle on every module it imports, and Windows
+  will not rename a directory containing an open file, so a promoter that
+  touched `app/` would lock the folder it is trying to move. It raises no
+  toast — nobody is at the machine — and leaves the note on disk instead.
 - If the promoted version cannot even be imported, the launcher restores the
   previous one and records the bad version so the next check will not fetch it
   again. A later release supersedes the refusal.
@@ -943,7 +960,13 @@ running with nothing configured, and the workbook would silently stop refreshing
 while still looking current.
 
 Self-updating requires this layout, so a copy predating it needs one manual
-reinstall. After that, releases arrive on their own.
+reinstall. After that, releases arrive on their own. Two versions are worth
+knowing about when somebody reports being stuck: **0.7.0 and earlier** have no
+updater at all — Claude is pointed straight at `dist/index.js` and nothing ever
+checks — and **0.8.0** only checks from the export task, so an install without
+the spreadsheet scheduled never learns of a release. Both need the manual
+reinstall. From **0.8.1** the check also runs at every Desktop start, and from
+**0.9.0** the promotion no longer needs a restart at all.
 
 ## Contributing samples
 

@@ -37,9 +37,9 @@
  *
  * Every uncertainty means "do not promote": Claude might be running, the staged
  * folder might be incomplete, a rename might lose a race with an antivirus
- * scanner. A skipped promotion costs one more hour on the old version, and
- * launch.mjs will still do it at the next Claude start. A wrong one costs an
- * accountant a working tool.
+ * scanner. A skipped promotion costs one more export interval on the old
+ * version, and launch.mjs will still do it at the next Claude start. A wrong one
+ * costs an accountant a working tool.
  *
  * Nothing here throws to the caller and nothing is written to stdout beyond the
  * one line the export log records.
@@ -59,7 +59,7 @@ const PREVIOUS = 'app.previous';
  *
  * Asked of Windows rather than inferred from a lock, because "the rename failed"
  * and "Claude is open" are different facts and only the second one is worth
- * waiting an hour for.
+ * waiting for the next run to retry.
  *
  * Both executable names are matched: the ordinary installer ships `Claude.exe`,
  * and the packaged (MSIX) build has been seen running under the same name from a

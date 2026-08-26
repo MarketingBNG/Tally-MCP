@@ -18,8 +18,8 @@ you to restart it.** A new version was always downloaded automatically, but it
 could only be swapped in at the moment Claude started up — Windows will not
 replace files Claude is holding open. Anyone who leaves Claude running for weeks
 sat on a downloaded update the whole time, which looked exactly like an update
-that never arrived. The hourly spreadsheet refresh now applies it during any run
-where Claude happens to be closed, so it lands overnight or after a reboot with
+that never arrived. The spreadsheet refresh now applies it during any run where
+Claude happens to be closed, so it lands overnight or after a reboot with
 nothing to do and nothing to notice. If Claude is open it is left strictly alone
 and still updates at the next restart, as before.
 
