@@ -41,6 +41,13 @@ if not exist "%NODE_EXE%" (
   set "NODE_EXE=node"
 )
 
+rem Apply a staged update now, if one is waiting and Claude is closed. This runs
+rem BEFORE anything under app\ is opened, and that ordering is load-bearing: node
+rem holds an open handle on every module it imports, and Windows will not rename a
+rem folder containing an open file. See promote.mjs. It always exits 0 -- a
+rem promotion that cannot happen must never fail the export.
+if exist "%HERE%promote.mjs" "%NODE_EXE%" "%HERE%promote.mjs"
+
 rem The payload lives under app\ on an install that can update itself: the
 rem scripts move with each version while this .bat and node\ stay put. A source
 rem checkout has scripts\ beside this file instead, so both are accepted.

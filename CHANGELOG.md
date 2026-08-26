@@ -12,6 +12,17 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.9.0 — unreleased
+**Updates now install themselves while Claude is closed, instead of waiting for
+you to restart it.** A new version was always downloaded automatically, but it
+could only be swapped in at the moment Claude started up — Windows will not
+replace files Claude is holding open. Anyone who leaves Claude running for weeks
+sat on a downloaded update the whole time, which looked exactly like an update
+that never arrived. The hourly spreadsheet refresh now applies it during any run
+where Claude happens to be closed, so it lands overnight or after a reboot with
+nothing to do and nothing to notice. If Claude is open it is left strictly alone
+and still updates at the next restart, as before.
+
 ## 0.8.9 — 2026-08-24
 **A folder could say "LAST RUN OK" while the spreadsheet in it went stale, and
 that is now fixed.** If the refresh could not start at all — TallyPrime closed,

@@ -131,6 +131,9 @@ Copy-Item (Join-Path $InstallerDir 'Run-Export.bat') $PayloadDir
 # and flashes a console window on every run -- see launcherFor in exportSetup.mjs.
 Copy-Item (Join-Path $InstallerDir 'Run-Export-Hidden.vbs') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'launch.mjs') $PayloadDir
+# Applies a staged update when Claude is closed, run by Run-Export.bat before it
+# opens anything under app\. See installer/promote.mjs.
+Copy-Item (Join-Path $InstallerDir 'promote.mjs') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'READ ME FIRST.txt') $PayloadDir
 Copy-Item (Join-Path $RepoRoot 'LICENSE') $PayloadDir
 
@@ -140,6 +143,7 @@ $BootDir = Join-Path $AppDir 'boot'
 New-Item -ItemType Directory -Path $BootDir -Force | Out-Null
 foreach ($name in @(
     'launch.mjs',
+    'promote.mjs',
     'Setup.bat',
     'Check-Tally.bat',
     'Run-Export.bat',
