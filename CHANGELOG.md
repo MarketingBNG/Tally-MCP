@@ -12,6 +12,41 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 0.10.0 — unreleased
+**Claude can now read your spreadsheets straight off this computer, so the
+folder you picked no longer has to be inside Google Drive.** Until now the
+spreadsheets were only ever read through Google Drive. If the folder you chose
+in Setup was an ordinary folder on your PC — Documents, say — everything looked
+perfectly healthy: Setup accepted it, the refresh ran on schedule, Check-Tally
+reported no problems, and the workbook sat there with today's figures in it.
+Claude simply had no way to open it, and nothing anywhere said so. **If you have
+ever been told "I can't see your Tally data" while the spreadsheet clearly
+existed, this was almost certainly why.** Nothing needs to be done about it:
+once this update lands, the folder you already chose starts working.
+
+**Claude can now answer from the spreadsheets with TallyPrime closed.** It reads
+whichever companies have been exported to this computer, and it always says when
+the figures were last read from Tally — so a number is quoted as at that moment
+rather than as "now". A file that has not refreshed for a couple of days is
+called out as out of date, since the usual reason is that the refresh has
+stopped running and nobody noticed.
+
+**When the spreadsheets cannot answer, it checks whether TallyPrime is open
+before telling you what to do.** A company that has never been exported has to
+come from the live books. Rather than guess, it now looks — waiting a few
+seconds in case you are opening Tally right then — and then either tells you the
+live books are available, or asks you to open TallyPrime and try again. It also
+always says which of the two the figures came from, so a live figure and a
+spreadsheet figure are never quietly mixed.
+
+**Setup now tells you when the folder you picked is only visible to this
+computer.** Choosing a folder outside Google Drive is a perfectly good choice
+and Setup keeps it if you say so — but it now says plainly that a colleague on
+another PC, and Claude on the web, will not be able to see those spreadsheets.
+Check-Tally mentions it too, because a folder can stop being synced long after
+it was chosen. The folder picker also no longer starts you off in Documents,
+which was the one place most likely to cause the problem above.
+
 ## 0.9.0 — 2026-08-26
 **Updates now install themselves while Claude is closed, instead of waiting for
 you to restart it.** A new version was always downloaded automatically, but it

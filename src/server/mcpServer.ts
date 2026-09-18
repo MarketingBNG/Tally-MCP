@@ -25,6 +25,7 @@ import { registerPartyStatementTools } from '../tools/partyStatement.js';
 import { registerTieOutTools } from '../tools/tieOut.js';
 import { registerMaterialityTools } from '../tools/materiality.js';
 import { registerSummaryTools } from '../tools/summarise.js';
+import { registerExportedBookTools } from '../tools/exportedBooks.js';
 import { registerPrompts } from './prompts.js';
 import { serializeToolPayload } from '../tools/toolResult.js';
 import { buildCompanyListRequest } from '../tally/requests.js';
@@ -59,6 +60,10 @@ export function createMcpServer(deps: ServerDeps): McpServer {
   const toolDeps = { client, config, logger };
 
   registerConnectionTools(server, toolDeps);
+  // Reads the exported files on this machine, so it works with TallyPrime closed
+  // and without Google Drive. Registered first among the data tools because it
+  // is the fallback when Tally cannot be reached.
+  registerExportedBookTools(server, toolDeps);
   registerCompanyTools(server, toolDeps);
   registerMasterTools(server, toolDeps);
   registerLedgerTransactionTools(server, toolDeps);

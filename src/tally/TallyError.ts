@@ -31,6 +31,13 @@ export const TALLY_ERROR_CODES = [
   'INVALID_PARAMETERS',
   'RESULT_LIMIT_EXCEEDED',
   'RESPONSE_TOO_LARGE',
+  // The exported-files path, which answers with TallyPrime closed. These are
+  // failures of the FILES on this machine rather than of Tally, and they carry
+  // their own codes so a caller can tell "the books are unreachable" from
+  // "this computer has no export of them".
+  'EXPORT_NOT_CONFIGURED',
+  'EXPORT_NO_COMPANIES',
+  'EXPORT_COMPANY_NOT_FOUND',
 ] as const;
 
 export type TallyErrorCode = (typeof TALLY_ERROR_CODES)[number];
@@ -63,6 +70,14 @@ const DEFAULT_SUGGESTIONS: Record<TallyErrorCode, string> = {
   RESPONSE_TOO_LARGE:
     'Request a smaller page with pageSize, or set includeAllFields to false — the data was ' +
     'retrieved successfully but is too large to return in one response.',
+  EXPORT_NOT_CONFIGURED:
+    'Run Setup on this computer and choose a folder for the daily spreadsheet — or open the ' +
+    'company in TallyPrime to use the live books instead.',
+  EXPORT_NO_COMPANIES:
+    'The export folder holds no company data yet. Check that the export has run, and that the ' +
+    'folder is on a drive that is currently connected.',
+  EXPORT_COMPANY_NOT_FOUND:
+    'Use tally_list_exported_books to see which companies this computer holds exported data for.',
 };
 
 /** The shape handed back to Claude. Deliberately contains no stack trace. */

@@ -435,13 +435,68 @@ export function pickFolder(description, currentFolder = null) {
  */
 function likelyDriveFolder() {
   const candidates = [];
-  for (const letter of ['G', 'H', 'I', 'J']) {
+  for (const letter of DRIVE_LETTERS) {
     candidates.push(`${letter}:\\Shared drives`, `${letter}:\\My Drive`);
   }
   const profile = process.env.USERPROFILE;
-  if (profile) candidates.push(join(profile, 'Google Drive'), join(profile, 'Documents'));
+  // Documents USED TO BE the last candidate here, and it was a trap. On a
+  // machine with no Drive mount the picker then opened straight into a purely
+  // local folder — the one choice that leaves the spreadsheets visible to
+  // nobody but this computer — with the dialog itself appearing to suggest it.
+  //
+  // A local folder is no longer BROKEN (the server reads the export folder from
+  // disk now), but it is still the wrong thing to propose. With no Drive mount
+  // the picker opens at This PC and the person chooses it knowingly or not at all.
+  if (profile) candidates.push(join(profile, 'Google Drive'));
 
   return candidates.find((path) => existsSync(path)) ?? null;
+}
+
+/** Drive letters Google Drive Desktop commonly mounts on. */
+const DRIVE_LETTERS = ['G', 'H', 'I', 'J', 'K'];
+
+/**
+ * Does this folder look like one a sync client keeps in the cloud?
+ *
+ * ## Why this WARNS and never blocks
+ *
+ * It is a heuristic and cannot be anything else: Drive can be mounted on a
+ * letter not listed here, and plenty of people sync with OneDrive, Dropbox or a
+ * mapped network share instead. A false negative is certain eventually, and
+ * refusing a folder on the strength of one would lock somebody out of a setup
+ * that works perfectly well. So the caller states the consequence and lets the
+ * person decide.
+ *
+ * ## What the consequence actually IS
+ *
+ * NOT "Claude cannot read it". That was true until the server learned to read
+ * the export folder from disk, and it was the whole bug — a local folder gave a
+ * green, working export that Claude had no path to. Repeating that warning now
+ * would be a warning about something that no longer happens.
+ *
+ * What remains true is narrower and worth saying plainly: a folder outside a
+ * synced one is visible to THIS COMPUTER ONLY. A colleague cannot see it, and
+ * neither can Claude on the web.
+ *
+ * @param {string} folder
+ * @returns {boolean} True when the path sits inside something that looks synced.
+ */
+export function looksDriveSynced(folder) {
+  if (typeof folder !== 'string' || folder.trim() === '') return false;
+
+  const path = folder.replace(/\//g, '\\').toLowerCase();
+
+  // A Drive letter root: "G:\Shared drives\..." or "G:\My Drive\...".
+  for (const letter of DRIVE_LETTERS) {
+    const root = `${letter.toLowerCase()}:\\`;
+    if (!path.startsWith(root)) continue;
+    const rest = path.slice(root.length);
+    if (rest.startsWith('shared drives') || rest.startsWith('my drive')) return true;
+  }
+
+  // Or a synced folder under the profile, which is how Drive, OneDrive and
+  // Dropbox all present themselves when they are not given a drive letter.
+  return /\\(google drive|onedrive[^\\]*|dropbox)\\/.test(`${path}\\`);
 }
 
 /** Single-quote for PowerShell, where the escape for a quote is doubling it. */

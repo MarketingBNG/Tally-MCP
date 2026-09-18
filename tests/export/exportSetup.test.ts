@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   loadEnvFile,
+  looksDriveSynced,
   markFolderRetired,
   moveExportData,
   readEnvSetting,
@@ -276,5 +277,55 @@ describe('retiring the folder the export has left', () => {
     expect(markFolderRetired(join(root, 'never-existed'), join(root, 'new'), new Date())).toBe(
       false
     );
+  });
+});
+
+describe('telling a synced folder from a local one', () => {
+  /**
+   * This decides whether Setup warns, and the warning is the only thing
+   * standing between somebody and an export nobody else can see. It used to
+   * decide something far worse — until the server learned to read the folder
+   * from disk, a local folder meant Claude could not read the export AT ALL,
+   * and every check still reported success.
+   *
+   * It is a heuristic and it warns rather than blocks, so a false negative
+   * costs a question somebody answers "yes" to. A false POSITIVE is the one
+   * that matters: it would stay silent about a folder that really is local.
+   *
+   * Written with String.raw throughout. These are Windows paths, every one of
+   * them is mostly backslashes, and an escaped-away backslash makes a test that
+   * asserts something other than the path it appears to assert.
+   */
+  it('recognises the Shared drives and My Drive roots', () => {
+    expect(looksDriveSynced(String.raw`G:\Shared drives\Tally Exports`)).toBe(true);
+    expect(looksDriveSynced(String.raw`H:\My Drive\Tally`)).toBe(true);
+    // Forward slashes, because a pasted path may carry them.
+    expect(looksDriveSynced('G:/Shared drives/Tally Exports')).toBe(true);
+    // Case is not a person's problem.
+    expect(looksDriveSynced(String.raw`g:\shared drives\tally`)).toBe(true);
+  });
+
+  it('recognises a synced folder under the user profile', () => {
+    expect(looksDriveSynced(String.raw`C:\Users\kim\Google Drive\Tally`)).toBe(true);
+    // OneDrive appends the organisation name, so the match cannot be exact.
+    expect(looksDriveSynced(String.raw`C:\Users\kim\OneDrive - Acme Ltd\Tally`)).toBe(true);
+    expect(looksDriveSynced(String.raw`C:\Users\kim\Dropbox\Tally`)).toBe(true);
+  });
+
+  it('does not mistake a local folder for a synced one', () => {
+    // The exact choice that produced the bug: Documents, which the picker used
+    // to open in by default.
+    expect(looksDriveSynced(String.raw`C:\Users\kim\Documents\Tally Exports`)).toBe(false);
+    expect(looksDriveSynced(String.raw`C:\TallyExports`)).toBe(false);
+    expect(looksDriveSynced(String.raw`D:\Accounts\Tally`)).toBe(false);
+    // A Drive LETTER is not enough — the folder has to be inside a synced root.
+    expect(looksDriveSynced(String.raw`G:\Other\Tally`)).toBe(false);
+  });
+
+  it('treats nothing at all as not synced', () => {
+    expect(looksDriveSynced('')).toBe(false);
+    expect(looksDriveSynced('   ')).toBe(false);
+    expect(looksDriveSynced(undefined)).toBe(false);
+    expect(looksDriveSynced(null)).toBe(false);
   });
 });

@@ -19,6 +19,7 @@ import {
   mergeServerIntoToml,
 } from './lib/codexConfig.mjs';
 import {
+  looksDriveSynced,
   markFolderRetired,
   moveExportData,
   pickFolder,
@@ -478,6 +479,56 @@ async function configureExport(companiesOpen) {
  *
  * @returns {Promise<string|null>} A folder that EXISTS, or null if they gave up.
  */
+/**
+ * Say what a folder outside Google Drive means, and let them decide.
+ *
+ * ## Why this exists
+ *
+ * The folder used to decide, silently, whether anybody could read the export at
+ * all. Claude reached the spreadsheets through Google Drive, so a local folder
+ * produced an install where every single check passed — Setup said "Chosen",
+ * the task registered, the files were written, the doctor was green — and the
+ * data was unreachable. Nothing said so, because nothing was looking.
+ *
+ * The reading half is fixed: the server now opens the export folder on this
+ * computer directly. So this is no longer a broken install, and the message
+ * below must NOT say it is. Overstating it would send people to rearrange a
+ * setup that works.
+ *
+ * ## What is left worth saying
+ *
+ * That the spreadsheets stay on this machine. One person gets answers; a
+ * colleague on another computer gets nothing, and neither does Claude on the
+ * web. In an accounting office that is usually not what was wanted, and it is
+ * invisible until the day somebody else needs the file.
+ *
+ * ## Why it asks rather than refuses
+ *
+ * The detection is a heuristic — OneDrive, Dropbox, a mapped network share, a
+ * Drive on an unusual letter. It WILL be wrong about somebody eventually, and a
+ * wrong refusal is worse than a wrong warning, so the person decides.
+ *
+ * @returns {Promise<boolean>} True to keep the folder, false to choose again.
+ */
+async function acceptedLocalFolder(folder) {
+  if (looksDriveSynced(folder)) return true;
+
+  line('That folder does not look like it is inside Google Drive.');
+  blank();
+  line('That WORKS — Claude reads the spreadsheets from this computer, and the');
+  line('export will run normally. But they stay on this computer only:');
+  line('   - a colleague on another PC will not see them');
+  line('   - Claude on the web will not see them');
+  blank();
+  line('If that is what you want, keep it. If other people need these figures,');
+  line('pick a folder under  Shared drives  instead.');
+  blank();
+
+  const keep = await confirm('Keep this folder anyway?', true);
+  blank();
+  return keep;
+}
+
 async function chooseExportFolder() {
   // What it is set to now, so re-running Setup to change ONE other answer does
   // not mean re-finding a folder somebody chose weeks ago.
@@ -511,7 +562,8 @@ async function chooseExportFolder() {
     if (picked !== null) {
       line(`Chosen:  ${picked}`);
       blank();
-      return picked;
+      if (await acceptedLocalFolder(picked)) return picked;
+      continue;
     }
 
     // Null covers two different things, and they deserve different words: the
@@ -534,7 +586,8 @@ async function chooseExportFolder() {
     if (existsSync(typed)) {
       line(`Chosen:  ${typed}`);
       blank();
-      return typed;
+      if (await acceptedLocalFolder(typed)) return typed;
+      continue;
     }
 
     line('That folder does not exist, so it was not saved.');

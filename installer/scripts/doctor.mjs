@@ -13,7 +13,7 @@ import {
 import { CODEX_SERVER_KEY, codexConfigPath } from './lib/codexConfig.mjs';
 import { readUpdateState } from './lib/update.mjs';
 import { buildFreshness } from './lib/buildFreshness.mjs';
-import { readEnvSetting, taskExists } from './lib/exportSetup.mjs';
+import { looksDriveSynced, readEnvSetting, taskExists } from './lib/exportSetup.mjs';
 
 /**
  * The doctor window — run by double-clicking Check-Tally.bat.
@@ -203,6 +203,27 @@ function checkExport() {
   line("Google Drive has uploaded it is Drive's own business — check its icon in");
   line('the notification area if the cloud copy matters.');
   blank();
+
+  /*
+   * Where the folder is, reported EVERY run rather than only at Setup.
+   *
+   * The answer can change long after the folder was chosen — Drive signed out,
+   * uninstalled, or remounted on a different letter — and nothing else would
+   * ever mention it. Reported as a note and never as a problem: a local folder
+   * works, because the connection reads the export folder straight off this
+   * computer. What it cannot do is reach anybody else.
+   */
+  if (!looksDriveSynced(folder)) {
+    line('This folder does not look like it is inside Google Drive.');
+    line('');
+    line('That is fine for THIS computer — Claude reads the spreadsheets from');
+    line('here. But nobody else can: not a colleague on another PC, and not');
+    line('Claude on the web.');
+    line('');
+    line('What to do:  nothing, if that suits you. If other people need these');
+    line('figures, run Setup and pick a folder under  Shared drives  instead.');
+    blank();
+  }
 
   return { problem: worst };
 }

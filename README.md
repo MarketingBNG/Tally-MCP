@@ -441,6 +441,8 @@ repeated.
 | Tool | Purpose |
 |---|---|
 | `tally_connection_status` | Check reachability; returns a specific fix on failure |
+| `tally_list_exported_books` | The companies whose exported spreadsheets are on this computer, and when each was last read from TallyPrime. Works with Tally closed |
+| `tally_read_exported_table` | One table out of an exported spreadsheet on this computer — the catalogue first, then the table. Works with Tally closed; every answer carries its as-at moment |
 | `tally_list_companies` | The company TallyPrime currently has loaded |
 | `tally_get_company` | Company profile — size, groups, fields in use; `includeFeatures` infers which TallyPrime features the data shows in use |
 | `tally_get_masters` | Master data behind one `type`: `ledger` (chart of accounts, balances, GSTIN, related-party flag), `group` (the hierarchy, and whether a group is P&L or balance sheet), `voucherType` (the transaction types this company defines, with the built-in each derives from and its numbering series), `stockItem` (inventory masters). Each supports list, search, filter with `conditions`, and — for ledgers and stock items — fetch one by exact `name` |
