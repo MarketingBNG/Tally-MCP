@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.10.0 — unreleased
+## 0.10.0 — 2026-09-18
 **Claude can now read your spreadsheets straight off this computer, so the
 folder you picked no longer has to be inside Google Drive.** Until now the
 spreadsheets were only ever read through Google Drive. If the folder you chose
