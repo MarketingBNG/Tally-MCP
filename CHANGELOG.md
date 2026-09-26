@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 0.11.0 — unreleased
+## 1.0.0 — unreleased
 **Tally now works in UIC GPT too.** When Setup asks which app you use, there
 is a new choice for UIC GPT (and "All of these" now covers it as well). Pick it
 and Tally is added to UIC GPT for you. There is nothing to copy or paste and no
