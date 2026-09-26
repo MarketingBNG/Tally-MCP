@@ -20,9 +20,9 @@
 
   Three things need to be true. All of them are one-time, except the last.
 
-  1. Claude Desktop OR Codex is installed on this computer.
+  1. Claude Desktop, Codex OR UIC GPT is installed on this computer.
 
-     Either one works. Setup will ask which you use, and you can pick both.
+     Any one works. Setup will ask which you use, and you can pick all.
 
   2. TallyPrime's connection setting is switched on. It is OFF by default.
 
@@ -61,7 +61,7 @@
           just click through to the folder, no typing -- and then it asks
           which companies to cover.)
         - Do you want the live Tally connector switched on as well?
-        - Which app do you use -- Claude Desktop, Codex, or both?
+        - Which app do you use -- Claude Desktop, Codex, UIC GPT, or all?
 
      If you are not sure, just press Enter at each one.
 
@@ -73,6 +73,7 @@
      notification area, next to the clock -- right-click its icon there and
      choose Quit, then start it again. Codex must also be fully closed and
      reopened, because it only reads its settings when it starts.
+     UIC GPT needs no restart -- just make sure you are signed in.
 
   4. Ask it:  "What is my cash balance in Tally?"
 

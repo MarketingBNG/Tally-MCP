@@ -18,6 +18,7 @@ import {
   isCodexInstalled,
   mergeServerIntoToml,
 } from './lib/codexConfig.mjs';
+import { isUicInstalled, uicConfigPath } from './lib/uicConfig.mjs';
 import {
   looksDriveSynced,
   markFolderRetired,
@@ -217,7 +218,8 @@ async function main() {
 
   const results = [];
   for (const target of targets) {
-    const result = target === 'claude' ? configureClaude() : configureCodex();
+    const result =
+      target === 'claude' ? configureClaude() : target === 'codex' ? configureCodex() : configureUic();
     results.push(result);
   }
 
@@ -255,6 +257,7 @@ async function main() {
 
   status('Claude Desktop', configured.includes('Claude Desktop'), '');
   status('Codex', configured.includes('Codex'), '');
+  status('UIC GPT', configured.includes('UIC GPT'), '');
   status(
     'Spreadsheet export',
     exportChoice.folder !== undefined && exportChoice.folder !== null,
@@ -283,6 +286,12 @@ async function main() {
   if (configured.includes('Codex')) {
     line('Close Codex completely, then open it again — it only reads its settings');
     line('at startup, so it will not see this until you do.');
+    blank();
+  }
+
+  if (configured.includes('UIC GPT')) {
+    line('UIC GPT picks this up by itself. Sign in to UIC GPT on this computer if');
+    line('you have not already.');
     blank();
   }
 
@@ -729,22 +738,25 @@ async function confirm(question, fallback) {
  */
 async function chooseTargets() {
   const forced = (targetFromArgs() ?? process.env.TALLY_SETUP_TARGET ?? '').trim().toLowerCase();
-  if (forced === 'claude' || forced === 'codex' || forced === 'both') return expandChoice(forced);
+  if (['claude', 'codex', 'uic', 'both', 'all'].includes(forced)) return expandChoice(forced);
 
   const claude = isClaudeInstalled();
   const codex = isCodexInstalled();
+  const uic = isUicInstalled();
   const found = '<- found on this computer';
   const label = (text) => text.padEnd(16);
 
   heading('Which app will you ask your questions in?');
   line(`1.  ${label('Claude Desktop')}${claude ? found : ''}`);
   line(`2.  ${label('Codex')}${codex ? found : ''}`);
-  line(`3.  ${label('Both')}`);
+  line(`3.  ${label('UIC GPT')}${uic ? found : ''}`);
+  line(`4.  ${label('All of these')}`);
   blank();
 
   // Enter alone must do the right thing: for this audience, a prompt with no
   // default is a place to get stuck.
-  const fallback = claude && codex ? '3' : codex && !claude ? '2' : '1';
+  const foundCount = [claude, codex, uic].filter(Boolean).length;
+  const fallback = foundCount > 1 ? '4' : uic ? '3' : codex ? '2' : '1';
 
   // No keyboard attached (an unattended or scripted run). Choosing silently
   // would leave no record of WHICH app was set up, so it says so.
@@ -756,18 +768,20 @@ async function chooseTargets() {
 
   for (;;) {
     const answer = (
-      await ask(`  Type 1, 2 or 3 and press Enter  (just Enter = ${fallback}):  `)
+      await ask(`  Type 1, 2, 3 or 4 and press Enter  (just Enter = ${fallback}):  `)
     ).trim();
     if (answer === '') return expandChoice(fallback);
-    if (answer === '1' || answer === '2' || answer === '3') return expandChoice(answer);
-    line('Please type 1, 2 or 3.');
+    if (['1', '2', '3', '4'].includes(answer)) return expandChoice(answer);
+    line('Please type 1, 2, 3 or 4.');
   }
 }
 
 function expandChoice(choice) {
   if (choice === '1' || choice === 'claude') return ['claude'];
   if (choice === '2' || choice === 'codex') return ['codex'];
-  return ['claude', 'codex'];
+  if (choice === '3' || choice === 'uic') return ['uic'];
+  if (choice === 'both') return ['claude', 'codex'];
+  return ['claude', 'codex', 'uic'];
 }
 
 function targetFromArgs() {
@@ -929,6 +943,54 @@ function configureCodex() {
   const backupPath = backup(configPath);
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, text, 'utf8');
+
+  return {
+    app,
+    ok: true,
+    lines: describe(app, replacedExisting, preservedServers, backupPath, configPath),
+  };
+}
+
+/**
+ * Write the server into UIC GPT's uic_gpt_config.json — Claude Desktop's own
+ * format, so the same merge is reused. See lib/uicConfig.mjs.
+ */
+function configureUic() {
+  const app = 'UIC GPT';
+  const configPath = uicConfigPath();
+  if (!configPath) {
+    return { app, ok: false, lines: ['Could not work out where UIC GPT keeps its settings.'] };
+  }
+
+  let existing = null;
+  if (existsSync(configPath)) {
+    const raw = readFileSync(configPath, 'utf8');
+    if (raw.trim().length > 0) {
+      try {
+        existing = JSON.parse(raw);
+      } catch {
+        existing = undefined;
+      }
+      if (!isPlainObject(existing)) {
+        return {
+          app,
+          ok: false,
+          lines: ["UIC GPT's settings file could not be read, so nothing was changed.", `File:  ${configPath}`],
+        };
+      }
+    }
+  }
+
+  const { config, replacedExisting, preservedServers } = mergeServerIntoConfig(existing, {
+    nodePath: process.execPath,
+    serverPath: SERVER_ENTRY,
+    env: DEFAULT_ENV,
+  });
+
+  const backupPath = backup(configPath);
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}
+`, 'utf8');
 
   return {
     app,
