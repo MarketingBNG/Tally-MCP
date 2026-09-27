@@ -96,6 +96,7 @@ const REQUIRED_ARGS: Record<string, Record<string, unknown>> = {
   tally_get_masters: { type: 'ledger' },
   tally_get_statement: { statement: 'trial_balance' },
   tally_get_outstanding: { side: 'receivable' },
+  tally_match_parties: {},
   tally_get_gst: { view: 'summary' },
   tally_search: { query: 'a' },
   tally_get_party_statement: { query: 'Northwind' },

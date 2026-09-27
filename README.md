@@ -456,6 +456,7 @@ repeated.
 | `tally_get_inventory_movements` | Stock movements, derived from voucher inventory lines |
 | `tally_get_closing_stock` | Closing quantity, rate and value `by: 'item'` or `by: 'godown'`, from TallyPrime's own summary reports. The only location-wise stock path. The rate is rounded — see below |
 | `tally_get_outstanding` | Receivables or payables with bill references; `includeAgeing` buckets by bill AGE, not overdue — see below |
+| `tally_match_parties` | Matches each party's bills to the receipts or payments that settled them, by amount and date, on the machine holding the books; returns the result in pages, writes nothing |
 | `tally_get_gst` | `summary` (tax ledgers/registration in use) or `transactions` (GST-bearing vouchers), as recorded, never calculated |
 | `tally_search` | Cross-entity search over ledgers, vouchers and stock items |
 | `tally_get_bank_reconciliation` | Bank instruments with cheque/UTR detail and reconciled status — see below |

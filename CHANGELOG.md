@@ -12,6 +12,18 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.3 — unreleased
+**Claude can now match your debtors and creditors for a whole year.** Ask it
+to match each party's bills against the receipts and payments that settled
+them, and it does the matching on your own computer, then shows you the result
+in the chat, where it can build the Excel for you to download. Until now a
+year of vouchers was too much to pass through the chat, so Claude asked you to
+upload files instead. It works for any company: it finds customers and
+suppliers under Sundry Debtors and Sundry Creditors (or groups you name), and
+understands custom voucher types. Every pairing is marked as one to verify,
+because two equal bills a week apart cannot be told apart. Nothing in Tally is
+changed and no file is saved on your computer.
+
 ## 1.0.2 — 2026-09-27
 **When TallyPrime is slow, Claude now waits for it and asks again, instead of
 leaving part of your books out.** Until now, if Tally took too long to answer,

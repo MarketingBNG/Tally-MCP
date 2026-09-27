@@ -18,6 +18,7 @@ import { registerOutstandingTools } from '../tools/outstanding.js';
 import { registerGstTools } from '../tools/gst.js';
 import { registerTdsTools } from '../tools/tds.js';
 import { registerWorkpaperTools } from '../tools/workpaper.js';
+import { registerPartyMatchingTools } from '../tools/partyMatching.js';
 import { registerFixedAssetTools } from '../tools/fixedAssets.js';
 import { registerConfirmationTools } from '../tools/confirmations.js';
 import { registerSearchTools } from '../tools/search.js';
@@ -82,6 +83,7 @@ export function createMcpServer(deps: ServerDeps): McpServer {
   registerMaterialityTools(server, toolDeps);
   registerVoucherTestTools(server, toolDeps);
   registerWorkpaperTools(server, toolDeps);
+  registerPartyMatchingTools(server, toolDeps);
   registerFixedAssetTools(server, toolDeps);
   registerConfirmationTools(server, toolDeps);
   registerGenericReportTools(server, toolDeps);
