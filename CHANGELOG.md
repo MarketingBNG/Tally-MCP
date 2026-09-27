@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.0.1 — unreleased
+## 1.0.1 — 2026-09-27
 **Last year's vouchers now come through on busy books, and Tally no longer
 freezes while fetching them.** When Claude needed a full past financial year
 (for example to match sales against bank receipts), it asked TallyPrime for the
