@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadConfig, ConfigError, installEnvPath } from '../../src/config/config.js';
@@ -144,15 +145,15 @@ describe('loadConfig', () => {
 
 describe('the installed copy .env', () => {
   it('is found beside app/ in the installed layout', () => {
-    const url = pathToFileURL(
-      join('C:', 'Install', 'TallyPrime for Claude', 'app', 'dist', 'config', 'config.js')
-    ).href;
-    expect(installEnvPath(url)).toBe(join('C:', 'Install', 'TallyPrime for Claude', '.env'));
+    // Absolute on every platform: CI runs this on Linux as well as Windows.
+    const install = join(tmpdir(), 'TallyPrime for Claude');
+    const url = pathToFileURL(join(install, 'app', 'dist', 'config', 'config.js')).href;
+    expect(installEnvPath(url)).toBe(join(install, '.env'));
   });
 
   it('is not looked for in a source checkout', () => {
     // Otherwise an unrelated .env in the folder above the repo would be read.
-    const url = pathToFileURL(join('C:', 'code', 'tally-mcp', 'dist', 'config', 'config.js')).href;
+    const url = pathToFileURL(join(tmpdir(), 'tally-mcp', 'dist', 'config', 'config.js')).href;
     expect(installEnvPath(url)).toBeNull();
   });
 });
