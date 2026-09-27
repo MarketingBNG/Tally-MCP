@@ -12,6 +12,14 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.4 — unreleased
+**Matching now also finds one payment that settles several bills.** When a
+customer or supplier pays three invoices with a single payment, the three bills
+are now shown together against that payment, instead of all four appearing as
+unmatched. The oldest open bills are tried first, the way payments are usually
+made, and every bill in the group must fall within the same date window as
+single matches. As before, each pairing is marked as one to verify.
+
 ## 1.0.3 — 2026-09-27
 **Claude can now match your debtors and creditors for a whole year.** Ask it
 to match each party's bills against the receipts and payments that settled

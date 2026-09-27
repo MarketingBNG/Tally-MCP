@@ -25,6 +25,7 @@ import {
   DEFAULT_MATCH_RULES,
   familyResolver,
   matchParties,
+  type GroupMatch,
   type Match,
   type MatchSide,
   type PartyItem,
@@ -44,6 +45,7 @@ import {
 const VIEWS = [
   'summary',
   'matches',
+  'grouped_matches',
   'unmatched_bills',
   'unmatched_settlements',
   'bills_without_party',
@@ -63,7 +65,10 @@ const DESCRIPTION = [
   'RULES (all adjustable): same party; settlement dated from `daysBefore` (10) days before the ' +
     'bill to `daysAfter` (45) after; EXACT within `exactTolerance` (1) tried for every bill ' +
     'first, then PROBABLE within `probableTolerance` (35); each receipt or payment used ' +
-    'once; smallest difference wins, then nearest date. Debtors: Sales against Receipt. ' +
+    'once; smallest difference wins, then nearest date. THEN GROUPED: a receipt or payment ' +
+    'still unused is tried against a run of that party’s oldest open bills, in date order, ' +
+    'that adds up to it (exact tolerance first, then probable) — one payment clearing several ' +
+    'bills. Debtors: Sales against Receipt. ' +
     'Creditors: Purchase against Payment, including custom types built on those. Parties are ' +
     'ledgers at or under Sundry Debtors / Sundry Creditors unless `debtorGroups` / ' +
     '`creditorGroups` say otherwise. Tolerances are in the currency of the company.',
@@ -76,6 +81,8 @@ const DESCRIPTION = [
   '- `summary`: totals, and one row per party with its Tally closing balance, billed, settled, ' +
     'matched and unmatched amounts. Totals state how many rows each other view holds.',
   '- `matches`: each bill beside the receipt/payment matched to it, exact or probable.',
+  '- `grouped_matches`: one payment covering several bills — one row per bill, sharing a ' +
+    '`group` number, with the payment repeated on each row and the group total.',
   '- `unmatched_bills`: bills with no settlement found — what keeps balances open.',
   '- `unmatched_settlements`: receipts/payments set against no bill — advances, on-account ' +
     'payments, or entries posted to the wrong party.',
@@ -124,6 +131,29 @@ const matchRow = (match: Match): Record<string, unknown> => ({
   settlementNarration: match.settlement.narration,
   status: match.kind === 'exact' ? 'candidate — verify' : 'probable — review',
 });
+
+/** One row per bill of a grouped match, numbered so the rows of one group sit together. */
+const groupRows = (groups: readonly GroupMatch[]): Record<string, unknown>[] =>
+  groups.flatMap((group, index) =>
+    group.bills.map((bill) => ({
+      group: index + 1,
+      side: bill.side,
+      party: bill.party,
+      kind: group.kind,
+      billDate: bill.date,
+      billType: bill.voucherType,
+      billNumber: bill.voucherNumber,
+      billAmount: rupees(bill.paise),
+      billsInGroup: group.bills.length,
+      groupTotal: rupees(group.billsPaise),
+      settlementDate: group.settlement.date,
+      settlementType: group.settlement.voucherType,
+      settlementNumber: group.settlement.voucherNumber,
+      settlementAmount: rupees(group.settlement.paise),
+      difference: rupees(group.differencePaise),
+      status: group.kind === 'grouped_exact' ? 'candidate — verify' : 'probable — review',
+    }))
+  );
 
 /** A voucher type's family, from its built-in parent. */
 async function voucherFamilies(
@@ -259,6 +289,8 @@ export function registerPartyMatchingTools(server: McpServer, deps: ToolDeps): v
           matches: result.matches.length,
           exact: result.matches.filter((match) => match.kind === 'exact').length,
           probable: result.matches.filter((match) => match.kind === 'probable').length,
+          groupedSettlements: result.groupMatches.length,
+          groupedBills: result.groupMatches.reduce((n, group) => n + group.bills.length, 0),
           unmatchedBills: result.unmatchedBills.length,
           unmatchedSettlements: result.unmatchedSettlements.length,
           billsWithoutParty: result.billsWithoutParty.length,
@@ -278,6 +310,11 @@ export function registerPartyMatchingTools(server: McpServer, deps: ToolDeps): v
         switch (view) {
           case 'matches':
             return fromPage(paginate(result.matches.map(matchRow), pagination, warnings), context);
+          case 'grouped_matches':
+            return fromPage(
+              paginate(groupRows(result.groupMatches), pagination, warnings),
+              context
+            );
           case 'unmatched_bills':
             return fromPage(
               paginate(result.unmatchedBills.map(itemRow), pagination, warnings),
@@ -307,6 +344,8 @@ export function registerPartyMatchingTools(server: McpServer, deps: ToolDeps): v
               settled: rupees(party.settledPaise),
               exactMatches: party.exactMatches,
               probableMatches: party.probableMatches,
+              groupedSettlements: party.groupedSettlements,
+              groupedBills: party.groupedBills,
               unmatchedBills: party.unmatchedBills,
               unmatchedBillsAmount: rupees(party.unmatchedBillsPaise),
               unmatchedSettlements: party.unmatchedSettlements,

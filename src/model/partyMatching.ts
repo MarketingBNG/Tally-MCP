@@ -26,6 +26,12 @@ import { addDaysIso } from '../utils/dates.js';
  * 4. Then PROBABLE: within `probableTolerance`. Marked as such, never as matched.
  * 5. Each settlement is used once. Among candidates the smallest difference
  *    wins, then the nearest date.
+ * 6. Then GROUPED: a settlement still unused is tried against a RUN of that
+ *    party's oldest open bills, in date order, whose total is within the exact
+ *    tolerance — and after that within the probable one. A run, not any subset,
+ *    because payments clear the oldest bills first; any-subset search over many
+ *    similar bills finds sums that are coincidences, not settlements. Every bill
+ *    in the run must itself sit inside the date window of the settlement.
  *
  * Every match is a CANDIDATE. Same party, same amount, near date is evidence,
  * not proof — two identical invoices a week apart are indistinguishable here —
@@ -37,6 +43,10 @@ import { addDaysIso } from '../utils/dates.js';
 
 export type MatchSide = 'debtors' | 'creditors';
 export type MatchKind = 'exact' | 'probable';
+export type GroupKind = 'grouped_exact' | 'grouped_probable';
+
+/** The longest run of bills one settlement is tried against. */
+export const MAX_BILLS_PER_GROUP = 30;
 export type VoucherFamily = 'sales' | 'purchase' | 'receipt' | 'payment' | 'other';
 
 export interface MatchRules {
@@ -80,6 +90,17 @@ export interface Match {
   daysFromBill: number;
 }
 
+/** One settlement covering several bills of the same party. */
+export interface GroupMatch {
+  kind: GroupKind;
+  settlement: PartyItem;
+  /** Oldest first. */
+  bills: PartyItem[];
+  billsPaise: number;
+  /** Settlement minus the bills' total, in paise. */
+  differencePaise: number;
+}
+
 export interface PartyTotals {
   side: MatchSide;
   party: string;
@@ -89,6 +110,9 @@ export interface PartyTotals {
   settledPaise: number;
   exactMatches: number;
   probableMatches: number;
+  /** Settlements matched to a run of bills, and how many bills those runs cover. */
+  groupedSettlements: number;
+  groupedBills: number;
   unmatchedBills: number;
   unmatchedBillsPaise: number;
   unmatchedSettlements: number;
@@ -97,6 +121,7 @@ export interface PartyTotals {
 
 export interface MatchResult {
   matches: Match[];
+  groupMatches: GroupMatch[];
   unmatchedBills: PartyItem[];
   unmatchedSettlements: PartyItem[];
   /** Sales or purchase vouchers carrying no party ledger at all. */
@@ -234,22 +259,81 @@ export function matchParties(input: MatchInput): MatchResult {
     }
   };
 
-  pass('exact', Math.round(input.rules.exactTolerance * 100));
-  pass('probable', Math.round(input.rules.probableTolerance * 100));
+  const exactPaise = Math.round(input.rules.exactTolerance * 100);
+  const probablePaise = Math.round(input.rules.probableTolerance * 100);
+  pass('exact', exactPaise);
+  pass('probable', probablePaise);
+
+  // Rule 6: one settlement against a run of the party's oldest open bills.
+  const grouped = new Set<PartyItem>();
+  const groupMatches: GroupMatch[] = [];
+  const openBills = new Map<string, PartyItem[]>();
+  for (const bill of bills) {
+    if (matchedBills.has(bill)) continue;
+    const list = openBills.get(key(bill)) ?? [];
+    list.push(bill);
+    openBills.set(key(bill), list);
+  }
+
+  const groupPass = (kind: GroupKind, tolerancePaise: number): void => {
+    for (const settlement of settlements) {
+      if (used.has(settlement)) continue;
+      // A bill qualifies if THIS settlement falls inside that bill's window.
+      const earliestBill = addDaysIso(settlement.date, -input.rules.daysAfter);
+      const latestBill = addDaysIso(settlement.date, input.rules.daysBefore);
+      const candidates = (openBills.get(key(settlement)) ?? []).filter(
+        (bill) => !grouped.has(bill) && bill.date >= earliestBill && bill.date <= latestBill
+      );
+
+      // Oldest start first, so the run found is the one a first-in-first-out
+      // payment would have cleared.
+      found: for (let start = 0; start < candidates.length; start++) {
+        let total = 0;
+        for (let end = start; end < candidates.length && end - start < MAX_BILLS_PER_GROUP; end++) {
+          total += candidates[end]?.paise ?? 0;
+          if (total > settlement.paise + tolerancePaise) break;
+          if (end > start && Math.abs(settlement.paise - total) <= tolerancePaise) {
+            const run = candidates.slice(start, end + 1);
+            for (const bill of run) grouped.add(bill);
+            used.add(settlement);
+            groupMatches.push({
+              kind,
+              settlement,
+              bills: run,
+              billsPaise: total,
+              differencePaise: settlement.paise - total,
+            });
+            break found;
+          }
+        }
+      }
+    }
+  };
+
+  groupPass('grouped_exact', exactPaise);
+  groupPass('grouped_probable', probablePaise);
 
   const matches = bills.flatMap((bill) => {
     const match = matchedBills.get(bill);
     return match === undefined ? [] : [match];
   });
-  const unmatchedBills = bills.filter((bill) => !matchedBills.has(bill));
+  const unmatchedBills = bills.filter((bill) => !matchedBills.has(bill) && !grouped.has(bill));
   const unmatchedSettlements = settlements.filter((settlement) => !used.has(settlement));
 
   return {
     matches,
+    groupMatches,
     unmatchedBills,
     unmatchedSettlements,
     billsWithoutParty,
-    parties: totalsByParty(bills, settlements, matches, unmatchedBills, unmatchedSettlements),
+    parties: totalsByParty(
+      bills,
+      settlements,
+      matches,
+      groupMatches,
+      unmatchedBills,
+      unmatchedSettlements
+    ),
   };
 }
 
@@ -257,6 +341,7 @@ function totalsByParty(
   bills: readonly PartyItem[],
   settlements: readonly PartyItem[],
   matches: readonly Match[],
+  groupMatches: readonly GroupMatch[],
   unmatchedBills: readonly PartyItem[],
   unmatchedSettlements: readonly PartyItem[]
 ): PartyTotals[] {
@@ -274,6 +359,8 @@ function totalsByParty(
         settledPaise: 0,
         exactMatches: 0,
         probableMatches: 0,
+        groupedSettlements: 0,
+        groupedBills: 0,
         unmatchedBills: 0,
         unmatchedBillsPaise: 0,
         unmatchedSettlements: 0,
@@ -298,6 +385,11 @@ function totalsByParty(
     const t = row(match.bill);
     if (match.kind === 'exact') t.exactMatches += 1;
     else t.probableMatches += 1;
+  }
+  for (const group of groupMatches) {
+    const t = row(group.settlement);
+    t.groupedSettlements += 1;
+    t.groupedBills += group.bills.length;
   }
   for (const bill of unmatchedBills) {
     const t = row(bill);

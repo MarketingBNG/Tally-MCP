@@ -212,3 +212,73 @@ describe('voucher type families, for any company', () => {
     expect(familyOf('A')).toBe('other');
   });
 });
+
+describe('one payment against several bills', () => {
+  it('matches a payment to the run of oldest bills it adds up to', () => {
+    const result = run([
+      voucher('Purchase', '2025-04-01', 'P1', 'Supplier', 1000),
+      voucher('Purchase', '2025-04-05', 'P2', 'Supplier', 2500),
+      voucher('Purchase', '2025-04-09', 'P3', 'Supplier', 700),
+      voucher('Payment', '2025-04-20', 'PY1', 'Supplier', 3500),
+    ]);
+    expect(result.groupMatches).toHaveLength(1);
+    expect(result.groupMatches[0]?.kind).toBe('grouped_exact');
+    expect(result.groupMatches[0]?.bills.map((bill) => bill.voucherNumber)).toEqual(['P1', 'P2']);
+    expect(result.unmatchedBills.map((bill) => bill.voucherNumber)).toEqual(['P3']);
+    expect(result.unmatchedSettlements).toHaveLength(0);
+  });
+
+  it('tries single-bill matches before grouping', () => {
+    // PY1 equals P2 alone; it must not be spent on P1+P2's neighbour run.
+    const result = run([
+      voucher('Purchase', '2025-04-01', 'P1', 'Supplier', 1000),
+      voucher('Purchase', '2025-04-02', 'P2', 'Supplier', 2000),
+      voucher('Payment', '2025-04-10', 'PY1', 'Supplier', 2000),
+    ]);
+    expect(result.matches).toHaveLength(1);
+    expect(result.groupMatches).toHaveLength(0);
+  });
+
+  it('calls a group within the probable tolerance probable', () => {
+    const result = run([
+      voucher('Sales', '2025-04-01', 'S1', 'Acme', 1000),
+      voucher('Sales', '2025-04-02', 'S2', 'Acme', 1000),
+      voucher('Receipt', '2025-04-15', 'R1', 'Acme', 1980),
+    ]);
+    expect(result.groupMatches[0]?.kind).toBe('grouped_probable');
+    expect(result.groupMatches[0]?.differencePaise).toBe(-2000);
+  });
+
+  it('keeps every bill of a group inside the date window', () => {
+    // P1 is 60 days before the payment, beyond the 45-day window.
+    const result = run([
+      voucher('Purchase', '2025-02-01', 'P1', 'Supplier', 1000),
+      voucher('Purchase', '2025-03-20', 'P2', 'Supplier', 1000),
+      voucher('Payment', '2025-04-02', 'PY1', 'Supplier', 2000),
+    ]);
+    expect(result.groupMatches).toHaveLength(0);
+  });
+
+  it('never groups across parties', () => {
+    const result = run([
+      voucher('Sales', '2025-04-01', 'S1', 'Acme', 1000),
+      voucher('Sales', '2025-04-02', 'S2', 'Beta', 1000),
+      voucher('Receipt', '2025-04-10', 'R1', 'Acme', 2000),
+    ]);
+    expect(result.groupMatches).toHaveLength(0);
+  });
+
+  it('counts grouped bills in the party totals', () => {
+    const result = run([
+      voucher('Purchase', '2025-04-01', 'P1', 'Supplier', 1000),
+      voucher('Purchase', '2025-04-05', 'P2', 'Supplier', 2500),
+      voucher('Payment', '2025-04-20', 'PY1', 'Supplier', 3500),
+    ]);
+    expect(result.parties.find((p) => p.party === 'Supplier')).toMatchObject({
+      groupedSettlements: 1,
+      groupedBills: 2,
+      unmatchedBills: 0,
+      unmatchedSettlements: 0,
+    });
+  });
+});
