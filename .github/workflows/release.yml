@@ -129,10 +129,17 @@ jobs:
 
       # The checksum is published with the zip so a recipient can confirm the
       # file reached them intact — these go out by email and shared drive.
-      - name: Publish the release
+      #
+      # AS A PRE-RELEASE FIRST. Installs ask GitHub for the latest FULL release
+      # (update.mjs ignores drafts and pre-releases), so nothing reaches a laptop
+      # until the step below has downloaded it the way a laptop would and found
+      # it intact. 1.0.2 went out broken: the zip on GitHub did not match its
+      # published checksum, and every install rejected it without anyone seeing.
+      - name: Publish the release (hidden from installs until verified)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: true
           # BOTH files, every time. See the checksum step above for why the
           # second one is what makes the release installable at all.
           files: |
@@ -151,3 +158,23 @@ jobs:
 
             What changed in this version is in
             [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
+
+      # Downloads BOTH files from the public links, exactly as update.mjs does,
+      # and fails unless the zip matches the published checksum. Retries for a
+      # few minutes, because a freshly uploaded asset can take a moment to serve.
+      - name: Verify the release as an install will see it
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          node scripts/verify-release.mjs $version
+
+      # Only now does it become the release installs update to. If verification
+      # failed, this never runs and the release stays a pre-release: no laptop
+      # sees it, and the failed job says why.
+      - name: Make it the release installs update to
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit '${{ github.ref_name }}' --prerelease=false --latest
