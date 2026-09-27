@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.0.3 — unreleased
+## 1.0.3 — 2026-09-27
 **Claude can now match your debtors and creditors for a whole year.** Ask it
 to match each party's bills against the receipts and payments that settled
 them, and it does the matching on your own computer, then shows you the result
