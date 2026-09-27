@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.0.4 — unreleased
+## 1.0.4 — 2026-09-27
 **Matching now also finds one payment that settles several bills.** When a
 customer or supplier pays three invoices with a single payment, the three bills
 are now shown together against that payment, instead of all four appearing as
