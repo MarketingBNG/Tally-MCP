@@ -1,3 +1,5 @@
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 import { LOG_LEVELS } from '../utils/logger.js';
@@ -6,13 +8,37 @@ import { LOG_LEVELS } from '../utils/logger.js';
  * Configuration is read from environment variables and validated at startup.
  *
  * Under Claude Desktop, values come from the `env` block in
- * claude_desktop_config.json — the .env file is a development convenience and
- * is not read in that context. See README.md → Configuration.
+ * claude_desktop_config.json, and then from the installed copy's `.env` for
+ * anything that block leaves out (see `installEnvPath`). See README.md →
+ * Configuration.
  */
 
 // `quiet` matters: dotenv's banner would otherwise print to stdout and corrupt
 // the MCP stdio stream before the server even starts.
 loadDotenv({ quiet: true });
+
+/**
+ * The installed copy's own `.env`, wherever the server was started from.
+ *
+ * Setup writes the export folder there and nowhere else, but the line above
+ * looks in the WORKING directory — which under Claude Desktop, Codex and UIC GPT
+ * is never the install folder. So on every installed machine the server never
+ * saw the folder, and a question that fell back to the exported spreadsheets was
+ * told "No export folder has been set up on this computer" while the export was
+ * running fine.
+ *
+ * Only in the installed layout (`<install>/app/dist/config/config.js`), so a
+ * source checkout never picks up an unrelated `.env` from the folder above it.
+ * dotenv leaves values already in the environment alone, so a host's own `env`
+ * block still wins.
+ */
+export function installEnvPath(moduleUrl: string): string | null {
+  const appDir = resolve(dirname(fileURLToPath(moduleUrl)), '..', '..');
+  return basename(appDir) === 'app' ? join(appDir, '..', '.env') : null;
+}
+
+const installEnv = installEnvPath(import.meta.url);
+if (installEnv !== null) loadDotenv({ path: installEnv, quiet: true });
 
 const portSchema = z.coerce
   .number()
@@ -76,6 +102,21 @@ const configSchema = z.object({
    * rather than sharing the general timeout. Defaults to 4x the base timeout.
    */
   tallyReportTimeoutMs: z.coerce.number().int().min(1000).max(600_000).optional(),
+
+  /**
+   * How many more times a request that timed out is sent, once TallyPrime is
+   * free again. Each retry doubles the time allowed, up to the 10-minute maximum.
+   * See `src/tally/patience.ts` — a timeout that is not retried is data that
+   * never reaches Claude or the export.
+   */
+  tallyTimeoutRetries: z.coerce.number().int().min(0).max(5).default(2),
+
+  /**
+   * How long to wait for TallyPrime to finish a request that timed out before
+   * anything else is sent to it. Tally cannot abandon a request, so sending
+   * more meanwhile only queues work behind it.
+   */
+  tallyBusyWaitMs: z.coerce.number().int().min(0).max(1_800_000).default(600_000),
 
   /**
    * Preferred wire format. Native JSON requires TallyPrime 7.0+; the adapter
@@ -203,9 +244,7 @@ const configSchema = z.object({
    * Nothing else about the response changes at any setting — no warning, figure
    * or caveat is affected, and there is a test asserting exactly that.
    */
-  tallySourceQueryMode: z
-    .enum(['full', 'dedupe', 'compact'])
-    .default('dedupe'),
+  tallySourceQueryMode: z.enum(['full', 'dedupe', 'compact']).default('dedupe'),
 
   /**
    * The currency label to use when TallyPrime's own symbol cannot be transported.
@@ -406,6 +445,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tallyProtocol: env.TALLY_PROTOCOL,
     tallyTimeoutMs: env.TALLY_TIMEOUT_MS,
     tallyReportTimeoutMs: env.TALLY_REPORT_TIMEOUT_MS,
+    tallyTimeoutRetries: env.TALLY_TIMEOUT_RETRIES,
+    tallyBusyWaitMs: env.TALLY_BUSY_WAIT_MS,
     tallyPreferredFormat: env.TALLY_PREFERRED_FORMAT,
     tallyMaxRecords: env.TALLY_MAX_RECORDS,
     tallyMaxResponseBytes: env.TALLY_MAX_RESPONSE_BYTES,

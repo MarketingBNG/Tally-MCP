@@ -318,6 +318,76 @@ describe('a year that fails is reported, never hidden', () => {
   });
 });
 
+describe('a window that times out', () => {
+  /** Every window of FY2023-24 answers, empty. */
+  function answerEveryWindow(): void {
+    for (const start of ['0401', '0601', '0801', '0901', '1101']) {
+      mock.onBodyContaining(`<SVFROMDATE>2023${start}</SVFROMDATE>`, { body: envelope() });
+    }
+    for (const start of ['0101', '0201']) {
+      mock.onBodyContaining(`<SVFROMDATE>2024${start}</SVFROMDATE>`, { body: envelope() });
+    }
+  }
+
+  function buildWith(env: Record<string, string>): ToolRegistry {
+    const registry = createToolRegistry();
+    registerVoucherTools(
+      registry.server,
+      makeDeps(port, { TALLY_CACHE_TTL_MS: '0', TALLY_REPORT_TIMEOUT_MS: '1000', ...env })
+    );
+    return registry;
+  }
+
+  it('is fetched again with more time, so nothing is lost', async () => {
+    answerEveryWindow();
+    // June-July takes longer than the first allowance but inside the doubled one.
+    mock.onBodyContaining('<SVFROMDATE>20230601</SVFROMDATE>', {
+      body: envelope(voucher('slow-1', '20230705', 'P-9', '900.00')),
+      delayMs: 1500,
+    });
+
+    const result = await callToolOk(buildWith({}), 'tally_get_vouchers', {
+      company: COMPANY,
+      fromDate: '2023-04-01',
+      toDate: '2024-03-31',
+      pageSize: 50,
+    });
+
+    const items = result.items as { voucherNumber: string }[];
+    expect(items.map((item) => item.voucherNumber)).toContain('P-9');
+    expect((result.warnings as string[]).join(' ')).not.toContain('INCOMPLETE POPULATION');
+    // Seven windows, one of them sent twice.
+    expect(registerRequests()).toHaveLength(8);
+  });
+
+  it('stops sending once retries run out, and says which dates are missing', async () => {
+    // TallyPrime keeps building a request after the client gives up. Anything
+    // sent meanwhile queues behind it, which is how a slow Tally was turned into
+    // one that stopped answering altogether.
+    answerEveryWindow();
+    mock.onBodyContaining('<SVFROMDATE>20230601</SVFROMDATE>', {
+      body: envelope(),
+      delayMs: 1500,
+    });
+
+    const result = await callToolOk(
+      buildWith({ TALLY_TIMEOUT_RETRIES: '0' }),
+      'tally_get_vouchers',
+      {
+        company: COMPANY,
+        fromDate: '2023-04-01',
+        toDate: '2024-03-31',
+        pageSize: 50,
+      }
+    );
+
+    expect(registerRequests()).toHaveLength(2);
+    const warnings = (result.warnings as string[]).join(' ');
+    expect(warnings).toContain('INCOMPLETE POPULATION');
+    expect(warnings).toContain('(2023-06-01..2024-03-31)');
+  });
+});
+
 describe('registerSlices', () => {
   it('ends every window on a 31st, or on the year end', () => {
     // A calendar-year company: December and January already end on a 31st.

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { assignFolderNames, companyPaths, sanitiseComponent } from '../../src/export/folders.js';
 import { EMPTY_STATE, exportIsDue, type Fingerprint } from '../../src/export/fingerprint.js';
 import { plainReason } from '../../src/export/run.js';
+import { isIncomplete } from '../../src/export/run/orchestrate.js';
 
 /**
  * A company name is Tally's text and a Windows folder name is not.
@@ -96,7 +97,12 @@ describe('paths', () => {
 
   it('refuses a path that will not fit, with a message rather than an OS error', () => {
     expect(() =>
-      companyPaths(`C:\\${'deep\\'.repeat(40)}`, 'A Long Company Name Ltd', 'A Long Company Name Ltd', when)
+      companyPaths(
+        `C:\\${'deep\\'.repeat(40)}`,
+        'A Long Company Name Ltd',
+        'A Long Company Name Ltd',
+        when
+      )
     ).toThrow(/too deep for this company's name/);
   });
 });
@@ -126,7 +132,7 @@ describe('deciding whether to export', () => {
     expect(exportIsDue(state, fingerprint('a'), '2026-08-19', false).due).toBe(false);
   });
 
-  it("exports once a day even when nothing changed, so the as-at stamp advances", () => {
+  it('exports once a day even when nothing changed, so the as-at stamp advances', () => {
     const state = { ...EMPTY_STATE, digest: 'a', archivedOn: '2026-08-18' };
     expect(exportIsDue(state, fingerprint('a'), '2026-08-19', false).reason).toBe('daily');
   });
@@ -134,6 +140,48 @@ describe('deciding whether to export', () => {
   it('exports when forced, whatever the fingerprint says', () => {
     const state = { ...EMPTY_STATE, digest: 'a', archivedOn: '2026-08-19' };
     expect(exportIsDue(state, fingerprint('a'), '2026-08-19', true).reason).toBe('forced');
+  });
+
+  it('tries again when the last export could not read everything', () => {
+    // Otherwise the books look unchanged and the gap stays in the workbook
+    // until somebody happens to post an entry.
+    const state = {
+      ...EMPTY_STATE,
+      digest: 'a',
+      archivedOn: '2026-08-19',
+      exportedAt: '2026-08-19T10:00:00.000Z',
+      incomplete: true,
+    };
+    const later = Date.parse('2026-08-19T10:15:00.000Z');
+    expect(exportIsDue(state, fingerprint('a'), '2026-08-19', false, later).reason).toBe(
+      'incomplete'
+    );
+  });
+
+  it('waits a while before retrying an incomplete export', () => {
+    // Every minute would keep a struggling Tally permanently busy.
+    const state = {
+      ...EMPTY_STATE,
+      digest: 'a',
+      archivedOn: '2026-08-19',
+      exportedAt: '2026-08-19T10:00:00.000Z',
+      incomplete: true,
+    };
+    const soon = Date.parse('2026-08-19T10:05:00.000Z');
+    expect(exportIsDue(state, fingerprint('a'), '2026-08-19', false, soon).due).toBe(false);
+  });
+});
+
+describe('spotting an export with part of the books unread', () => {
+  it('flags a voucher period or a tab Tally did not answer for', () => {
+    expect(isIncomplete(['INCOMPLETE POPULATION: 1 part(s) ...'])).toBe(true);
+    expect(isIncomplete(['COULD NOT READ THE TRIAL BALANCE ...'])).toBe(true);
+  });
+
+  it('does not flag ordinary warnings', () => {
+    expect(isIncomplete(['PRIOR YEARS INCLUDED: ...', 'Removed 5 control characters.'])).toBe(
+      false
+    );
   });
 });
 

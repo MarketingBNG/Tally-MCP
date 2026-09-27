@@ -5,6 +5,7 @@ import {
 } from '../../tally/requests.js';
 import { addDaysIso, bookYearFor, registerSlices, type DateRange } from '../../utils/dates.js';
 import { normalizeVouchers, type Voucher } from '../../tally/normalize.js';
+import { TallyError } from '../../tally/TallyError.js';
 import {
   assertCompanyIsLoaded,
   companyNamed,
@@ -167,6 +168,27 @@ async function fetchAcrossBookYears(
   const collected: Voucher[] = [];
   const failed: DateRange[] = [];
   let priorYearsFetched = 0;
+  /*
+   * Set once a request times out, and from then on nothing more is sent.
+   *
+   * TallyPrime cannot abandon a request: after the client gives up it goes on
+   * building the answer, and anything sent meanwhile queues behind it, times out
+   * in turn and adds more work. Carrying on after one timeout is exactly how a
+   * fetch turns a slow Tally into one that stops answering altogether. The dates
+   * not sent are reported as missing like any other failure.
+   */
+  let tallyBusy = false;
+
+  // Adjacent failed windows are reported as one range: twelve month-long
+  // entries for one lost year would bury the dates that matter.
+  const recordFailure = (window: DateRange): void => {
+    const last = failed.at(-1);
+    if (last !== undefined && addDaysIso(last.toDate, 1) === window.fromDate) {
+      last.toDate = window.toDate;
+    } else {
+      failed.push({ ...window });
+    }
+  };
 
   for (const year of years) {
     /*
@@ -191,6 +213,11 @@ async function fetchAcrossBookYears(
     let yearFetched = false;
 
     for (const window of windows) {
+      if (tallyBusy) {
+        recordFailure(window);
+        continue;
+      }
+
       const request = usesCollection
         ? buildVoucherCollectionRequest(
             {
@@ -220,14 +247,8 @@ async function fetchAcrossBookYears(
         yearFetched = true;
       } catch (error) {
         // One window failing must not lose the others, but it must not be silent.
-        // Adjacent failed windows are reported as one range: twelve month-long
-        // entries for one lost year would bury the dates that matter.
-        const last = failed.at(-1);
-        if (last !== undefined && addDaysIso(last.toDate, 1) === window.fromDate) {
-          last.toDate = window.toDate;
-        } else {
-          failed.push({ ...window });
-        }
+        recordFailure(window);
+        if (error instanceof TallyError && error.code === 'TALLY_TIMEOUT') tallyBusy = true;
         deps.logger.warn('a voucher window could not be fetched', {
           fromDate: window.fromDate,
           toDate: window.toDate,
@@ -246,8 +267,9 @@ async function fetchAcrossBookYears(
         'Every figure here ' +
         'EXCLUDES those dates, so totals, counts and any test run over this population are ' +
         'understated by an unknown amount — do not present them as covering the period you ' +
-        'asked for. A timeout is the usual cause; retry just those dates, or raise ' +
-        'TALLY_REPORT_TIMEOUT_MS.'
+        'asked for. A timeout is the usual cause, and after one nothing more is sent, because ' +
+        'TallyPrime is still working on the request that timed out. Give it a minute, then ' +
+        'retry just those dates, or raise TALLY_REPORT_TIMEOUT_MS.'
     );
   }
 

@@ -1,19 +1,11 @@
-import {
-  copyFileSync,
-  mkdirSync,
-  renameSync,
-  rmSync,
-} from 'node:fs';
+import { copyFileSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildCompanyListRequest } from '../../tally/requests.js';
 import { normalizeCompanies } from '../../tally/normalize.js';
 import type { AppConfig } from '../../config/config.js';
 import type { ToolDeps } from '../../tools/toolResult.js';
-import { collectCompany, currentYearOnly, } from '../collect.js';
-import {
-  exportIsDue,
-  readFingerprint,
-} from '../fingerprint.js';
+import { collectCompany, currentYearOnly } from '../collect.js';
+import { exportIsDue, readFingerprint } from '../fingerprint.js';
 import { assignFolderNames, companyPaths, type CompanyPaths } from '../folders.js';
 import { writeWorkbook } from '../workbook.js';
 
@@ -70,10 +62,7 @@ import { buildTables, writeCsvTables } from './tables.js';
  * mean the set can change without anyone editing the configuration, which is
  * why Setup asks.
  */
-export async function resolveExportCompanies(
-  deps: ToolDeps,
-  config: AppConfig
-): Promise<string[]> {
+export async function resolveExportCompanies(deps: ToolDeps, config: AppConfig): Promise<string[]> {
   const response = await deps.client.send(buildCompanyListRequest(), 'standard');
   const loaded = normalizeCompanies(response.body).data.map((company) => company.name);
 
@@ -213,7 +202,7 @@ async function runOneCompany(
   try {
     const fingerprint = await readFingerprint(deps, company);
     const today = isoLocalDate(now);
-    const due = exportIsDue(state, fingerprint, today, config.tallyExportForce);
+    const due = exportIsDue(state, fingerprint, today, config.tallyExportForce, now.getTime());
 
     if (!due.due) {
       // A minute that found nothing changed is COUNTED, not logged in full.
@@ -235,6 +224,9 @@ async function runOneCompany(
     }
 
     const data = await collectCompany(deps, company, now);
+    // Part of the books unread. Still written — every other figure is current —
+    // but marked, so the next run tries again rather than keeping the gap.
+    const incomplete = isIncomplete(data.warnings);
     const tables = buildTables(data, describeReason(due.reason), 'all-years');
     const rows = tables.reduce((total, table) => total + table.rows.length, 0);
 
@@ -379,6 +371,7 @@ async function runOneCompany(
       archivedOn,
       lastFailure: null,
       unchangedRuns: 0,
+      incomplete,
     });
 
     writeStatusFile(paths.folder, now, null);
@@ -386,6 +379,13 @@ async function runOneCompany(
     if (archiveNote !== null) appendLog(paths.logPath, `    WARNING: ${archiveNote}`);
     if (companionNote !== null) appendLog(paths.logPath, `    WARNING: ${companionNote}`);
     if (csvNote !== null) appendLog(paths.logPath, `    WARNING: ${csvNote}`);
+    if (incomplete) {
+      appendLog(
+        paths.logPath,
+        '    WARNING: part of the books could not be read from TallyPrime; see the Manifest. ' +
+          'The export will be tried again within 15 minutes.'
+      );
+    }
     return outcome;
   } catch (error) {
     const reason = plainReason(error);
@@ -414,4 +414,18 @@ async function runOneCompany(
   } finally {
     releaseLock(paths.lockPath);
   }
+}
+
+/**
+ * Whether an export went out with part of the books unread.
+ *
+ * Keyed on the two warnings that mean exactly that: a voucher period that could
+ * not be fetched, and a tab TallyPrime did not answer for. Both are written by
+ * this codebase (`fetchAcrossBookYears`, `optional` in collect.ts), so the
+ * prefixes are ours to keep in step.
+ */
+export function isIncomplete(warnings: readonly string[]): boolean {
+  return warnings.some(
+    (warning) => warning.startsWith('INCOMPLETE POPULATION') || warning.startsWith('COULD NOT READ')
+  );
 }

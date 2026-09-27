@@ -2,6 +2,8 @@ import type { AppConfig } from '../config/config.js';
 import type { Logger } from '../utils/logger.js';
 import { TallyError } from './TallyError.js';
 import { RequestQueue } from './requestQueue.js';
+import { Patience, PROBE_TIMEOUT_MS } from './patience.js';
+import { buildConnectionProbeRequest } from './requests/envelope.js';
 import { memoizeWithinCall, noteDataFetchedAt, noteQuery } from './queryLog.js';
 import { sanitizeTallyXml, normalizeEncodingDeclaration } from './sanitizeXml.js';
 
@@ -94,6 +96,7 @@ export class TallyClient {
   readonly #logger: Logger;
   readonly #queue: RequestQueue;
   readonly #fetchImpl: typeof fetch;
+  readonly #patience: Patience;
   readonly #cache = new Map<string, CacheEntry>();
   /** Running total of `bytes` across #cache, kept in step with every add and delete. */
   #cacheBytes = 0;
@@ -109,6 +112,9 @@ export class TallyClient {
     // Tally's, not any single caller's.
     this.#queue = options.queue ?? new RequestQueue();
     this.#fetchImpl = options.fetchImpl ?? fetch;
+    this.#patience = new Patience(this.#config, this.#logger, () =>
+      this.#sendNow(buildConnectionProbeRequest(), 'standard', PROBE_TIMEOUT_MS)
+    );
   }
 
   /** Queue depth, for logging and tests. */
@@ -178,8 +184,7 @@ export class TallyClient {
     // write further down: a liveness probe then never displaces a real entry,
     // and every repeat check actually reaches Tally. It also skips the
     // per-call memo in `send`, for the same reason.
-    const key =
-      ttlMs > 0 && !bypassCache ? `${requestClass}\0${body}` : undefined;
+    const key = ttlMs > 0 && !bypassCache ? `${requestClass}\0${body}` : undefined;
 
     if (key !== undefined) {
       const cached = this.#cache.get(key);
@@ -193,7 +198,14 @@ export class TallyClient {
       }
     }
 
-    const response = await this.#queue.run(() => this.#sendNow(body, requestClass));
+    // Inside the queue, so while Tally is being waited on nothing else is sent to it.
+    const response = await this.#queue.run(() =>
+      bypassCache
+        ? this.#sendNow(body, requestClass)
+        : this.#patience.send(body, requestClass, (timeoutMs) =>
+            this.#sendNow(body, requestClass, timeoutMs)
+          )
+    );
 
     /*
      * ONE clock reading, used for both the answer's provenance and the cache
@@ -259,10 +271,13 @@ export class TallyClient {
     this.#cache.delete(key);
   }
 
-  async #sendNow(body: string, requestClass: RequestClass): Promise<TallyResponse> {
-    const timeoutMs =
-      requestClass === 'report' ? this.#config.tallyReportTimeoutMs : this.#config.tallyTimeoutMs;
-
+  async #sendNow(
+    body: string,
+    requestClass: RequestClass,
+    timeoutMs: number = requestClass === 'report'
+      ? this.#config.tallyReportTimeoutMs
+      : this.#config.tallyTimeoutMs
+  ): Promise<TallyResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const startedAt = Date.now();
@@ -327,10 +342,7 @@ export class TallyClient {
 
     const encodingFix = normalizeEncodingDeclaration(text, encoding);
     const sanitised = sanitizeTallyXml(encodingFix.xml);
-    const repairs = [
-      ...(encodingFix.repair ? [encodingFix.repair] : []),
-      ...sanitised.repairs,
-    ];
+    const repairs = [...(encodingFix.repair ? [encodingFix.repair] : []), ...sanitised.repairs];
 
     if (repairs.length > 0) {
       this.#logger.warn('repaired a malformed Tally payload', { repairs });
@@ -369,7 +381,10 @@ export class TallyClient {
       return new TallyError(
         'TALLY_CONNECTION_FAILED',
         `The host "${this.#config.tallyHost}" could not be resolved.`,
-        { suggestion: 'Check TALLY_HOST. For a local install this should be localhost.', cause: error }
+        {
+          suggestion: 'Check TALLY_HOST. For a local install this should be localhost.',
+          cause: error,
+        }
       );
     }
 

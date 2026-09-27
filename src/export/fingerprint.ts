@@ -154,6 +154,13 @@ export interface ExportState {
   lastFailure: string | null;
   /** Minutes that found nothing changed since the last logged line. */
   unchangedRuns: number;
+  /**
+   * The last export went out with part of the books unread — a period or a tab
+   * TallyPrime did not answer for. The books then look "unchanged" to the next
+   * check, which would leave the gap in the workbook until someone happened to
+   * post an entry. So this makes the export due again on its own.
+   */
+  incomplete?: boolean;
 }
 
 export const EMPTY_STATE: ExportState = {
@@ -171,19 +178,30 @@ export const EMPTY_STATE: ExportState = {
  * run log and "nothing changed but it was time for the daily copy" is a
  * different fact from "the books moved".
  */
-export type DueReason = 'forced' | 'first-run' | 'changed' | 'daily';
+export type DueReason = 'forced' | 'first-run' | 'changed' | 'incomplete' | 'daily';
+
+/**
+ * How long an incomplete export waits before trying again. Retrying every minute
+ * would keep a struggling TallyPrime permanently busy with the same heavy read.
+ */
+export const INCOMPLETE_RETRY_MS = 15 * 60 * 1000;
 
 export function exportIsDue(
   state: ExportState,
   current: Fingerprint,
   today: string,
-  force: boolean
-):
-  | { due: true; reason: DueReason }
-  | { due: false; reason: 'unchanged' } {
+  force: boolean,
+  nowMs: number = Date.now()
+): { due: true; reason: DueReason } | { due: false; reason: 'unchanged' } {
   if (force) return { due: true, reason: 'forced' };
   if (state.digest === null) return { due: true, reason: 'first-run' };
   if (state.digest !== current.digest) return { due: true, reason: 'changed' };
+  if (
+    state.incomplete === true &&
+    (state.exportedAt === null || nowMs - Date.parse(state.exportedAt) >= INCOMPLETE_RETRY_MS)
+  ) {
+    return { due: true, reason: 'incomplete' };
+  }
   // The guaranteed daily run. Without it, "nothing changed" could justify an
   // indefinitely old workbook — and the as-of stamp on the Manifest, which is
   // the reader's only defence against a stale cloud copy, would never advance.

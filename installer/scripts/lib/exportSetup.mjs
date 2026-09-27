@@ -75,8 +75,9 @@ export function readEnvSetting(packageRoot, key) {
  * ## Why this exists, and what it cost to find
  *
  * The server reads its settings through `dotenv`, which looks for `.env` in the
- * **current working directory**. Under Claude Desktop that is irrelevant —
- * settings come from the config's `env` block. Under the SCHEDULER it is fatal:
+ * **current working directory**, which is never the install folder: not under
+ * Claude Desktop, Codex or UIC GPT (the server covers that itself, see
+ * `installEnvPath` in src/config/config.ts), and not under the SCHEDULER:
  * Task Scheduler runs an action with the working directory set to
  * `C:\Windows\System32`, so `.env` is nowhere to be found.
  *

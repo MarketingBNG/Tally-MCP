@@ -145,7 +145,10 @@ describe('TallyClient error mapping', () => {
       return Promise.reject(error);
     };
 
-    const client = new TallyClient(configFor(), silentLogger, { fetchImpl: aborting });
+    // Retries off: this is about the mapping, not about waiting Tally out.
+    const client = new TallyClient(configFor({ TALLY_TIMEOUT_RETRIES: '0' }), silentLogger, {
+      fetchImpl: aborting,
+    });
 
     await expect(client.send('<ENVELOPE/>')).rejects.toMatchObject({ code: 'TALLY_TIMEOUT' });
   });
@@ -153,9 +156,9 @@ describe('TallyClient error mapping', () => {
   it('maps an HTTP error status to TALLY_INVALID_RESPONSE', async () => {
     mock.onBodyContaining('ENVELOPE', { status: 500, body: 'Internal error' });
 
-    await expect(new TallyClient(configFor(), silentLogger).send('<ENVELOPE/>')).rejects.toMatchObject(
-      { code: 'TALLY_INVALID_RESPONSE' }
-    );
+    await expect(
+      new TallyClient(configFor(), silentLogger).send('<ENVELOPE/>')
+    ).rejects.toMatchObject({ code: 'TALLY_INVALID_RESPONSE' });
   });
 
   it('treats an empty body as invalid and points at the loaded company', async () => {
@@ -238,10 +241,29 @@ describe('decodeTallyPayload', () => {
     // what the live install sent, so this fails if the strict-decode step is
     // removed. Not real data — the name is from a fixture, not from samples/.
     const latin1Name = Buffer.from([
-      0x3c, 0x41, 0x3e, // <A>
-      0x41, 0x6c, 0x6c, 0x67, 0xe4, 0x75, 0x65, 0x72, 0x20, // Allgäuer
-      0xd6, 0x6c, 0x6d, 0xfc, 0x68, 0x6c, 0x65, // Ölmühle
-      0x3c, 0x2f, 0x41, 0x3e, // </A>
+      0x3c,
+      0x41,
+      0x3e, // <A>
+      0x41,
+      0x6c,
+      0x6c,
+      0x67,
+      0xe4,
+      0x75,
+      0x65,
+      0x72,
+      0x20, // Allgäuer
+      0xd6,
+      0x6c,
+      0x6d,
+      0xfc,
+      0x68,
+      0x6c,
+      0x65, // Ölmühle
+      0x3c,
+      0x2f,
+      0x41,
+      0x3e, // </A>
     ]);
 
     it('recovers accented characters instead of replacing them', () => {
@@ -391,5 +413,75 @@ describe('response cache and the liveness exception', () => {
 
     // Restore for any later test in the file: the shared server is stopped above.
     port = await mock.start();
+  });
+});
+
+describe('TallyClient after a timeout', () => {
+  /** Times out the first `failures` real requests, answers probes and the rest. */
+  function flaky(failures: number): { fetchImpl: typeof fetch; bodies: string[] } {
+    const bodies: string[] = [];
+    let remaining = failures;
+    const fetchImpl: typeof fetch = (_url, init) => {
+      const body = typeof init?.body === 'string' ? init.body : '';
+      bodies.push(body);
+      if (!body.includes('List of Companies') && remaining > 0) {
+        remaining -= 1;
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        return Promise.reject(error);
+      }
+      return Promise.resolve(new Response(OK_XML, { status: 200 }));
+    };
+    return { fetchImpl, bodies };
+  }
+
+  it('waits for Tally to be free, then sends the request again', async () => {
+    // A timeout left unretried is data that never reaches Claude or the export.
+    const { fetchImpl, bodies } = flaky(1);
+    const client = new TallyClient(configFor(), silentLogger, { fetchImpl });
+
+    const response = await client.send('<ENVELOPE>report</ENVELOPE>', 'report');
+
+    expect(response.body).toContain('ENVELOPE');
+    // The request, a probe proving Tally is free, then the request again.
+    expect(bodies[0]).toContain('report');
+    expect(bodies[1]).toContain('List of Companies');
+    expect(bodies[2]).toContain('report');
+  });
+
+  it('gives up after the configured retries', async () => {
+    const { fetchImpl, bodies } = flaky(10);
+    const client = new TallyClient(configFor({ TALLY_TIMEOUT_RETRIES: '1' }), silentLogger, {
+      fetchImpl,
+    });
+
+    await expect(client.send('<ENVELOPE>report</ENVELOPE>', 'report')).rejects.toMatchObject({
+      code: 'TALLY_TIMEOUT',
+    });
+    expect(bodies.filter((body) => body.includes('report'))).toHaveLength(2);
+  });
+
+  it('does not wait on a Tally that is closed', async () => {
+    // Refused, not busy: waiting ten minutes for nothing would be a hang.
+    let calls = 0;
+    const fetchImpl: typeof fetch = () => {
+      calls += 1;
+      if (calls === 1) {
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        return Promise.reject(error);
+      }
+      return Promise.reject(
+        Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+        })
+      );
+    };
+    const client = new TallyClient(configFor(), silentLogger, { fetchImpl });
+
+    await expect(client.send('<ENVELOPE/>', 'report')).rejects.not.toMatchObject({
+      code: 'TALLY_TIMEOUT',
+    });
+    expect(calls).toBe(2);
   });
 });

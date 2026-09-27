@@ -12,6 +12,23 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.2 — unreleased
+**When TallyPrime is slow, Claude now waits for it and asks again, instead of
+leaving part of your books out.** Until now, if Tally took too long to answer,
+those dates were simply missing: Claude said so, but you still had to ask again,
+and the spreadsheet export kept the gap until someone next changed the books.
+Now, when Tally takes too long, nothing else is sent to it until it has
+caught up, and then the same request is sent again with more time allowed. This
+applies to every question Claude asks Tally and to the spreadsheet export. If
+something still cannot be read after that, Claude names the exact dates, and
+the export tries again by itself within 15 minutes rather than keeping the gap.
+
+**Claude can now find your exported spreadsheets.** The folder you chose in
+Setup was only ever seen by the export itself, never by Claude, Codex or UIC
+GPT. So when Tally was closed or slow, Claude said "No export folder has been
+set up on this computer" even though the spreadsheets were being written there
+all along. It now finds them. Nothing needs to be done.
+
 ## 1.0.1 — 2026-09-27
 **Last year's vouchers now come through on busy books, and Tally no longer
 freezes while fetching them.** When Claude needed a full past financial year

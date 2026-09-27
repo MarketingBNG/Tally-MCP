@@ -377,6 +377,8 @@ fix.
 | `TALLY_PROTOCOL` | `http` | `http` or `https` |
 | `TALLY_TIMEOUT_MS` | `30000` | Timeout for ordinary requests |
 | `TALLY_REPORT_TIMEOUT_MS` | 4× base | Timeout for large reports |
+| `TALLY_TIMEOUT_RETRIES` | `2` | After a timeout, how many more times the request is sent once TallyPrime is free, each with double the time |
+| `TALLY_BUSY_WAIT_MS` | `600000` | How long to wait for TallyPrime to finish a timed-out request before sending anything else |
 | `TALLY_PREFERRED_FORMAT` | `json` | `json` or `xml`; JSON needs Tally 7.0+ |
 | `TALLY_MAX_RECORDS` | `5000` | Refuse queries returning more records than this |
 | `TALLY_MAX_RESPONSE_BYTES` | `150000` | Refuse responses larger than this. Sized by **context** budget (~37,500 tokens), not by the client's 1MB message cap — see below |

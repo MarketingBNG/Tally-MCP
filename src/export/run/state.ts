@@ -1,3 +1,4 @@
+import type { DueReason } from '../fingerprint.js';
 import {
   appendFileSync,
   existsSync,
@@ -9,11 +10,8 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { type CompanyData } from '../collect.js';
-import {
-  EMPTY_STATE,
-  type ExportState,
-} from '../fingerprint.js';
-import { stampFor, } from '../folders.js';
+import { EMPTY_STATE, type ExportState } from '../fingerprint.js';
+import { stampFor } from '../folders.js';
 
 /**
  * One export run, end to end.
@@ -50,7 +48,9 @@ import { stampFor, } from '../folders.js';
 export function plainReason(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
 
-  if (/ECONNREFUSED|EHOSTUNREACH|Could not reach TallyPrime|TALLY_CONNECTION_FAILED/i.test(message)) {
+  if (
+    /ECONNREFUSED|EHOSTUNREACH|Could not reach TallyPrime|TALLY_CONNECTION_FAILED/i.test(message)
+  ) {
     return 'TallyPrime was not open';
   }
   // The folder is checked BEFORE the workbook, and the workbook branch needs
@@ -58,7 +58,11 @@ export function plainReason(error: unknown): string {
   // situations, so a bare code test on the workbook branch would report "the
   // workbook is open in Excel" to somebody whose export folder had gone
   // read-only — sending them to close a file that was never the problem.
-  if (/could not be reached or created|ENOENT|EACCES|EROFS|no such file or directory|permission denied/i.test(message)) {
+  if (
+    /could not be reached or created|ENOENT|EACCES|EROFS|no such file or directory|permission denied/i.test(
+      message
+    )
+  ) {
     return 'the export folder is missing or cannot be written to';
   }
   if (/has it open|EBUSY|EPERM|resource busy or locked/i.test(message)) {
@@ -73,7 +77,7 @@ export function plainReason(error: unknown): string {
   return 'something unexpected went wrong';
 }
 
-export function describeReason(reason: 'forced' | 'first-run' | 'changed' | 'daily'): string {
+export function describeReason(reason: DueReason): string {
   switch (reason) {
     case 'forced':
       return 'an export was asked for explicitly';
@@ -81,6 +85,8 @@ export function describeReason(reason: 'forced' | 'first-run' | 'changed' | 'dai
       return 'this is the first export for this company';
     case 'changed':
       return 'the books changed since the last export';
+    case 'incomplete':
+      return 'the last export could not read everything from TallyPrime, so it was tried again';
     default:
       return "nothing changed, but this is the day's guaranteed run";
   }
@@ -111,7 +117,7 @@ export function writeStatusFile(folder: string, now: Date, failure: string | nul
             'The last export finished and the workbook in this folder was replaced.',
             '',
             'This says the file was WRITTEN. It does NOT say Google Drive has uploaded it —',
-            'only Drive\'s own icon can tell you that.',
+            "only Drive's own icon can tell you that.",
           ].join('\n')
         : [
             `The last export did not finish: ${failure}.`,
