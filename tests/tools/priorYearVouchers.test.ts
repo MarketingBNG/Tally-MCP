@@ -7,6 +7,7 @@ import {
   type ToolRegistry,
 } from './harness.js';
 import { registerVoucherTools } from '../../src/tools/vouchers.js';
+import { registerSlices } from '../../src/utils/dates.js';
 
 /**
  * Vouchers from a PRIOR financial year.
@@ -143,7 +144,10 @@ describe('a prior year is read from the Voucher Register', () => {
     expect(items.map((item) => item.voucherNumber).sort()).toEqual(['P-1', 'P-2']);
   });
 
-  it('asks the report for that year, scoped to the company', async () => {
+  it('asks the report for that year in windows, scoped to the company', async () => {
+    // A whole busy year in one request outlasts the timeout and leaves
+    // TallyPrime building it long after the client gave up, until it stops
+    // answering. So the year goes out in pieces.
     await callToolOk(build(), 'tally_get_vouchers', {
       company: COMPANY,
       fromDate: '2023-04-01',
@@ -152,10 +156,31 @@ describe('a prior year is read from the Voucher Register', () => {
     });
 
     const sent = registerRequests();
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(7);
     expect(sent[0]).toContain('<SVFROMDATE>20230401</SVFROMDATE>');
-    expect(sent[0]).toContain('<SVTODATE>20240331</SVTODATE>');
-    expect(sent[0]).toContain(`<SVCURRENTCOMPANY>${COMPANY}</SVCURRENTCOMPANY>`);
+    expect(sent[0]).toContain('<SVTODATE>20230531</SVTODATE>');
+    expect(sent[6]).toContain('<SVFROMDATE>20240201</SVFROMDATE>');
+    expect(sent[6]).toContain('<SVTODATE>20240331</SVTODATE>');
+    for (const body of sent) {
+      expect(body).toContain(`<SVCURRENTCOMPANY>${COMPANY}</SVCURRENTCOMPANY>`);
+      // Tally ignores any end date that is not a 31st and runs to the year end,
+      // so a window ending on the 30th would quietly fetch the whole year again.
+      expect(body).toMatch(/<SVTODATE>\d{6}31<\/SVTODATE>/);
+    }
+  });
+
+  it('fetches only the windows the period touches', async () => {
+    await callToolOk(build(), 'tally_get_vouchers', {
+      company: COMPANY,
+      fromDate: '2023-07-01',
+      toDate: '2023-09-30',
+      pageSize: 50,
+    });
+
+    const sent = registerRequests();
+    expect(sent).toHaveLength(3);
+    expect(sent[0]).toContain('<SVFROMDATE>20230601</SVFROMDATE>');
+    expect(sent[2]).toContain('<SVTODATE>20231031</SVTODATE>');
   });
 
   it('says the figures came from a different source', async () => {
@@ -217,7 +242,7 @@ describe('a span across several book years', () => {
     });
   });
 
-  it('fetches one request per year and merges them', async () => {
+  it('fetches each year in windows and merges them', async () => {
     const result = await callToolOk(build(), 'tally_get_vouchers', {
       company: COMPANY,
       fromDate: '2023-04-01',
@@ -225,7 +250,7 @@ describe('a span across several book years', () => {
       pageSize: 50,
     });
 
-    expect(registerRequests()).toHaveLength(2);
+    expect(registerRequests()).toHaveLength(14);
     const items = result.items as { voucherNumber: string }[];
     expect(items.map((item) => item.voucherNumber).sort()).toEqual(['P-1', 'P-3', 'P-4']);
   });
@@ -238,7 +263,9 @@ describe('a span across several book years', () => {
       pageSize: 50,
     });
 
-    expect((result.warnings as string[]).join(' ')).toContain('spans 2 book years, 2 of them outside');
+    expect((result.warnings as string[]).join(' ')).toContain(
+      'spans 2 book years, 2 of them outside'
+    );
   });
 });
 
@@ -247,8 +274,18 @@ describe('a year that fails is reported, never hidden', () => {
     mock.onBodyContaining('<SVFROMDATE>20230401</SVFROMDATE>', {
       body: envelope(voucher('fy24-1', '20230715', 'P-1', '1000.00')),
     });
-    // The second year fails outright — the shape a timeout takes on a 79MB year.
-    mock.onBodyContaining('<SVFROMDATE>20240401</SVFROMDATE>', { status: 500 });
+    // The rest of the first year answers, empty.
+    for (const start of ['20230601', '20230801', '20230901', '20231101', '20240101', '20240201']) {
+      mock.onBodyContaining(`<SVFROMDATE>${start}</SVFROMDATE>`, { body: envelope() });
+    }
+    // Every window of the second year fails — the shape Tally takes when it has
+    // stopped answering part-way through.
+    for (const start of ['0401', '0601', '0801', '0901', '1101']) {
+      mock.onBodyContaining(`<SVFROMDATE>2024${start}</SVFROMDATE>`, { status: 500 });
+    }
+    for (const start of ['0101', '0201']) {
+      mock.onBodyContaining(`<SVFROMDATE>2025${start}</SVFROMDATE>`, { status: 500 });
+    }
   });
 
   it('still returns the years that succeeded', async () => {
@@ -275,7 +312,42 @@ describe('a year that fails is reported, never hidden', () => {
 
     const warnings = (result.warnings as string[]).join(' ');
     expect(warnings).toContain('INCOMPLETE POPULATION');
-    expect(warnings).toContain('2024-04-01..2025-03-31');
+    // Adjacent failed windows collapse into one range, not seven entries.
+    expect(warnings).toContain('(2024-04-01..2025-03-31)');
     expect(warnings).toContain('understated');
+  });
+});
+
+describe('registerSlices', () => {
+  it('ends every window on a 31st, or on the year end', () => {
+    // A calendar-year company: December and January already end on a 31st.
+    expect(
+      registerSlices(
+        { fromDate: '2024-01-01', toDate: '2024-12-31' },
+        { fromDate: '2024-01-01', toDate: '2024-12-31' }
+      )
+    ).toEqual([
+      { fromDate: '2024-01-01', toDate: '2024-01-31' },
+      { fromDate: '2024-02-01', toDate: '2024-03-31' },
+      { fromDate: '2024-04-01', toDate: '2024-05-31' },
+      { fromDate: '2024-06-01', toDate: '2024-07-31' },
+      { fromDate: '2024-08-01', toDate: '2024-08-31' },
+      { fromDate: '2024-09-01', toDate: '2024-10-31' },
+      { fromDate: '2024-11-01', toDate: '2024-12-31' },
+    ]);
+  });
+
+  it('closes on a year end that is not a 31st', () => {
+    const slices = registerSlices(
+      { fromDate: '2023-07-15', toDate: '2024-07-14' },
+      { fromDate: '2023-07-15', toDate: '2024-07-14' }
+    );
+    expect(slices[0]).toEqual({ fromDate: '2023-07-15', toDate: '2023-07-31' });
+    // June ends on the 30th, which Tally would ignore, so it runs on to the year end.
+    expect(slices.at(-1)).toEqual({ fromDate: '2024-06-01', toDate: '2024-07-14' });
+    // Contiguous: no day is skipped or fetched twice.
+    for (let i = 1; i < slices.length; i++) {
+      expect(slices[i]?.fromDate > (slices[i - 1]?.toDate ?? '')).toBe(true);
+    }
   });
 });

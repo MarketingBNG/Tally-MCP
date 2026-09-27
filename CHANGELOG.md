@@ -12,6 +12,19 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.1 — unreleased
+**Last year's vouchers now come through on busy books, and Tally no longer
+freezes while fetching them.** When Claude needed a full past financial year
+(for example to match sales against bank receipts), it asked TallyPrime for the
+whole year at once. On a busy company that took longer than the time allowed,
+so the request failed, and TallyPrime carried on working
+on it long after, until it stopped responding altogether. Claude now asks for a
+month or two at a time, so a full year that used to fail now comes through,
+and Tally stays usable throughout.
+If any months still cannot be fetched, Claude names exactly which dates are
+missing and says the totals leave them out. Nothing needs to be done: this
+arrives with the automatic update.
+
 ## 1.0.0 — 2026-09-27
 **Tally now works in UIC GPT too.** When Setup asks which app you use, there
 is a new choice for UIC GPT (and "All of these" now covers it as well). Pick it

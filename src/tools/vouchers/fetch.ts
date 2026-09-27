@@ -3,7 +3,7 @@ import {
   buildVoucherRegisterRequest,
   UNSCOPED,
 } from '../../tally/requests.js';
-import { addDaysIso, bookYearFor, type DateRange } from '../../utils/dates.js';
+import { addDaysIso, bookYearFor, registerSlices, type DateRange } from '../../utils/dates.js';
 import { normalizeVouchers, type Voucher } from '../../tally/normalize.js';
 import {
   assertCompanyIsLoaded,
@@ -165,7 +165,7 @@ async function fetchAcrossBookYears(
   const warnings: string[] = [];
   const repairs: string[] = [];
   const collected: Voucher[] = [];
-  const failed: string[] = [];
+  const failed: DateRange[] = [];
   let priorYearsFetched = 0;
 
   for (const year of years) {
@@ -184,51 +184,70 @@ async function fetchAcrossBookYears(
      */
     const usesCollection = currentYear === null || year.toDate >= currentYear.fromDate;
 
-    const request = usesCollection
-      ? buildVoucherCollectionRequest(
-          {
-            company: canonicalCompany ?? UNSCOPED,
-            fromDate: year.fromDate,
-            toDate: year.toDate,
-            format: deps.config.tallyPreferredFormat,
-          },
-          allFields
-        )
-      : buildVoucherRegisterRequest({
-          company: canonicalCompany ?? UNSCOPED,
-          fromDate: year.fromDate,
-          toDate: year.toDate,
-          // XML only. The report path has never been observed under the JSON
-          // export switch, and a wire format whose shape has not been seen is
-          // not something to discover on a prior-year audit fetch.
-          format: 'xml',
-        });
+    // A collection ignores dates, so slicing it would only fetch the same year
+    // over and over. The report honours them, and a whole year of it is too big
+    // for one request — see `registerSlices`.
+    const windows = usesCollection ? [year] : registerSlices(year, period);
+    let yearFetched = false;
 
-    try {
-      const response = await deps.client.send(request, 'report');
-      const parsed = normalizeVouchers(response.body, allFields, currency, nested);
-      collected.push(...parsed.data);
-      warnings.push(...parsed.warnings);
-      repairs.push(...response.repairs);
-      if (!usesCollection) priorYearsFetched += 1;
-    } catch (error) {
-      // One year failing must not lose the others, but it must not be silent.
-      failed.push(`${year.fromDate}..${year.toDate}`);
-      deps.logger.warn('a book year could not be fetched', {
-        year: year.fromDate,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    for (const window of windows) {
+      const request = usesCollection
+        ? buildVoucherCollectionRequest(
+            {
+              company: canonicalCompany ?? UNSCOPED,
+              fromDate: window.fromDate,
+              toDate: window.toDate,
+              format: deps.config.tallyPreferredFormat,
+            },
+            allFields
+          )
+        : buildVoucherRegisterRequest({
+            company: canonicalCompany ?? UNSCOPED,
+            fromDate: window.fromDate,
+            toDate: window.toDate,
+            // XML only. The report path has never been observed under the JSON
+            // export switch, and a wire format whose shape has not been seen is
+            // not something to discover on a prior-year audit fetch.
+            format: 'xml',
+          });
+
+      try {
+        const response = await deps.client.send(request, 'report');
+        const parsed = normalizeVouchers(response.body, allFields, currency, nested);
+        collected.push(...parsed.data);
+        warnings.push(...parsed.warnings);
+        repairs.push(...response.repairs);
+        yearFetched = true;
+      } catch (error) {
+        // One window failing must not lose the others, but it must not be silent.
+        // Adjacent failed windows are reported as one range: twelve month-long
+        // entries for one lost year would bury the dates that matter.
+        const last = failed.at(-1);
+        if (last !== undefined && addDaysIso(last.toDate, 1) === window.fromDate) {
+          last.toDate = window.toDate;
+        } else {
+          failed.push({ ...window });
+        }
+        deps.logger.warn('a voucher window could not be fetched', {
+          fromDate: window.fromDate,
+          toDate: window.toDate,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
+
+    if (!usesCollection && yearFetched) priorYearsFetched += 1;
   }
 
   if (failed.length > 0) {
     warnings.unshift(
-      `INCOMPLETE POPULATION: ${String(failed.length)} of the ${String(years.length)} book year(s) ` +
-        `your period covers could not be fetched (${failed.join(', ')}). Every figure here ` +
-        'EXCLUDES those years, so totals, counts and any test run over this population are ' +
+      `INCOMPLETE POPULATION: ${String(failed.length)} part(s) of the period you asked for ` +
+        `could not be fetched from TallyPrime (${failed.map((range) => `${range.fromDate}..${range.toDate}`).join(', ')}). ` +
+        'Every figure here ' +
+        'EXCLUDES those dates, so totals, counts and any test run over this population are ' +
         'understated by an unknown amount — do not present them as covering the period you ' +
-        'asked for. A prior year is read from a large report (tens of megabytes) and a timeout ' +
-        'is the usual cause; retry that year on its own, or raise TALLY_REPORT_TIMEOUT_MS.'
+        'asked for. A timeout is the usual cause; retry just those dates, or raise ' +
+        'TALLY_REPORT_TIMEOUT_MS.'
     );
   }
 
@@ -241,7 +260,7 @@ async function fetchAcrossBookYears(
 
     warnings.push(
       `PRIOR YEARS INCLUDED: ${scope}. ` +
-        "Those were read from TallyPrime's Voucher Register report, one year per request, " +
+        "Those were read from TallyPrime's Voucher Register report, a month or two per request, " +
         'because a voucher collection cannot leave the current financial year. The two sources ' +
         'were verified to return identical vouchers, entries and totals over a common period, ' +
         'so the figures are comparable across years.'
@@ -406,9 +425,7 @@ export function describeVoucherReachShortfall(
   // Tally sent data nobody asked for, which PROVES the date range was ignored.
   // Without this proof, a late first voucher is just sparse data — see the note
   // on silence above.
-  const tallyIgnoredTheRange = dated.some(
-    (date) => date < period.fromDate || date > period.toDate
-  );
+  const tallyIgnoredTheRange = dated.some((date) => date < period.fromDate || date > period.toDate);
 
   if (overlaps && !(tallyIgnoredTheRange && windowExceedsData)) return null;
 

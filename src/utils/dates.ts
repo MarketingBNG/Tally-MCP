@@ -272,3 +272,57 @@ export function addDaysIso(iso: string, days: number): string {
   const day = String(shifted.getUTCDate()).padStart(2, '0');
   return `${String(shifted.getUTCFullYear())}-${month}-${day}`;
 }
+
+/**
+ * The windows a prior book year is read from the Voucher Register in.
+ *
+ * ## Why a year is not one request
+ *
+ * The report is ~50x the collection's payload. One year measured 79MB and 103
+ * seconds on MUDALS against a 120-second report timeout, so a busier book
+ * cannot come through in one piece at all. Worse, TallyPrime cannot abandon a
+ * request once started: after the client gives up, Tally goes on building the
+ * whole year, and each retry queues behind it until Tally stops answering
+ * entirely. A window of a
+ * month or two finishes quickly, and one that fails costs only its own dates.
+ *
+ * ## Why every window ends on a 31st
+ *
+ * TallyPrime honours a report's end date only when it is the 31st; any other
+ * end date is ignored and the report runs on to the book-year end (see
+ * `endDateBinds`). A window ending 30 April would silently fetch April to
+ * March, the very request this exists to avoid. So each window runs to the next
+ * month end that falls on a 31st — one month, or two where a month is shorter.
+ * The year's own end closes the last window whatever day it falls on, since
+ * running on to the year end is then harmless.
+ *
+ * Only windows overlapping `period` are returned: a question about one quarter
+ * should not pay for the other three.
+ */
+export function registerSlices(year: DateRange, period: DateRange): DateRange[] {
+  const slices: DateRange[] = [];
+  let from = year.fromDate;
+
+  // Bounded: a book year holds at most thirteen month ends.
+  for (let guard = 0; guard < 24 && from <= year.toDate; guard++) {
+    let to = monthEnd(from);
+    while (to < year.toDate && !endDateBinds(to)) to = monthEnd(addDaysIso(to, 1));
+    if (to > year.toDate) to = year.toDate;
+
+    if (to >= period.fromDate && from <= period.toDate) slices.push({ fromDate: from, toDate: to });
+    from = addDaysIso(to, 1);
+  }
+
+  return slices;
+}
+
+/** The last day of the month `iso` falls in. */
+function monthEnd(iso: string): string {
+  const year = Number(iso.slice(0, 4));
+  const month = Number(iso.slice(5, 7));
+  const firstOfNext =
+    month === 12
+      ? `${String(year + 1)}-01-01`
+      : `${String(year)}-${String(month + 1).padStart(2, '0')}-01`;
+  return addDaysIso(firstOfNext, -1);
+}
