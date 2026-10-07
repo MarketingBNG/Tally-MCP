@@ -20,4 +20,5 @@ export {
   fetchVouchers,
   filterByPeriod,
 } from './vouchers/fetch.js';
+export type { PriorYearStore } from './vouchers/priorYearStore.js';
 export { registerVoucherTools } from './vouchers/register.js';

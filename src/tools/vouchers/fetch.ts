@@ -12,6 +12,7 @@ import {
   resolveCompanyCurrency,
   type ToolDeps,
 } from '../toolResult.js';
+import { carriedOverWarning, type PriorYearStore } from './priorYearStore.js';
 
 /**
  * `tally_get_vouchers`: list, search and exact-fetch-by-number over vouchers
@@ -151,9 +152,10 @@ async function fetchAcrossBookYears(
     allFields: boolean;
     nested: boolean;
     currency: string;
+    priorYears?: PriorYearStore | undefined;
   }
 ): Promise<{ data: Voucher[]; warnings: string[]; repairs: string[] }> {
-  const { canonicalCompany, period, allFields, nested, currency } = input;
+  const { canonicalCompany, period, allFields, nested, currency, priorYears } = input;
 
   const company = await companyNamed(deps, canonicalCompany);
   const currentYear =
@@ -168,6 +170,7 @@ async function fetchAcrossBookYears(
   const collected: Voucher[] = [];
   const failed: DateRange[] = [];
   let priorYearsFetched = 0;
+  const carriedOver: DateRange[] = [];
   /*
    * Set once a request times out, and from then on nothing more is sent.
    *
@@ -239,7 +242,10 @@ async function fetchAcrossBookYears(
           });
 
       try {
-        const response = await deps.client.send(request, 'report');
+        const saved = usesCollection ? null : (priorYears?.read(request) ?? null);
+        const response = saved ?? (await deps.client.send(request, 'report'));
+        if (!usesCollection && saved === null) priorYears?.write(request, response);
+        if (saved !== null) carriedOver.push(window);
         const parsed = normalizeVouchers(response.body, allFields, currency, nested);
         collected.push(...parsed.data);
         warnings.push(...parsed.warnings);
@@ -289,19 +295,15 @@ async function fetchAcrossBookYears(
     );
   }
 
+  if (carriedOver.length > 0) warnings.push(carriedOverWarning(carriedOver));
+
   return { data: dedupeVouchers(collected), warnings, repairs };
 }
 
 /**
- * The book years a period touches, oldest first.
- *
- * Anchored on the company's own book-year start, so a calendar-year company
- * splits on 1 January and an Indian one on 1 April. Falls back to the current
- * year alone when the anchor is unknown, which keeps the previous behaviour
- * rather than inventing a split.
- */
-/**
- * Every book year a period touches, oldest first.
+ * Every book year a period touches, oldest first — anchored on the company's own
+ * book-year start, so a calendar-year company splits on 1 January and an Indian
+ * one on 1 April. Falls back to the current year alone when the anchor is unknown.
  *
  * Exported so the workbook export can ask for a statement PER YEAR using the
  * same year boundaries the voucher fetch uses. Two different ideas of where a
@@ -490,7 +492,9 @@ export async function fetchVouchers(
    * and shares one Tally fetch with every other lean caller instead of forcing a
    * second one.
    */
-  nested = allFields
+  nested = allFields,
+  /** Earlier years saved between export runs. Only the export passes this. */
+  priorYears?: PriorYearStore
 ): Promise<{ vouchers: Voucher[]; warnings: string[] }> {
   // Tally's own spelling, not the caller's — see assertCompanyIsLoaded. This
   // also has to flow into the cache key below, or two spellings of one company
@@ -516,7 +520,7 @@ export async function fetchVouchers(
     parsedVoucherCache.set(deps.client, perClient);
   }
 
-  if (ttl > 0) {
+  if (ttl > 0 && priorYears === undefined) {
     const hit = perClient.get(key);
     if (hit !== undefined && Date.now() - hit.at < ttl) {
       deps.logger.debug('voucher parse served from cache', { key });
@@ -540,6 +544,7 @@ export async function fetchVouchers(
     allFields,
     nested,
     currency,
+    priorYears,
   });
 
   // Measured against `data` — everything Tally sent — and therefore BEFORE the

@@ -161,6 +161,12 @@ export interface ExportState {
    * post an entry. So this makes the export due again on its own.
    */
   incomplete?: boolean;
+  /**
+   * The fingerprint a check saw that differed from the last export, and when the
+   * books were first seen moving. See SETTLE_MAX_WAIT_MS for why a change waits.
+   */
+  pendingDigest?: string | null;
+  pendingSince?: string | null;
 }
 
 export const EMPTY_STATE: ExportState = {
@@ -169,6 +175,8 @@ export const EMPTY_STATE: ExportState = {
   archivedOn: null,
   lastFailure: null,
   unchangedRuns: 0,
+  pendingDigest: null,
+  pendingSince: null,
 };
 
 /**
@@ -186,16 +194,44 @@ export type DueReason = 'forced' | 'first-run' | 'changed' | 'incomplete' | 'dai
  */
 export const INCOMPLETE_RETRY_MS = 15 * 60 * 1000;
 
+/**
+ * The longest a change waits for the books to go quiet.
+ *
+ * ## Why a change waits at all
+ *
+ * A full export of a real company is not the 20 seconds the first measurements
+ * suggested. Read off client run logs, 2026-10-07: 4,437-5,509 vouchers took
+ * 102s, 184s and 249s, all of it TallyPrime's attention. Exporting on every
+ * change meant that whoever was entering vouchers had Tally busy for two to four
+ * minutes out of every five, which is what people reported as the laptop lagging.
+ *
+ * So a check that sees the books moving records it and waits. The export runs
+ * at the first check that finds the books unchanged since the previous one —
+ * the person has stopped typing — or, for books that never go quiet, once this
+ * long has passed since the change was first seen.
+ */
+export const SETTLE_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
+
 export function exportIsDue(
   state: ExportState,
   current: Fingerprint,
   today: string,
   force: boolean,
   nowMs: number = Date.now()
-): { due: true; reason: DueReason } | { due: false; reason: 'unchanged' } {
+): { due: true; reason: DueReason } | { due: false; reason: 'unchanged' | 'settling' } {
   if (force) return { due: true, reason: 'forced' };
   if (state.digest === null) return { due: true, reason: 'first-run' };
-  if (state.digest !== current.digest) return { due: true, reason: 'changed' };
+  if (state.digest !== current.digest) {
+    if (state.pendingDigest === current.digest) return { due: true, reason: 'changed' };
+    const since = state.pendingSince == null ? NaN : Date.parse(state.pendingSince);
+    if (Number.isFinite(since) && nowMs - since >= SETTLE_MAX_WAIT_MS) {
+      return { due: true, reason: 'changed' };
+    }
+    // The daily run is not held back by a change still settling: it exists so
+    // the workbook is never older than a day, and that matters more here.
+    if (state.archivedOn !== today) return { due: true, reason: 'changed' };
+    return { due: false, reason: 'settling' };
+  }
   if (
     state.incomplete === true &&
     (state.exportedAt === null || nowMs - Date.parse(state.exportedAt) >= INCOMPLETE_RETRY_MS)

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { installRootFor, packageRootFor } from './lib/paths.mjs';
 import { probeTally } from './lib/probe.mjs';
-import { loadEnvFile } from './lib/exportSetup.mjs';
+import { ensureTaskInterval, loadEnvFile } from './lib/exportSetup.mjs';
 import { toast } from './lib/notify.mjs';
 import { notifyOnce } from './lib/notifyOnce.mjs';
 import { unblockOnce } from './lib/unblock.mjs';
@@ -285,7 +285,14 @@ async function maybeUpdate() {
     const installed = installedVersion();
     if (installed === null) return;
 
-    const result = await checkForUpdate({ packageRoot: INSTALL_ROOT, installed });
+    // Once a day, not once a run. Releases are days apart, and a request every
+    // few minutes was network traffic and a state-file rewrite inside a synced
+    // folder for nothing. The launcher still checks at every Desktop start.
+    const result = await checkForUpdate({
+      packageRoot: INSTALL_ROOT,
+      installed,
+      minIntervalMinutes: 24 * 60,
+    });
 
     if (!QUIET) {
       blank();
@@ -396,4 +403,9 @@ main()
    * its own errors, and this link in the chain neither reads nor sets
    * process.exitCode, which main() has already decided.
    */
-  .finally(() => maybeUpdate());
+  .finally(() => maybeUpdate())
+  // Last, so a re-registration that disturbs this run's own task instance has
+  // nothing left to interrupt. See ensureTaskInterval.
+  .finally(() => {
+    ensureTaskInterval({ batPath: join(INSTALL_ROOT, 'Run-Export.bat'), installRoot: INSTALL_ROOT });
+  });

@@ -130,7 +130,11 @@ voucher that no longer exists.
 > goes unnoticed is missed exactly as much at sixty minutes as at one. What
 > bounds the damage is the guaranteed daily export, which runs at any interval.
 > Hourly bought nothing in safety and cost an hour of freshness, so the default
-> is now five minutes.
+> became five minutes — and then fifteen, on 2026-10-07, because on real client
+> books a full export holds TallyPrime for two to four minutes and people's
+> laptops lagged. A change is also no longer exported the moment it is seen: the
+> export waits until a check finds the books quiet (or two hours have passed), so
+> nobody entering vouchers has Tally freezing under them.
 >
 > To settle the real question, somebody has to be at a **licensed** TallyPrime —
 > the Educational version cannot make the edits — and run

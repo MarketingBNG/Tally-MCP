@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -138,6 +139,10 @@ export function buildTables(
  * never uploads a half-written table — the same rule the workbook follows, for
  * the same reason.
  *
+ * A table whose text is unchanged is not rewritten. Most tabs are the same from
+ * one export to the next, and every rewrite is a cloud upload and an antivirus
+ * scan for nothing.
+ *
  * Files from a PREVIOUS run whose tab no longer exists are removed. A company
  * that stops using GST should not leave a GST table behind for somebody to read
  * as current; the tab would be gone from the workbook and only the stale CSV
@@ -150,11 +155,12 @@ export function writeCsvTables(folder: string, tables: readonly Table[]): void {
 
   const put = (name: string, body: string): void => {
     const target = join(folder, name);
+    written.add(name.toLowerCase());
+    if (sameText(target, body)) return;
     const temporary = `${target}.tmp`;
     writeFileSync(temporary, body, 'utf8');
     rmSync(target, { force: true });
     renameSync(temporary, target);
-    written.add(name.toLowerCase());
   };
 
   put('INDEX.csv', csvIndex(tables));
@@ -165,5 +171,13 @@ export function writeCsvTables(folder: string, tables: readonly Table[]): void {
     if (!entry.toLowerCase().endsWith('.csv')) continue;
     if (written.has(entry.toLowerCase())) continue;
     rmSync(join(folder, entry), { force: true });
+  }
+}
+
+function sameText(path: string, body: string): boolean {
+  try {
+    return readFileSync(path, 'utf8') === body;
+  } catch {
+    return false;
   }
 }

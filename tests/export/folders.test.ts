@@ -122,9 +122,52 @@ describe('deciding whether to export', () => {
     });
   });
 
-  it('exports when the fingerprint moved', () => {
+  it('waits when the fingerprint first moves, rather than exporting under somebody typing', () => {
     const state = { ...EMPTY_STATE, digest: 'a', archivedOn: '2026-08-19' };
+    expect(exportIsDue(state, fingerprint('b'), '2026-08-19', false)).toEqual({
+      due: false,
+      reason: 'settling',
+    });
+  });
+
+  it('exports once a check finds the moved books quiet', () => {
+    const state = {
+      ...EMPTY_STATE,
+      digest: 'a',
+      archivedOn: '2026-08-19',
+      pendingDigest: 'b',
+      pendingSince: '2026-08-19T10:00:00.000Z',
+    };
     expect(exportIsDue(state, fingerprint('b'), '2026-08-19', false).reason).toBe('changed');
+  });
+
+  it('keeps waiting while the books are still moving', () => {
+    const state = {
+      ...EMPTY_STATE,
+      digest: 'a',
+      archivedOn: '2026-08-19',
+      pendingDigest: 'b',
+      pendingSince: '2026-08-19T10:00:00.000Z',
+    };
+    const soon = Date.parse('2026-08-19T10:30:00.000Z');
+    expect(exportIsDue(state, fingerprint('c'), '2026-08-19', false, soon).due).toBe(false);
+  });
+
+  it('exports books that never go quiet once the change is two hours old', () => {
+    const state = {
+      ...EMPTY_STATE,
+      digest: 'a',
+      archivedOn: '2026-08-19',
+      pendingDigest: 'b',
+      pendingSince: '2026-08-19T10:00:00.000Z',
+    };
+    const later = Date.parse('2026-08-19T12:00:00.000Z');
+    expect(exportIsDue(state, fingerprint('c'), '2026-08-19', false, later).reason).toBe('changed');
+  });
+
+  it('does not hold the daily run back for a change still settling', () => {
+    const state = { ...EMPTY_STATE, digest: 'a', archivedOn: '2026-08-18' };
+    expect(exportIsDue(state, fingerprint('b'), '2026-08-19', false).due).toBe(true);
   });
 
   it('does NOT export when nothing changed and today is already archived', () => {

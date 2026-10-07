@@ -7,6 +7,7 @@ import type { ToolDeps } from '../../tools/toolResult.js';
 import { collectCompany, currentYearOnly } from '../collect.js';
 import { exportIsDue, readFingerprint } from '../fingerprint.js';
 import { assignFolderNames, companyPaths, type CompanyPaths } from '../folders.js';
+import { priorYearFolder, priorYearStore } from '../priorYears.js';
 import { writeWorkbook } from '../workbook.js';
 
 /**
@@ -182,22 +183,7 @@ async function runOneCompany(
 
   mkdirSync(paths.folder, { recursive: true });
   const state = readState(paths.statePath);
-
-  // Belt and braces with the scheduled task's own "do not start a second
-  // instance": a slow Tally turning a 20s export into a 90s one at 1-minute
-  // intervals would otherwise have two runs writing the same workbook.
-  const lock = takeLock(paths.lockPath, now);
-  if (!lock.taken) {
-    return {
-      company,
-      status: 'unchanged',
-      reason: 'a previous run is still going',
-      rows: 0,
-      durationMs: Date.now() - started,
-      workbookPath: null,
-      stateChanged: false,
-    };
-  }
+  let locked = false;
 
   try {
     const fingerprint = await readFingerprint(deps, company);
@@ -205,17 +191,27 @@ async function runOneCompany(
     const due = exportIsDue(state, fingerprint, today, config.tallyExportForce, now.getTime());
 
     if (!due.due) {
-      // A minute that found nothing changed is COUNTED, not logged in full.
-      // At this cadence a line per minute would be 1,440 a day saying "no
-      // change", and the log has to stay readable to be worth keeping.
-      writeState(paths.statePath, {
-        ...state,
-        unchangedRuns: state.unchangedRuns + 1,
-      });
+      /*
+       * A check that finds nothing to do WRITES NOTHING. This folder syncs to
+       * the cloud and is scanned by antivirus software, so a state rewrite on
+       * every check was a sync and a scan every few minutes, all day, per
+       * company, to record that nothing had happened. The one write left is the
+       * first sighting of a change, which the settle rule needs to remember.
+       */
+      if (due.reason === 'settling' && state.pendingDigest !== fingerprint.digest) {
+        writeState(paths.statePath, {
+          ...state,
+          pendingDigest: fingerprint.digest,
+          pendingSince: state.pendingSince ?? now.toISOString(),
+        });
+      }
       return {
         company,
         status: 'unchanged',
-        reason: 'nothing changed in the books',
+        reason:
+          due.reason === 'settling'
+            ? 'the books are changing; waiting for them to go quiet'
+            : 'nothing changed in the books',
         rows: 0,
         durationMs: Date.now() - started,
         workbookPath: null,
@@ -223,7 +219,32 @@ async function runOneCompany(
       };
     }
 
-    const data = await collectCompany(deps, company, now);
+    // Belt and braces with the scheduled task's own "do not start a second
+    // instance": two runs must never write the same workbook. Taken only for an
+    // export, so a check that changes nothing creates and deletes no file.
+    if (!takeLock(paths.lockPath, now).taken) {
+      return {
+        company,
+        status: 'unchanged',
+        reason: 'a previous run is still going',
+        rows: 0,
+        durationMs: Date.now() - started,
+        workbookPath: null,
+        stateChanged: false,
+      };
+    }
+    locked = true;
+
+    // Only a 'changed' run reuses the saved earlier years: every other reason
+    // — first, daily, forced, a retry — is the moment to read them fresh.
+    const priorYears = priorYearStore(
+      priorYearFolder(exportFolder, company),
+      due.reason === 'changed' ? 'reuse' : 'refresh',
+      now
+    );
+    const data = await collectCompany(deps, company, now, priorYears);
+    // Only when nothing went missing: a year that failed keeps its old copy.
+    if (!isIncomplete(data.warnings)) priorYears.finish();
     // Part of the books unread. Still written — every other figure is current —
     // but marked, so the next run tries again rather than keeping the gap.
     const incomplete = isIncomplete(data.warnings);
@@ -372,6 +393,8 @@ async function runOneCompany(
       lastFailure: null,
       unchangedRuns: 0,
       incomplete,
+      pendingDigest: null,
+      pendingSince: null,
     });
 
     writeStatusFile(paths.folder, now, null);
@@ -412,7 +435,7 @@ async function runOneCompany(
       stateChanged,
     };
   } finally {
-    releaseLock(paths.lockPath);
+    if (locked) releaseLock(paths.lockPath);
   }
 }
 

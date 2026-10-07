@@ -567,6 +567,19 @@ function launcherFor(batPath) {
 }
 
 /**
+ * How often the scheduled task wakes, in minutes.
+ *
+ * Fifteen, down from five on 2026-10-07 after people reported their laptops
+ * lagging. Each wake starts wscript, cmd and two Node processes — about 1.5s of
+ * CPU, and antivirus software inspects every one of those launches — and asks
+ * TallyPrime for every voucher's ID. Twelve of those an hour, all day, was a
+ * cost paid for a spreadsheet nobody reads within five minutes of an edit.
+ *
+ * Existing installs move to this on their next run: see ensureTaskInterval.
+ */
+export const EXPORT_INTERVAL_MINUTES = 15;
+
+/**
  * Register (or re-register) the scheduled task.
  *
  * Returns `{ok, detail}` rather than throwing: a machine where a policy forbids
@@ -739,6 +752,36 @@ export function removeTask() {
     return { ok: true, detail: null };
   } catch (error) {
     return { ok: false, detail: String(error?.stderr ?? error?.message ?? error).trim() };
+  }
+}
+
+/**
+ * Move an install registered at a shorter interval onto EXPORT_INTERVAL_MINUTES.
+ *
+ * Updates replace the code, never the task, so without this every install
+ * already out there would keep waking every five minutes forever. Only a task
+ * that EXISTS is touched — somebody who declined the schedule does not get one
+ * — and only one waking more often than the current interval.
+ *
+ * Returns whether it re-registered. Never throws: this runs at the end of an
+ * export, and a schedule it could not change is the schedule that was working.
+ */
+export function ensureTaskInterval({ batPath, installRoot }) {
+  try {
+    const xml = execFileSync('schtasks.exe', ['/Query', '/TN', TASK_NAME, '/XML'], {
+      stdio: 'pipe',
+    }).toString('utf8');
+    const minutes = /<Interval>PT(\d+)M<\/Interval>/.exec(xml)?.[1];
+    if (minutes === undefined || Number(minutes) >= EXPORT_INTERVAL_MINUTES) return false;
+
+    const result = registerTask({ batPath, everyMinutes: EXPORT_INTERVAL_MINUTES });
+    if (!result.ok) return false;
+    writeEnvSettings(installRoot, {
+      TALLY_EXPORT_INTERVAL_MINUTES: String(EXPORT_INTERVAL_MINUTES),
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -12,6 +12,17 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.5 — unreleased
+**The automatic Excel export no longer slows your laptop down.** It used to
+re-export the whole company every five minutes while you were entering
+vouchers, and on a large company that kept TallyPrime busy for two to four
+minutes at a time. Now it checks every 15 minutes, waits until you have
+stopped entering for a while before exporting, and re-reads only the current
+year from TallyPrime — earlier years are reused from the last export and read
+fresh once a day. The workbook's Manifest says when earlier years were reused.
+Changes appear in the spreadsheet 15–30 minutes after you stop editing, instead
+of within five. Nothing needs doing: each computer switches over by itself.
+
 ## 1.0.4 — 2026-09-27
 **Matching now also finds one payment that settles several bills.** When a
 customer or supplier pays three invoices with a single payment, the three bills

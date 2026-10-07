@@ -343,6 +343,12 @@ const configSchema = z.object({
    * bounds the damage is the guaranteed daily export, which runs at any
    * interval. Sixty bought nothing in safety and cost an hour of staleness.
    *
+   * RAISED TO FIFTEEN on 2026-10-07. The "fifth of a second" below was measured
+   * on a 453-voucher company; on real client books a full export runs two to
+   * four minutes, and people reported their laptops lagging. See
+   * EXPORT_INTERVAL_MINUTES in installer/scripts/lib/exportSetup.mjs, and the
+   * settle rule in src/export/fingerprint.ts, which is the larger fix.
+   *
    * So the interval is what it always should have been: a straight trade between
    * how fresh the spreadsheet is and how often TallyPrime is asked a cheap
    * question. Five minutes is that trade struck sensibly — the check costs about
@@ -358,7 +364,7 @@ const configSchema = z.object({
     .int()
     .min(1, 'TALLY_EXPORT_INTERVAL_MINUTES must be at least 1.')
     .max(1440, 'TALLY_EXPORT_INTERVAL_MINUTES must be at most 1440.')
-    .default(5),
+    .default(15),
 
   /**
    * Force an export even when the fingerprint says nothing changed.

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ExcelJS from 'exceljs';
@@ -149,7 +149,12 @@ describe('a whole run', () => {
         '<VOUCHER><MASTERID>9</MASTERID><ALTERID>4</ALTERID></VOUCHER></ENVELOPE>',
     });
 
+    // Two checks each time: the first sees the change and waits, the second
+    // finds the books quiet and exports. See SETTLE_MAX_WAIT_MS.
     const deps = makeDeps(port, { TALLY_EXPORT_FOLDER: folder });
+    const seen = await runExport(deps, deps.config, [COMPANY], new Date());
+    expect(seen[0]?.status).toBe('unchanged');
+    expect(seen[0]?.reason).toMatch(/waiting for them to go quiet/);
     const added = await runExport(deps, deps.config, [COMPANY], new Date());
     expect(added[0]?.status).toBe('exported');
 
@@ -158,9 +163,32 @@ describe('a whole run', () => {
       body: '<ENVELOPE><VOUCHER><MASTERID>1</MASTERID><ALTERID>7</ALTERID></VOUCHER></ENVELOPE>',
     });
 
+    await runExport(deps, deps.config, [COMPANY], new Date());
     const removed = await runExport(deps, deps.config, [COMPANY], new Date());
     expect(removed[0]?.status).toBe('exported');
     expect(removed[0]?.reason).toMatch(/books changed/);
+  });
+
+  it('writes nothing to the folder on a check that finds nothing to do', async () => {
+    // The folder syncs to the cloud and is scanned by antivirus; every write
+    // there costs both.
+    serve();
+    const deps = makeDeps(port, { TALLY_EXPORT_FOLDER: folder });
+    const companyFolder = join(folder, COMPANY);
+    // Brought level with this mock's books first: the test above left them on
+    // a different fingerprint, which is a change, and a change is written.
+    await runExport(deps, deps.config, [COMPANY], new Date());
+    await runExport(deps, deps.config, [COMPANY], new Date());
+    const stamps = (): string[] =>
+      readdirSync(companyFolder).map(
+        (name) => `${name}@${String(statSync(join(companyFolder, name)).mtimeMs)}`
+      );
+    const before = stamps();
+
+    const outcomes = await runExport(deps, deps.config, [COMPANY], new Date());
+
+    expect(outcomes[0]?.status).toBe('unchanged');
+    expect(stamps()).toEqual(before);
   });
 
   it('refuses a company TallyPrime does not have open, by name', async () => {

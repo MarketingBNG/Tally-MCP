@@ -28,7 +28,7 @@ import { fetchLedgers } from '../tools/ledgers.js';
 import { fetchGroups } from '../tools/groups.js';
 import { fetchVoucherTypes } from '../tools/voucherTypes.js';
 import { fetchStockItems } from '../tools/inventory.js';
-import { fetchVouchers } from '../tools/vouchers.js';
+import { fetchVouchers, type PriorYearStore } from '../tools/vouchers.js';
 import { executeStatement, type ExecutedStatement } from '../tools/reports.js';
 import { executeOutstanding, type ExecutedOutstanding } from '../tools/outstanding.js';
 import { executeClosingStock, type ExecutedClosingStock } from '../tools/closingStock.js';
@@ -252,7 +252,9 @@ async function fetchCurrencies(
 export async function collectCompany(
   deps: ToolDeps,
   companyName: string,
-  now: Date
+  now: Date,
+  /** Earlier years saved by the last export. See src/export/priorYears.ts. */
+  priorYears?: PriorYearStore
 ): Promise<CompanyData> {
   const warnings: string[] = [];
 
@@ -318,7 +320,7 @@ export async function collectCompany(
    * constant are relocated to the Tally defaults tab rather than repeated down
    * every row.
    */
-  const vouchers = await fetchVouchers(deps, company.name, fullSpan, true);
+  const vouchers = await fetchVouchers(deps, company.name, fullSpan, true, true, priorYears);
   warnings.push(...vouchers.warnings);
 
   // All fields on the ledger masters: which fields a company populates IS the

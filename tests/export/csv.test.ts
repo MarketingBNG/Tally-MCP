@@ -117,3 +117,30 @@ describe('filenames', () => {
     expect(csvFileName('Profit/Loss')).toBe('Profit-Loss.csv');
   });
 });
+
+describe('writing the CSV folder', () => {
+  it('rewrites only the tables whose text changed', async () => {
+    const { mkdtempSync, rmSync, statSync, utimesSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { writeCsvTables } = await import('../../src/export/run/tables.js');
+
+    const folder = mkdtempSync(join(tmpdir(), 'tally-csv-'));
+    try {
+      const books = table([['Cash', new Decimal('10'), '2026-04-01']]);
+      const other = { ...books, title: 'Other' };
+      writeCsvTables(folder, [books, other]);
+
+      // Backdate both, so a rewrite is visible as a fresh timestamp.
+      const old = new Date('2020-01-01T00:00:00Z');
+      for (const name of ['Books.csv', 'Other.csv']) utimesSync(join(folder, name), old, old);
+
+      writeCsvTables(folder, [books, { ...other, rows: [['Bank', new Decimal('5'), '2026-04-02']] }]);
+
+      expect(statSync(join(folder, 'Books.csv')).mtimeMs).toBe(old.getTime());
+      expect(statSync(join(folder, 'Other.csv')).mtimeMs).not.toBe(old.getTime());
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+});
