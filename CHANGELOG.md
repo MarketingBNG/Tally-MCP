@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.0.5 — unreleased
+## 1.0.5 — 2026-10-08
 **The automatic Excel export no longer slows your laptop down.** It used to
 re-export the whole company every five minutes while you were entering
 vouchers, and on a large company that kept TallyPrime busy for two to four
