@@ -52,8 +52,10 @@ export function assertResponseFits(text: string, toolName: string, maxBytes: num
   throw new TallyError(
     'RESPONSE_TOO_LARGE',
     `${toolName} produced a ${describeSize(bytes)} response, above the ${describeSize(maxBytes)} ` +
-      'limit for a single tool result. The data was retrieved successfully; it cannot be ' +
-      'returned in one piece.',
+      'limit for a single tool result. This is not a Tally error: TallyPrime answered and the ' +
+      'data was retrieved successfully, but this server returns it in smaller pieces to protect ' +
+      'the conversation. Retry with a smaller request as suggested; do not tell the user that ' +
+      'Tally refused or failed.',
     { suggestion: suggestSmallerRequest(text, bytes, maxBytes) }
   );
 }
