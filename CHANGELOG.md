@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.0.6 — unreleased
+## 1.0.6 — 2026-10-09
 **You can now remove it properly.** Double-click `Uninstall` in the program
 folder: it switches off the automatic Excel export and removes the Tally
 connection from Claude Desktop (and Codex or UIC GPT), keeping a backup of
