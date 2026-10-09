@@ -165,3 +165,49 @@ export function isClaudeInstalled(env = process.env) {
   return env.LOCALAPPDATA ? existsSync(join(env.LOCALAPPDATA, 'AnthropicClaude')) : false;
 }
 
+/**
+ * Remove this server's block from config.toml, leaving everything else exactly
+ * as it was. The reverse of mergeServerIntoToml, with the same ownership rule
+ * as removeServerFromConfig: only a block whose `args` points into the install
+ * being removed is taken out.
+ *
+ * @param {string} existingToml
+ * @param {(path: string) => boolean} owns
+ * @returns {{text: string, outcome: 'removed' | 'absent' | 'not-ours'}}
+ */
+export function removeServerFromToml(existingToml, owns, serverName = CODEX_SERVER_KEY) {
+  const target = `mcp_servers.${serverName}`;
+  const source = typeof existingToml === 'string' ? existingToml : '';
+
+  const kept = [];
+  const ours = [];
+  let inBlock = false;
+
+  for (const raw of source.split(/\r?\n/)) {
+    const header = /^\s*\[\s*([^\]]+?)\s*\]\s*$/.exec(raw);
+    if (header) {
+      const name = header[1].trim();
+      inBlock = name === target || name.startsWith(`${target}.`);
+    }
+    (inBlock ? ours : kept).push(raw);
+  }
+
+  if (ours.length === 0) return { text: source, outcome: 'absent' };
+
+  const args = ours.map((raw) => /^\s*args\s*=\s*\[\s*(.+?)\s*\]\s*$/.exec(raw)?.[1]).find(Boolean);
+  const path = args === undefined ? undefined : parseTomlString(args.split(/,\s*(?=['"])/)[0]);
+  if (path === undefined || !owns(path)) return { text: source, outcome: 'not-ours' };
+
+  while (kept.length > 0 && kept[kept.length - 1].trim() === '') kept.pop();
+  return { text: kept.length > 0 ? `${kept.join('\n')}\n` : '', outcome: 'removed' };
+}
+
+/** Read back a value written by tomlString. */
+function parseTomlString(text) {
+  const value = text.trim();
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1);
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return undefined;
+}

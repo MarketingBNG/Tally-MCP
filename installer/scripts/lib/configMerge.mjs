@@ -53,3 +53,31 @@ export function mergeServerIntoConfig(existing, entry) {
 export function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+/**
+ * Returns a new config object with this server removed, preserving everything
+ * else the file contained. The reverse of mergeServerIntoConfig.
+ *
+ * Removed only when `owns` says the entry points into the install being
+ * removed. A `tally` entry belonging to another copy — a second unzipped
+ * version, a developer checkout — is somebody's working connection, and
+ * uninstalling one folder must not break it.
+ *
+ * @param {unknown} existing Parsed contents of the config file.
+ * @param {(path: string) => boolean} owns
+ * @returns {{ config: object, outcome: 'removed' | 'absent' | 'not-ours' }}
+ */
+export function removeServerFromConfig(existing, owns) {
+  const base = isPlainObject(existing) ? { ...existing } : {};
+  const servers = isPlainObject(base.mcpServers) ? { ...base.mcpServers } : null;
+  const entry = servers?.[SERVER_KEY];
+
+  if (servers === null || entry === undefined) return { config: base, outcome: 'absent' };
+
+  const target = isPlainObject(entry) && Array.isArray(entry.args) ? entry.args[0] : undefined;
+  if (typeof target !== 'string' || !owns(target)) return { config: base, outcome: 'not-ours' };
+
+  delete servers[SERVER_KEY];
+  base.mcpServers = servers;
+  return { config: base, outcome: 'removed' };
+}

@@ -11,6 +11,7 @@
       TallyPrime for Claude\
         Setup.bat              <- they double-click this once
         Check-Tally.bat        <- they double-click this when something is wrong
+        Uninstall.bat          <- they double-click this to remove it
         Run-Export.bat         <- double-click to export now, and watch it run
         Run-Export-Hidden.vbs  <- what the scheduled task runs, with no window
         READ ME FIRST.txt
@@ -126,6 +127,7 @@ Copy-Item (Join-Path $RepoRoot 'package.json') $AppDir
 # one bug no update could ever fix. See syncBootFiles in launch.mjs.
 Copy-Item (Join-Path $InstallerDir 'Setup.bat') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'Check-Tally.bat') $PayloadDir
+Copy-Item (Join-Path $InstallerDir 'Uninstall.bat') $PayloadDir
 Copy-Item (Join-Path $InstallerDir 'Run-Export.bat') $PayloadDir
 # The scheduled task points at this. Without it the task falls back to the .bat
 # and flashes a console window on every run -- see launcherFor in exportSetup.mjs.
@@ -146,6 +148,7 @@ foreach ($name in @(
     'promote.mjs',
     'Setup.bat',
     'Check-Tally.bat',
+    'Uninstall.bat',
     'Run-Export.bat',
     'Run-Export-Hidden.vbs'
   )) {

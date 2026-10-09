@@ -198,11 +198,18 @@
   REMOVING IT
 -------------------------------------------------------------------------------
 
-  Delete this folder. Nothing was installed anywhere else on your computer.
+  1. Double-click  Uninstall  and answer y.
 
-  Claude Desktop will still have an entry pointing at the folder you deleted;
-  it will simply stop working, and can be left alone or removed by whoever set
-  this up for you.
+     It switches off the automatic Excel export and removes the Tally
+     connection from Claude Desktop (and Codex or UIC GPT, if you use them).
+     Your TallyPrime data, your other Claude connections and the spreadsheets
+     in your export folder are not touched.
+
+  2. Delete this folder.
+
+  Do not just delete the folder without step 1: the automatic export would
+  keep trying to run in the background, and Claude would keep a broken
+  Tally connection.
 
 
 -------------------------------------------------------------------------------

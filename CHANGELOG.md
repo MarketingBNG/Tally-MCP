@@ -12,6 +12,15 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.6 — unreleased
+**You can now remove it properly.** Double-click `Uninstall` in the program
+folder: it switches off the automatic Excel export and removes the Tally
+connection from Claude Desktop (and Codex or UIC GPT), keeping a backup of
+each settings file. Your TallyPrime data, your other Claude connections and the
+spreadsheets in your export folder are left alone. Then delete the folder.
+Before this, deleting the folder left the export trying to run in the
+background.
+
 ## 1.0.5 — 2026-10-08
 **The automatic Excel export no longer slows your laptop down.** It used to
 re-export the whole company every five minutes while you were entering
