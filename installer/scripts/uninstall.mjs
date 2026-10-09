@@ -1,12 +1,18 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isPlainObject, removeServerFromConfig } from './lib/configMerge.mjs';
 import { codexConfigPath, removeServerFromToml } from './lib/codexConfig.mjs';
 import { uicConfigPath } from './lib/uicConfig.mjs';
 import { claudeConfigCandidates, installRootFor } from './lib/paths.mjs';
-import { readEnvSetting, removeTask, TASK_NAME } from './lib/exportSetup.mjs';
+import {
+  readEnvSetting,
+  removeTask,
+  stableLauncherPath,
+  taskBelongsTo,
+  TASK_NAME,
+} from './lib/exportSetup.mjs';
 
 /**
  * Take TallyPrime for Claude off this computer.
@@ -97,12 +103,16 @@ function removeOurTask() {
   } catch {
     return 'was not set up';
   }
-  const command = /<Arguments>([^<]*)<\/Arguments>/.exec(xml)?.[1] ?? '';
-  const program = /<Command>([^<]*)<\/Command>/.exec(xml)?.[1] ?? '';
-  const target = (/&quot;([^&]+)&quot;|"([^"]+)"/.exec(command)?.slice(1).find(Boolean) ?? program).trim();
-  if (target === '' || !owns(target)) return `left alone: it belongs to another copy (${target})`;
+  if (!taskBelongsTo(xml, INSTALL_ROOT)) return 'left alone: it belongs to another copy of the program';
   const result = removeTask();
-  return result.ok ? 'removed' : `could NOT be removed: ${result.detail}`;
+  if (!result.ok) return `could NOT be removed: ${result.detail}`;
+  // The starter outside this folder that the task ran. See stableLauncherPath.
+  const starter = stableLauncherPath();
+  if (starter !== null) {
+    rmSync(starter, { force: true });
+    rmSync(`${starter}.missing`, { force: true });
+  }
+  return 'removed';
 }
 
 function removeFromJson(path) {
@@ -152,7 +162,7 @@ function removeEarlierYears() {
   if (!existsSync(folder)) return 'none found';
   try {
     rmSync(folder, { recursive: true, force: true });
-    rmSync(join(base, 'TallyPrime for Claude'), { recursive: false, force: true });
+    rmdirSync(join(base, 'TallyPrime for Claude'));
   } catch {
     // The parent still holds something else; leaving it is correct.
   }

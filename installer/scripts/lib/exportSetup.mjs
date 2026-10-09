@@ -560,10 +560,106 @@ function launcherFor(batPath) {
   const vbs = join(dirname(batPath), 'Run-Export-Hidden.vbs');
 
   if (existsSync(wscript) && existsSync(vbs)) {
-    return { command: wscript, arguments: `"${vbs}"`, hidden: true };
+    const stable = writeStableLauncher(vbs);
+    // `//B` is batch mode: no dialog of any kind. Without it a missing script is
+    // a modal "Can not find script file" box, every run, on somebody's screen.
+    if (stable !== null) return { command: wscript, arguments: `//B //Nologo "${stable}"`, hidden: true };
+    return { command: wscript, arguments: `//B //Nologo "${vbs}"`, hidden: true };
   }
 
   return { command: batPath, arguments: '--quiet', hidden: false };
+}
+
+/**
+ * Where the task's own starter lives: OUTSIDE the install folder, on purpose.
+ *
+ * People delete or move the folder without running Uninstall. The task then
+ * pointed at a file that no longer existed, and Windows Script Host put up
+ * "Can not find script file" on every run (seen on a client laptop,
+ * 2026-10-09). Nothing inside a deleted folder can clean up after it, so the
+ * task runs this small file instead: it starts the export while the folder is
+ * there, and removes the task — and itself — once the folder has gone.
+ */
+export function stableLauncherPath(env = process.env) {
+  const base = env.LOCALAPPDATA;
+  return base ? join(base, 'TallyPrime for Claude', 'Run-Export-Task.vbs') : null;
+}
+
+/**
+ * Write the starter for this install. Returns its path, or null when there is
+ * nowhere to put it — the task then runs the install's own file as before.
+ */
+function writeStableLauncher(vbsPath) {
+  const path = stableLauncherPath();
+  if (path === null) return null;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    // UTF-16 with a BOM, which Windows Script Host reads natively, so an install
+    // path with non-English characters in it survives.
+    writeFileSync(
+      path,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(stableLauncherScript(vbsPath), 'utf16le')])
+    );
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How many runs in a row must find the folder gone before the task is removed.
+ *
+ * More than one, because "gone" can be momentary: OneDrive re-syncing the
+ * folder, a profile still loading after sign-in. A real deletion is still
+ * cleaned up within the hour.
+ */
+export const MISSING_RUNS_BEFORE_REMOVAL = 3;
+
+/** The starter's VBScript. Exported for the test. */
+export function stableLauncherScript(vbsPath) {
+  const quoted = (text) => `"${String(text).replace(/"/g, '""')}"`;
+  return [
+    "' TallyPrime for Claude - scheduled task starter. Written by Setup.",
+    "' Runs the export while its folder exists; once the folder has been deleted",
+    "' or moved, removes the scheduled task and this file. See exportSetup.mjs.",
+    'Option Explicit',
+    'Dim shell, fso, target, marker, drive, misses, stream',
+    'Set shell = CreateObject("WScript.Shell")',
+    'Set fso = CreateObject("Scripting.FileSystemObject")',
+    `target = ${quoted(vbsPath)}`,
+    'marker = WScript.ScriptFullName & ".missing"',
+    '',
+    'If fso.FileExists(target) Then',
+    '  If fso.FileExists(marker) Then fso.DeleteFile marker, True',
+    '  WScript.Quit shell.Run("wscript.exe //B //Nologo """ & target & """", 0, True)',
+    'End If',
+    '',
+    "' A drive that is not there right now (unplugged, not yet mapped) proves",
+    "' nothing about the folder, so it is never counted as a deletion.",
+    'drive = fso.GetDriveName(target)',
+    'If drive = "" Then WScript.Quit 1',
+    'If Not fso.DriveExists(drive) Then WScript.Quit 1',
+    'If Not fso.GetDrive(drive).IsReady Then WScript.Quit 1',
+    '',
+    'misses = 0',
+    'On Error Resume Next',
+    'If fso.FileExists(marker) Then misses = CInt(fso.OpenTextFile(marker).ReadLine)',
+    'On Error GoTo 0',
+    'misses = misses + 1',
+    `If misses < ${String(MISSING_RUNS_BEFORE_REMOVAL)} Then`,
+    '  Set stream = fso.CreateTextFile(marker, True)',
+    '  stream.WriteLine CStr(misses)',
+    '  stream.Close',
+    '  WScript.Quit 1',
+    'End If',
+    '',
+    `shell.Run "schtasks.exe /Delete /TN ${quoted(TASK_NAME).replace(/"/g, '""')} /F", 0, True`,
+    'On Error Resume Next',
+    'fso.DeleteFile marker, True',
+    'fso.DeleteFile WScript.ScriptFullName, True',
+    'WScript.Quit 0',
+    '',
+  ].join('\r\n');
 }
 
 /**
@@ -771,10 +867,10 @@ export function ensureTaskInterval({ batPath, installRoot }) {
     const xml = execFileSync('schtasks.exe', ['/Query', '/TN', TASK_NAME, '/XML'], {
       stdio: 'pipe',
     }).toString('utf8');
-    const minutes = /<Interval>PT(\d+)M<\/Interval>/.exec(xml)?.[1];
-    if (minutes === undefined || Number(minutes) >= EXPORT_INTERVAL_MINUTES) return false;
+    const plan = taskUpgradePlan(xml, installRoot, readStableLauncher());
+    if (plan === null) return false;
 
-    const result = registerTask({ batPath, everyMinutes: EXPORT_INTERVAL_MINUTES });
+    const result = registerTask({ batPath, everyMinutes: plan.everyMinutes });
     if (!result.ok) return false;
     writeEnvSettings(installRoot, {
       TALLY_EXPORT_INTERVAL_MINUTES: String(EXPORT_INTERVAL_MINUTES),
@@ -783,6 +879,75 @@ export function ensureTaskInterval({ batPath, installRoot }) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a registered task needs re-registering, and at what interval. Pure,
+ * for the test.
+ *
+ * Two reasons: it wakes more often than EXPORT_INTERVAL_MINUTES, or it does not
+ * yet run the stable starter, which is what lets a deleted folder clean up its
+ * own task. Only a task belonging to THIS install is touched: another copy's
+ * task is that copy's business. A longer interval somebody chose is kept.
+ *
+ * @returns {{everyMinutes: number} | null}
+ */
+export function taskUpgradePlan(xml, installRoot, launcherText) {
+  if (!taskBelongsTo(xml, installRoot, launcherText)) return null;
+  const { command, usesStable } = taskAction(xml);
+
+  const interval = /<Interval>PT(?:(\d+)H)?(?:(\d+)M)?<\/Interval>/.exec(xml);
+  const current = interval === null ? null : Number(interval[1] ?? 0) * 60 + Number(interval[2] ?? 0);
+  const everyMinutes = Math.max(current ?? EXPORT_INTERVAL_MINUTES, EXPORT_INTERVAL_MINUTES);
+
+  // The fallback .bat launcher has no starter to move to; only the interval applies.
+  const canUseStable = command.toLowerCase().endsWith('wscript.exe');
+  if (everyMinutes === current && (usesStable || !canUseStable)) return null;
+  return { everyMinutes };
+}
+
+/**
+ * Does the registered task run THIS install? Directly, or through the stable
+ * starter, in which case the starter's own text names the install it starts.
+ * Shared with Uninstall, which must not remove another copy's task.
+ */
+export function taskBelongsTo(xml, installRoot, launcherText = readStableLauncher()) {
+  const { command, args, usesStable } = taskAction(xml);
+  const root = withSep(installRoot).toLowerCase();
+  return usesStable
+    ? (launcherText ?? '').toLowerCase().includes(root)
+    : `${command} ${args}`.toLowerCase().includes(root);
+}
+
+function taskAction(xml) {
+  const args = decodeXml(/<Arguments>([^<]*)<\/Arguments>/.exec(xml)?.[1] ?? '');
+  const command = decodeXml(/<Command>([^<]*)<\/Command>/.exec(xml)?.[1] ?? '');
+  const stable = stableLauncherPath();
+  const usesStable = stable !== null && args.toLowerCase().includes(stable.toLowerCase());
+  return { command, args, usesStable };
+}
+
+/** A folder path ending in its separator, so "Tally" never matches "Tally (old)". */
+function withSep(path) {
+  return /[\\/]$/.test(path) ? path : `${path}\\`;
+}
+
+function readStableLauncher() {
+  const path = stableLauncherPath();
+  try {
+    return path === null ? null : readFileSync(path).toString('utf16le');
+  } catch {
+    return null;
+  }
+}
+
+function decodeXml(text) {
+  return text
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 /** Is the task registered? Used by the doctor, which must never change anything. */

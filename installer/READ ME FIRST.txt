@@ -207,9 +207,10 @@
 
   2. Delete this folder.
 
-  Do not just delete the folder without step 1: the automatic export would
-  keep trying to run in the background, and Claude would keep a broken
-  Tally connection.
+  If the folder was deleted or moved without step 1, the automatic export
+  switches itself off within about 45 minutes. Claude will still list a
+  broken Tally connection until Uninstall is run from a fresh copy, or the
+  folder is put back.
 
 
 -------------------------------------------------------------------------------

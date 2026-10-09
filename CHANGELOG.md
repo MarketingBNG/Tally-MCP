@@ -12,6 +12,17 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.7 — unreleased
+**No more "Can not find script file" popups.** If the program folder was
+deleted or moved without running Uninstall, Windows showed that error every
+time the automatic export tried to run. Now the export never shows a popup,
+and once its folder has been gone for three runs in a row it switches itself
+off. Each computer moves to this by itself after updating.
+
+A computer already showing the popup needs it switched off once by hand: run
+Setup again from wherever the program now is, or delete
+"TallyPrime for Claude - Export" in Task Scheduler.
+
 ## 1.0.6 — 2026-10-09
 **You can now remove it properly.** Double-click `Uninstall` in the program
 folder: it switches off the automatic Excel export and removes the Tally
