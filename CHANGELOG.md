@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.0.7 — unreleased
+## 1.0.7 — 2026-10-09
 **No more "Can not find script file" popups.** If the program folder was
 deleted or moved without running Uninstall, Windows showed that error every
 time the automatic export tried to run. Now the export never shows a popup,
