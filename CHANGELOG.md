@@ -12,6 +12,12 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.9 — unreleased
+**Totals now match Tally's reports when there are optional vouchers.**
+Optional (memorandum) vouchers were being counted in movement totals, even
+though Tally leaves them out of its trial balance and P&L. They are now left
+out by default, with a note saying how many, and can be included on request.
+
 ## 1.0.8 — 2026-10-10
 **Foreign-currency amounts are now read correctly.** Entries in another
 currency, such as a euro invoice in dollar books, used to come back blank, so

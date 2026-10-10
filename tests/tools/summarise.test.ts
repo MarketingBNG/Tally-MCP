@@ -18,7 +18,7 @@ function voucher(partial: Partial<Voucher> & { entries: Voucher['entries'] }): V
     partyLedgerName: partial.partyLedgerName ?? 'Acme Ltd',
     narration: null,
     isCancelled: partial.isCancelled ?? false,
-    isOptional: false,
+    isOptional: partial.isOptional ?? false,
     entries: partial.entries,
     source: { system: 'tallyprime', entityType: 'voucher', identifier: 'x' },
   };
@@ -160,5 +160,34 @@ describe('summariseMovements', () => {
 
     expect(sales?.voucherCount).toBe(1);
     expect(sales?.entryCount).toBe(2);
+  });
+});
+
+describe('optional vouchers', () => {
+  // Found live: Probotix Purchase 73 (3 Jan 2025, $2,685, Travel Booth / Travelling
+  // Expenses) is optional, so TallyPrime leaves it out of its reports — and this
+  // tool was counting it.
+  const OPTIONAL = voucher({
+    date: '2025-01-03',
+    voucherType: 'Purchase',
+    voucherNumber: '73',
+    isOptional: true,
+    entries: [
+      { ledgerName: 'Travel Booth', amount: money('2685'), side: 'credit' },
+      { ledgerName: 'Travelling Expenses', amount: money('-2685'), side: 'debit' },
+    ],
+  });
+
+  it('leaves them out by default, as TallyPrime trial balance and P&L do', () => {
+    const result = summariseMovements([SALE, OPTIONAL], 'ledger', () => null, []);
+    expect(result.rows.map((row) => row.key)).not.toContain('Travelling Expenses');
+    expect(result.optionalVouchersExcluded).toBe(1);
+  });
+
+  it('counts them when asked', () => {
+    const result = summariseMovements([SALE, OPTIONAL], 'ledger', () => null, [], undefined, true);
+    const travel = result.rows.find((row) => row.key === 'Travelling Expenses');
+    expect(travel?.totalDebit).toEqual(money('2685'));
+    expect(result.optionalVouchersExcluded).toBe(0);
   });
 });

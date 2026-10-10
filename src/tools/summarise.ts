@@ -85,6 +85,9 @@ const DESCRIPTION = [
     'arithmetic, not a finding. For "sales by month" pass ledger:"Sales" with groupBy:"month", ' +
     'which counts only the sales entries.',
   '',
+  'OPTIONAL VOUCHERS are left out by default, as TallyPrime leaves them out of its trial balance ' +
+    'and P&L; "optionalVouchersExcluded" says how many. Pass includeOptional:true to count them.',
+  '',
   'AN ENTRY WITH AN UNREADABLE AMOUNT is excluded from the totals and counted in ' +
     '"entriesExcludedFromTotals" on that row, with a warning. It is never treated as zero.',
   '',
@@ -148,15 +151,32 @@ export function summariseMovements(
    * finding and is actually the filter. Restricting entries keeps the sales leg
    * alone, which is the figure being asked for.
    */
-  includeEntry: (ledgerName: string) => boolean = () => true
-): { rows: MovementSummaryRow[]; allNetToZero: boolean; currency: string } {
+  includeEntry: (ledgerName: string) => boolean = () => true,
+  /**
+   * An optional voucher is a memorandum: TallyPrime leaves it out of the trial
+   * balance and P&L. Counting it by default made these totals disagree with
+   * Tally's reports — found on a live company, where a $2,685 optional purchase
+   * was in the travel total and nowhere in Tally's.
+   */
+  includeOptional = false
+): {
+  rows: MovementSummaryRow[];
+  allNetToZero: boolean;
+  currency: string;
+  optionalVouchersExcluded: number;
+} {
   const buckets = new Map<string, Bucket>();
   let currency = DEFAULT_CURRENCY;
+  let optionalVouchersExcluded = 0;
 
   for (const voucher of vouchers) {
     // A cancelled voucher posts nothing. Including it would inflate every total
     // with amounts the books do not carry.
     if (voucher.isCancelled) continue;
+    if (voucher.isOptional && !includeOptional) {
+      optionalVouchersExcluded += 1;
+      continue;
+    }
 
     const voucherId = voucher.guid ?? voucher.voucherNumber ?? '(unidentified)';
 
@@ -225,7 +245,7 @@ export function summariseMovements(
   // rather than an alphabetical accident.
   rows.sort((a, b) => new Decimal(b.net.amount).abs().comparedTo(new Decimal(a.net.amount).abs()));
 
-  return { rows, allNetToZero: net.isZero(), currency };
+  return { rows, allNetToZero: net.isZero(), currency, optionalVouchersExcluded };
 }
 
 function keyFor(
@@ -286,6 +306,13 @@ export function registerSummaryTools(server: McpServer, deps: ToolDeps): void {
           .min(1)
           .optional()
           .describe('Restrict to one voucher type, exact and case-insensitive.'),
+        includeOptional: z
+          .boolean()
+          .default(false)
+          .describe(
+            'Count optional (memorandum) vouchers too. Off by default, matching TallyPrime, ' +
+              'whose trial balance and P&L leave them out. Turn on only when asked about them.'
+          ),
         company: companySchema,
         ...dateRangeSchema,
         ...paginationSchema,
@@ -337,7 +364,8 @@ export function registerSummaryTools(server: McpServer, deps: ToolDeps): void {
           args.groupBy,
           parentOf,
           warnings,
-          includeEntry
+          includeEntry,
+          args.includeOptional
         );
 
         return fromPage(paginate(summary.rows, pagination, warnings), {
@@ -357,10 +385,16 @@ export function registerSummaryTools(server: McpServer, deps: ToolDeps): void {
                   'Filters were applied, so the groups are not expected to net to zero.',
               }
             : { allGroupsNetToZero: summary.allNetToZero }),
+          ...(summary.optionalVouchersExcluded > 0
+            ? { optionalVouchersExcluded: summary.optionalVouchersExcluded }
+            : {}),
           basis:
             'Ledger entries grouped and totalled in exact decimal arithmetic. Debits and credits ' +
             'are magnitudes; net is credit minus debit in TallyPrime own signs, so a debit net is ' +
-            'negative. Cancelled vouchers are excluded.',
+            'negative. Cancelled vouchers are excluded' +
+            (args.includeOptional
+              ? '; optional vouchers are INCLUDED, so totals will exceed TallyPrime reports.'
+              : ', and so are optional vouchers, as in TallyPrime trial balance and P&L.'),
         });
       })
   );
