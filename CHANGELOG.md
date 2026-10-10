@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.0.8 — unreleased
+## 1.0.8 — 2026-10-10
 **Foreign-currency amounts are now read correctly.** Entries in another
 currency, such as a euro invoice in dollar books, used to come back blank, so
 totals could fall short. They are now read at the converted value TallyPrime
