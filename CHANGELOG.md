@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.0.9 — unreleased
+## 1.0.9 — 2026-10-10
 **Totals now match Tally's reports when there are optional vouchers.**
 Optional (memorandum) vouchers were being counted in movement totals, even
 though Tally leaves them out of its trial balance and P&L. They are now left
