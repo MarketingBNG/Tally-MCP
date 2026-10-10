@@ -1,5 +1,6 @@
 
 import {
+  isNegative,
   toMoney,
   type Money,
 } from '../../utils/numbers.js';
@@ -155,7 +156,24 @@ export function readMoney(
 ): Money | null {
   if (raw === null || raw.trim() === '') return null;
 
-  const money = toMoney(raw, currency);
+  let money = toMoney(raw, currency);
+  // A foreign-currency amount arrives with its conversion, as in
+  // "11228.00 € @ $1.16/ € = $13024.48". The figure after "=" is TallyPrime's
+  // own value in the base currency — the one its reports total — so it is read.
+  // Everything after "=" is handed to toMoney, which already copes with a
+  // spaced symbol and a Dr/Cr suffix. A sign shown only on the foreign side
+  // still applies: dropping it would turn a credit into a debit.
+  const converted = money === null ? /^(.*?)@[^=]*=\s*(.+?)\s*$/.exec(raw) : null;
+  if (converted) {
+    money = toMoney(converted[2] ?? null, currency);
+    const foreignIsNegative = /^\s*[-(]/.test(converted[1] ?? '');
+    if (money !== null && foreignIsNegative && !isNegative(money)) {
+      money = { amount: `-${money.amount}`, currency };
+    }
+    if (money !== null) {
+      warnings.push(`Read the foreign-currency amount "${raw}" for ${label} at its converted base value ${money.amount}.`);
+    }
+  }
   if (money === null) {
     warnings.push(`Could not read the amount "${raw}" for ${label}; it is reported as null.`);
   }
