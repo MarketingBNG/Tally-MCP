@@ -1,4 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// The starter lives under LOCALAPPDATA, which only Windows defines. Without it
+// CI on Linux sees no starter path and never recognises a task that uses one.
+vi.hoisted(() => {
+  process.env.LOCALAPPDATA ??= 'C:\\Users\\a\\AppData\\Local';
+});
+
 import {
   MISSING_RUNS_BEFORE_REMOVAL,
   stableLauncherPath,
