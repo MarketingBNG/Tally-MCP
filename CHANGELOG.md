@@ -12,6 +12,17 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.0.8 — unreleased
+**Foreign-currency amounts are now read correctly.** Entries in another
+currency, such as a euro invoice in dollar books, used to come back blank, so
+totals could fall short. They are now read at the converted value TallyPrime
+itself uses, with a note saying so, and a credit keeps its minus sign.
+
+**Clearer message when a result is too large.** Claude sometimes said Tally
+"refused to send the books". Tally had answered fine; the result was just too
+big to show at once. The message now says so, and Claude fetches it in smaller
+parts instead.
+
 ## 1.0.7 — 2026-10-09
 **No more "Can not find script file" popups.** If the program folder was
 deleted or moved without running Uninstall, Windows showed that error every
