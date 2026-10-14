@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.1.0 — unreleased
+## 1.1.0 — 2026-10-14
 **Claude can now make changes in TallyPrime — only with your approval.**
 It can create, change and delete ledgers, groups, cost centres, units, stock
 groups, godowns and stock items, and post, change, cancel or delete vouchers
