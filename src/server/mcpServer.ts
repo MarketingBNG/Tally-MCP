@@ -1,3 +1,4 @@
+import { annotateTools } from './toolAnnotations.js';
 import { McpServer } from '@modelcontextprotocol/server';
 import type { AppConfig } from '../config/config.js';
 import type { Logger } from '../utils/logger.js';
@@ -64,6 +65,7 @@ export function createMcpServer(deps: ServerDeps): McpServer {
 
   // One client, so every tool shares the single request queue.
   const toolDeps = { client, config, logger };
+  annotateTools(server);
 
   registerConnectionTools(server, toolDeps);
   // Reads the exported files on this machine, so it works with TallyPrime closed
