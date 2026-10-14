@@ -175,6 +175,15 @@ const configSchema = z.object({
     .max(50_000_000, 'TALLY_MAX_RESPONSE_BYTES must be at most 50000000.')
     .default(150_000),
 
+  /**
+   * Where the write log goes: one JSON line per write sent to TallyPrime, with
+   * the preview, the exact XML, Tally's reply and the read-back. Append-only,
+   * so a write can always be traced and, where possible, reversed.
+   *
+   * Defaults to %LOCALAPPDATA%\tally-mcp\write-log.jsonl (resolved where it is
+   * used, so tests can point it at a temporary file instead).
+   */
+  tallyWriteLogPath: z.string().min(1).optional(),
   logLevel: z.enum(LOG_LEVELS).default('info'),
 
   /**
@@ -463,6 +472,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tallyExportCompanies: env.TALLY_EXPORT_COMPANIES,
     tallyExportIntervalMinutes: env.TALLY_EXPORT_INTERVAL_MINUTES,
     tallyExportForce: env.TALLY_EXPORT_FORCE,
+    tallyWriteLogPath: env.TALLY_WRITE_LOG_PATH,
     logLevel: env.LOG_LEVEL,
   });
 

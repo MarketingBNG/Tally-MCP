@@ -7,7 +7,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerTdsTools } from '../../src/tools/tds.js';
+import { registerTdsTools } from '../../src/tools/read/tds.js';
 
 /**
  * The TDS/TCS tools.

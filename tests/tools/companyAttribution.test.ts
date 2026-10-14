@@ -8,10 +8,10 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerReportTools } from '../../src/tools/reports.js';
-import { registerGenericReportTools } from '../../src/tools/genericReport.js';
-import { registerCompanyTools } from '../../src/tools/companies.js';
-import { registerTieOutTools } from '../../src/tools/tieOut.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
+import { registerGenericReportTools } from '../../src/tools/read/genericReport.js';
+import { registerCompanyTools } from '../../src/tools/read/companies.js';
+import { registerTieOutTools } from '../../src/tools/read/tieOut.js';
 
 /**
  * Which company do the figures actually belong to?

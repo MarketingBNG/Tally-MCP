@@ -266,7 +266,7 @@ await run('05-tb-single', 'tally_get_statement', { statement: 'trial_balance', .
 
 // A mid-year end date. TallyPrime ignores it and accumulates to the year end, so
 // the answer must come back flagged rather than presented as the quarter's
-// figures. See the END_DATE_NOTE in src/tools/reports.ts.
+// figures. See the END_DATE_NOTE in src/tools/read/reports.ts.
 const midYear = await run('06-tb-mid-year', 'tally_get_statement', {
   statement: 'trial_balance',
   ...q2,

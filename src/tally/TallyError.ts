@@ -38,6 +38,13 @@ export const TALLY_ERROR_CODES = [
   'EXPORT_NOT_CONFIGURED',
   'EXPORT_NO_COMPANIES',
   'EXPORT_COMPANY_NOT_FOUND',
+  // The write path. A write that TallyPrime refused, one whose outcome could not
+  // be established, a preview token that cannot be used, and a preview whose
+  // target changed in TallyPrime between preview and confirm.
+  'WRITE_REJECTED',
+  'WRITE_OUTCOME_UNKNOWN',
+  'WRITE_TOKEN_INVALID',
+  'WRITE_CONFLICT',
 ] as const;
 
 export type TallyErrorCode = (typeof TALLY_ERROR_CODES)[number];
@@ -78,6 +85,18 @@ const DEFAULT_SUGGESTIONS: Record<TallyErrorCode, string> = {
     'folder is on a drive that is currently connected.',
   EXPORT_COMPANY_NOT_FOUND:
     'Use tally_list_exported_books to see which companies this computer holds exported data for.',
+  WRITE_REJECTED:
+    'TallyPrime refused the change and nothing was written. Correct what its message names and ' +
+    'prepare the change again.',
+  WRITE_OUTCOME_UNKNOWN:
+    'Do NOT retry. Check in TallyPrime (or with the read tools) whether the change was made ' +
+    'before doing anything else — retrying could post it twice.',
+  WRITE_TOKEN_INVALID:
+    'The confirmation token is unknown, already used or expired. Prepare the change again to get ' +
+    'a fresh preview and token.',
+  WRITE_CONFLICT:
+    'The books changed in TallyPrime after the preview was made, so it no longer describes what ' +
+    'would be written. Prepare the change again and review the new preview.',
 };
 
 /** The shape handed back to Claude. Deliberately contains no stack trace. */

@@ -8,9 +8,9 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerMasterTools } from '../../src/tools/masters.js';
-import { registerVoucherTestTools } from '../../src/tools/testVouchers.js';
-import { registerGenericReportTools } from '../../src/tools/genericReport.js';
+import { registerMasterTools } from '../../src/tools/read/masters.js';
+import { registerVoucherTestTools } from '../../src/tools/read/testVouchers.js';
+import { registerGenericReportTools } from '../../src/tools/read/genericReport.js';
 
 /**
  * The Phase 1b consolidation, and the two tools it made room for.

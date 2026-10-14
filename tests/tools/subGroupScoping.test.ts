@@ -7,8 +7,8 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerOutstandingTools } from '../../src/tools/outstanding.js';
-import { registerConfirmationTools } from '../../src/tools/confirmations.js';
+import { registerOutstandingTools } from '../../src/tools/read/outstanding.js';
+import { registerConfirmationTools } from '../../src/tools/read/confirmations.js';
 
 /**
  * Ledgers filed in a SUB-group of the group asked for.

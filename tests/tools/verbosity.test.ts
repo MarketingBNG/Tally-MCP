@@ -6,9 +6,9 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerReportTools } from '../../src/tools/reports.js';
-import { isStandingBoilerplate, trimWarnings } from '../../src/tools/verbosity.js';
-import { rowIsNil } from '../../src/tools/statementComparison.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
+import { isStandingBoilerplate, trimWarnings } from '../../src/tools/shared/verbosity.js';
+import { rowIsNil } from '../../src/tools/read/statementComparison.js';
 
 /**
  * `verbosity: "summary"`.

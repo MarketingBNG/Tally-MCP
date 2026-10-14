@@ -20,7 +20,7 @@ generic `tally_get_report` tool restricted to an **allowlist** of report IDs,
 wrapping the `buildReportRequest` builder that already exists.
 
 **That tool is now built** — `tally_get_report`, in
-[../src/tools/genericReport.ts](../src/tools/genericReport.ts), with a closed enum
+[../src/tools/read/genericReport.ts](../src/tools/read/genericReport.ts), with a closed enum
 of nine IDs. This file is the record of how those IDs were established, and it is
 still the input for adding any more: an ID that has not been through a run like
 this one does not go in the enum.

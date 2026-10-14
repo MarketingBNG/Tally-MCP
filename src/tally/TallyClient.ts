@@ -161,6 +161,41 @@ export class TallyClient {
   }
 
   /**
+   * Send a WRITE (an Import envelope) to Tally, exactly once.
+   *
+   * Differs from `send` in the three ways a write must:
+   *
+   *   - **Never retried.** `send` goes through Patience, which re-sends the same
+   *     body after a timeout. TallyPrime cannot abandon a request, so the first
+   *     attempt may well have finished — and re-sending an import posts the
+   *     voucher twice. A timeout here surfaces as a timeout, and the caller
+   *     establishes what happened by reading back.
+   *   - **Never cached or memoised.** Two identical writes are two writes.
+   *   - **Clears the response cache afterwards,** success or failure, because
+   *     the books may have changed and a cached read would hide it for up to the
+   *     cache TTL. Cleared even on a timeout: the outcome is unknown, so nothing
+   *     cached before it can be trusted either.
+   *
+   * Still queued, so a write never overlaps a read at Tally's single-threaded
+   * listener, and still recorded with `noteQuery`, so the body sent is in the
+   * answer's provenance.
+   */
+  async sendWrite(body: string): Promise<TallyResponse> {
+    noteQuery(body);
+    try {
+      return await this.#queue.run(() => this.#sendNow(body, 'standard'));
+    } finally {
+      this.clearCache();
+    }
+  }
+
+  /** Drop every cached response. Called after any write; see `sendWrite`. */
+  clearCache(): void {
+    this.#cache.clear();
+    this.#cacheBytes = 0;
+  }
+
+  /**
    * The response cache and the send behind it.
    *
    * `noteDataFetchedAt` is called from in here, which is correct even though a

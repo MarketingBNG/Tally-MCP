@@ -5,7 +5,7 @@ import {
   validateBuckets,
   SCHEDULE_III_LABELS,
   type DatedBillAllocation,
-} from '../../src/tools/ageing.js';
+} from '../../src/tools/read/ageing.js';
 
 /**
  * Schedule III ageing buckets, and overdue from caller-supplied credit terms.

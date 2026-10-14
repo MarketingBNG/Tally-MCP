@@ -9,9 +9,9 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerMasterTools } from '../../src/tools/masters.js';
-import { registerVoucherTools } from '../../src/tools/vouchers.js';
-import { serializeToolPayload } from '../../src/tools/toolResult.js';
+import { registerMasterTools } from '../../src/tools/read/masters.js';
+import { registerVoucherTools } from '../../src/tools/read/vouchers.js';
+import { serializeToolPayload } from '../../src/tools/shared/toolResult.js';
 import { FIELD_HEAVY_PAGE_SIZE } from '../../src/utils/pagination.js';
 
 /**

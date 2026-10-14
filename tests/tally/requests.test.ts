@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import {
   buildReportRequest,
   buildCollectionRequest,
@@ -129,10 +129,22 @@ describe('request builders', () => {
 });
 
 /**
- * Security: the read-only guarantee is a headline claim of this project, so
- * it is asserted against the source tree rather than trusted.
+ * Security: the read path stays read-only, and the write path stays in one place.
+ *
+ * Writes exist (src/tools/create, alter, cancel, delete, confirm), so "no write
+ * verb anywhere" is no longer the claim. The claim is narrower and still
+ * asserted against the source tree rather than trusted:
+ *
+ *   1. an Import envelope is built in exactly one file, requests/import.ts;
+ *   2. only the write folders may import that file, so no read tool, the
+ *      export, or anything else can reach a write builder.
  */
-describe('read-only guarantee', () => {
+describe('write isolation', () => {
+  const WRITE_BUILDER = join('src', 'tally', 'requests', 'import.ts');
+  const WRITE_FOLDERS = ['create', 'alter', 'cancel', 'delete', 'confirm'].map((folder) =>
+    join('src', 'tools', folder) + sep
+  );
+
   function collectSourceFiles(dir: string, acc: string[] = []): string[] {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
@@ -142,12 +154,13 @@ describe('read-only guarantee', () => {
     return acc;
   }
 
-  it('contains no write-verb request anywhere in src/', () => {
+  it('builds write envelopes only in requests/import.ts', () => {
     const files = collectSourceFiles('src');
     expect(files.length).toBeGreaterThan(0);
 
     const offenders: string[] = [];
     for (const file of files) {
+      if (file === WRITE_BUILDER) continue;
       const contents = readFileSync(file, 'utf8');
       for (const verb of FORBIDDEN_WRITE_VERBS) {
         // Match the wire form only: prose and identifiers mentioning these
@@ -156,7 +169,28 @@ describe('read-only guarantee', () => {
           offenders.push(`${file}: ${verb}`);
         }
       }
+      if (contents.includes('IMPORTDATA')) offenders.push(`${file}: IMPORTDATA`);
     }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('lets only the write folders import the write builder', () => {
+    const offenders = collectSourceFiles('src').filter((file) => {
+      if (file === WRITE_BUILDER) return false;
+      if (WRITE_FOLDERS.some((folder) => file.startsWith(folder))) return false;
+      // `import type` is erased at compile time and cannot reach a builder, so
+      // shared helpers may name the write types; any runtime import may not.
+      return /^import (?!type )[^;]*from '[^']*requests\/import\.js'/m.test(readFileSync(file, 'utf8'));
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the read tools free of write tool imports', () => {
+    const offenders = collectSourceFiles(join('src', 'tools', 'read')).filter((file) =>
+      /from '\.\.\/+(?:\.\.\/)*(create|alter|cancel|delete|confirm)\//.test(readFileSync(file, 'utf8'))
+    );
 
     expect(offenders).toEqual([]);
   });

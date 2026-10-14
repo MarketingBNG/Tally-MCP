@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { buildCompanyListRequest } from '../../tally/requests.js';
 import { normalizeCompanies } from '../../tally/normalize.js';
 import type { AppConfig } from '../../config/config.js';
-import type { ToolDeps } from '../../tools/toolResult.js';
+import type { ToolDeps } from '../../tools/shared/toolResult.js';
 import { collectCompany, currentYearOnly } from '../collect.js';
 import { exportIsDue, readFingerprint } from '../fingerprint.js';
 import { assignFolderNames, companyPaths, type CompanyPaths } from '../folders.js';

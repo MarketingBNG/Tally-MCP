@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { MockTallyServer, callToolOk, createToolRegistry, makeDeps } from './harness.js';
-import { registerCompanyTools } from '../../src/tools/companies.js';
+import { registerCompanyTools } from '../../src/tools/read/companies.js';
 
 /**
  * A5: a CAPPED distinct-value count was reported as if it were a total.

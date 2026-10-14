@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import type { PriorYearStore } from '../tools/vouchers/priorYearStore.js';
+import type { PriorYearStore } from '../tools/read/vouchers/priorYearStore.js';
 
 /**
  * Earlier book years, kept between export runs so a change to today's books

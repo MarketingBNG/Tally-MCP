@@ -7,7 +7,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerFixedAssetTools } from '../../src/tools/fixedAssets.js';
+import { registerFixedAssetTools } from '../../src/tools/read/fixedAssets.js';
 
 /**
  * The fixed asset movement schedule.

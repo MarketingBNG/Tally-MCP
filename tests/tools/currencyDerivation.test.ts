@@ -6,7 +6,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerReportTools } from '../../src/tools/reports.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
 import {
   currencyForCountry,
   currencyIsComparable,

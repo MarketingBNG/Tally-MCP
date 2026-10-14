@@ -12,7 +12,7 @@ import type { Money } from '../utils/numbers.js';
  *
  * STATUS: partly in use, the rest still draft for review. `Account`, `Voucher`,
  * `EntryLine` and `SignedAmount` are wired — src/model/fromTally.ts adapts Tally
- * into them and src/tools/tieOut.ts reads them. Everything else is defined and
+ * into them and src/tools/read/tieOut.ts reads them. Everything else is defined and
  * unused ON PURPOSE: Annexure A §7.3 requires the audit-team domain owner to
  * sign the model off, and these types are how it is reviewed as code alongside
  * docs/normalised-ledger-model.md, which explains them for a non-engineer and

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { checkDoubleEntry, checkBalanceRollForward } from '../../src/tools/tieOut.js';
-import { computeMateriality } from '../../src/tools/materiality.js';
+import { checkDoubleEntry, checkBalanceRollForward } from '../../src/tools/read/tieOut.js';
+import { computeMateriality } from '../../src/tools/read/materiality.js';
 import { adaptAccounts, classifyGroup, classifyVoucherFamily, toSignedAmount } from '../../src/model/fromTally.js';
 import type { Account, SignedAmount, Voucher } from '../../src/model/ledger.js';
 import type { Group, Ledger } from '../../src/tally/normalize.js';

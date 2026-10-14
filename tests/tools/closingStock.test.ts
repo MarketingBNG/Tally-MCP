@@ -7,7 +7,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerClosingStockTools } from '../../src/tools/closingStock.js';
+import { registerClosingStockTools } from '../../src/tools/read/closingStock.js';
 
 /**
  * `tally_get_closing_stock`, built 2026-08-14 once a company finally populated

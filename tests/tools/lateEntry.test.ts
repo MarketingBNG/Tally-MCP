@@ -8,7 +8,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerVoucherTestTools } from '../../src/tools/testVouchers.js';
+import { registerVoucherTestTools } from '../../src/tools/read/testVouchers.js';
 
 /**
  * `tally_test_vouchers` test "late_entry": when a voucher was last WRITTEN.

@@ -10,8 +10,13 @@
      "Show me last month's sales"
      "What did I spend with Google this year?"
 
-  It can only READ your books. It cannot create, change or delete anything in
-  TallyPrime. There is no way for it to alter your accounts.
+  It can also post entries and set up ledgers for you, but ONLY with your
+  approval: Claude first shows you exactly what it would change, and nothing
+  is written to TallyPrime until you say yes. Every change is logged.
+
+  Want it read-only? In Claude Desktop, open Settings > Connectors > tally-mcp
+  and block "tally_confirm_write". Claude can then still show previews, but
+  can never change your books.
 
 
 -------------------------------------------------------------------------------

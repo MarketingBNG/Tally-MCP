@@ -23,22 +23,22 @@ import {
   resolvePeriodForCompany,
   type ResolvedCurrency,
   type ToolDeps,
-} from '../tools/toolResult.js';
-import { fetchLedgers } from '../tools/ledgers.js';
-import { fetchGroups } from '../tools/groups.js';
-import { fetchVoucherTypes } from '../tools/voucherTypes.js';
-import { fetchStockItems } from '../tools/inventory.js';
-import { fetchVouchers, type PriorYearStore } from '../tools/vouchers.js';
-import { executeStatement, type ExecutedStatement } from '../tools/reports.js';
-import { executeOutstanding, type ExecutedOutstanding } from '../tools/outstanding.js';
-import { executeClosingStock, type ExecutedClosingStock } from '../tools/closingStock.js';
+} from '../tools/shared/toolResult.js';
+import { fetchLedgers } from '../tools/read/ledgers.js';
+import { fetchGroups } from '../tools/read/groups.js';
+import { fetchVoucherTypes } from '../tools/read/voucherTypes.js';
+import { fetchStockItems } from '../tools/read/inventory.js';
+import { fetchVouchers, type PriorYearStore } from '../tools/read/vouchers.js';
+import { executeStatement, type ExecutedStatement } from '../tools/read/reports.js';
+import { executeOutstanding, type ExecutedOutstanding } from '../tools/read/outstanding.js';
+import { executeClosingStock, type ExecutedClosingStock } from '../tools/read/closingStock.js';
 import {
   executeGenericReport,
   type ExecutedReport,
   type ReportKey,
-} from '../tools/genericReport.js';
+} from '../tools/read/genericReport.js';
 import { bookYearFor, type DateRange } from '../utils/dates.js';
-import { bookYearsSpanning } from '../tools/vouchers.js';
+import { bookYearsSpanning } from '../tools/read/vouchers.js';
 
 /**
  * Everything the workbook needs, fetched once.

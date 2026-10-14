@@ -8,10 +8,10 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerMasterTools } from '../../src/tools/masters.js';
-import { registerBankReconciliationTools } from '../../src/tools/bankReconciliation.js';
-import { registerOutstandingTools } from '../../src/tools/outstanding.js';
-import { registerReportTools } from '../../src/tools/reports.js';
+import { registerMasterTools } from '../../src/tools/read/masters.js';
+import { registerBankReconciliationTools } from '../../src/tools/read/bankReconciliation.js';
+import { registerOutstandingTools } from '../../src/tools/read/outstanding.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
 
 /**
  * Tools and options added after v2: voucher type discovery, bank

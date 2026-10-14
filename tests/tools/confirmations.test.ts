@@ -7,7 +7,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerConfirmationTools } from '../../src/tools/confirmations.js';
+import { registerConfirmationTools } from '../../src/tools/read/confirmations.js';
 
 /**
  * The balance-confirmation selection list.

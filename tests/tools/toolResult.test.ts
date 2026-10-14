@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findByName } from '../../src/tools/toolResult.js';
+import { findByName } from '../../src/tools/shared/toolResult.js';
 
 /**
  * `fetchCollection` is exercised end-to-end through every master tool in

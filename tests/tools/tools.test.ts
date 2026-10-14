@@ -9,12 +9,12 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerCompanyTools } from '../../src/tools/companies.js';
-import { registerMasterTools } from '../../src/tools/masters.js';
-import { registerReportTools } from '../../src/tools/reports.js';
-import { registerVoucherTools } from '../../src/tools/vouchers.js';
-import { registerLedgerTransactionTools } from '../../src/tools/ledgerTransactions.js';
-import { registerPartyStatementTools } from '../../src/tools/partyStatement.js';
+import { registerCompanyTools } from '../../src/tools/read/companies.js';
+import { registerMasterTools } from '../../src/tools/read/masters.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
+import { registerVoucherTools } from '../../src/tools/read/vouchers.js';
+import { registerLedgerTransactionTools } from '../../src/tools/read/ledgerTransactions.js';
+import { registerPartyStatementTools } from '../../src/tools/read/partyStatement.js';
 import type { Money } from '../../src/utils/numbers.js';
 
 /**

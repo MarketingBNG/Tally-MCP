@@ -1,4 +1,4 @@
-import { checkConnection } from '../tools/connection.js';
+import { checkConnection } from '../tools/read/connection.js';
 import type { TallyClient } from './TallyClient.js';
 import type { AppConfig } from '../config/config.js';
 import type { Logger } from '../utils/logger.js';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summariseMovements } from '../../src/tools/summarise.js';
+import { summariseMovements } from '../../src/tools/read/summarise.js';
 import type { Voucher } from '../../src/tally/normalize.js';
 
 /**

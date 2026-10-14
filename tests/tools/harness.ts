@@ -5,7 +5,7 @@ import { MockTallyServer } from '../../mock-tally/server.js';
 import { TallyClient } from '../../src/tally/TallyClient.js';
 import { loadConfig, type AppConfig } from '../../src/config/config.js';
 import { createLogger } from '../../src/utils/logger.js';
-import type { ToolDeps } from '../../src/tools/toolResult.js';
+import type { ToolDeps } from '../../src/tools/shared/toolResult.js';
 
 /**
  * Test harness for tool handlers.

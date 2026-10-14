@@ -7,7 +7,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerMasterTools } from '../../src/tools/masters.js';
+import { registerMasterTools } from '../../src/tools/read/masters.js';
 
 /**
  * Two gaps the connector review recorded, covered together because both need a

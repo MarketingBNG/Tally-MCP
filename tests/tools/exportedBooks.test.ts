@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { toCsv, csvIndex, csvFileName } from '../../src/export/csv.js';
 import type { Table } from '../../src/export/tables.js';
-import { registerExportedBookTools } from '../../src/tools/exportedBooks.js';
+import { registerExportedBookTools } from '../../src/tools/read/exportedBooks.js';
 import {
   MockTallyServer,
   callToolError,

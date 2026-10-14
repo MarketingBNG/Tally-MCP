@@ -8,7 +8,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerWorkpaperTools } from '../../src/tools/workpaper.js';
+import { registerWorkpaperTools } from '../../src/tools/read/workpaper.js';
 
 /**
  * `tally_make_workpaper` with `report` — documenting one of TallyPrime's own

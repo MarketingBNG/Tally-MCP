@@ -8,19 +8,19 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerConnectionTools } from '../../src/tools/connection.js';
-import { registerCompanyTools } from '../../src/tools/companies.js';
-import { registerMasterTools } from '../../src/tools/masters.js';
-import { registerReportTools } from '../../src/tools/reports.js';
-import { registerVoucherTools } from '../../src/tools/vouchers.js';
-import { registerInventoryTools } from '../../src/tools/inventory.js';
-import { registerOutstandingTools } from '../../src/tools/outstanding.js';
-import { registerGstTools } from '../../src/tools/gst.js';
-import { registerSearchTools } from '../../src/tools/search.js';
-import { registerLedgerTransactionTools } from '../../src/tools/ledgerTransactions.js';
-import { registerPartyStatementTools } from '../../src/tools/partyStatement.js';
-import { registerTieOutTools } from '../../src/tools/tieOut.js';
-import { registerMaterialityTools } from '../../src/tools/materiality.js';
+import { registerConnectionTools } from '../../src/tools/read/connection.js';
+import { registerCompanyTools } from '../../src/tools/read/companies.js';
+import { registerMasterTools } from '../../src/tools/read/masters.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
+import { registerVoucherTools } from '../../src/tools/read/vouchers.js';
+import { registerInventoryTools } from '../../src/tools/read/inventory.js';
+import { registerOutstandingTools } from '../../src/tools/read/outstanding.js';
+import { registerGstTools } from '../../src/tools/read/gst.js';
+import { registerSearchTools } from '../../src/tools/read/search.js';
+import { registerLedgerTransactionTools } from '../../src/tools/read/ledgerTransactions.js';
+import { registerPartyStatementTools } from '../../src/tools/read/partyStatement.js';
+import { registerTieOutTools } from '../../src/tools/read/tieOut.js';
+import { registerMaterialityTools } from '../../src/tools/read/materiality.js';
 
 /**
  * Conformance with Build Specification v1.0 §4 and §6.

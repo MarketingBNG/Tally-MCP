@@ -43,7 +43,7 @@ billing and reconciles its bank — one company would close all three.
 
 **Delivered as `tally_get_closing_stock`**, covering the two report IDs the
 2026-08-14 probe unblocked: `Stock Summary` and `Godown Summary`. See
-[../src/tools/closingStock.ts](../src/tools/closingStock.ts).
+[../src/tools/read/closingStock.ts](../src/tools/read/closingStock.ts).
 
 **Why a narrow tool rather than the generic escape hatch below.** With exactly two
 verified IDs, both returning the SAME wire shape, a generic `tally_get_report`
@@ -67,7 +67,7 @@ argument above stopped holding: the probe run found six MORE working report IDs,
 which is well past the "third report with a genuinely different shape" threshold
 this section set for itself. `tally_get_report` is built, with a closed enum of
 nine live-verified IDs, in
-[../src/tools/genericReport.ts](../src/tools/genericReport.ts).
+[../src/tools/read/genericReport.ts](../src/tools/read/genericReport.ts).
 
 `Ratio Analysis`, `Sales Register`, `Purchase Register` and `Journal Register` are
 in it and return real content. `Negative Ledgers` — the audit-grade one, and the
@@ -481,7 +481,7 @@ explicitly does not claim to answer "who changed this" or "what changed". Eviden
 return Tally's own month-by-month movement (debit, credit, net per month),
 labelled explicitly as movement and never as a classified statement. The
 operating/investing/financing split remains a judgement for the accountant, as
-the tool descriptions say. See [../src/tools/flowReports.ts](../src/tools/flowReports.ts).
+the tool descriptions say. See [../src/tools/read/flowReports.ts](../src/tools/read/flowReports.ts).
 
 **Write support.** "Post this entry" will never work while the server is
 read-only. That is a defensible design choice, but if "any prompt" is meant

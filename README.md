@@ -2,9 +2,10 @@
 
 [![CI](https://github.com/MarketingBNG/Tally-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/MarketingBNG/Tally-MCP/actions/workflows/ci.yml)
 
-A read-only [MCP](https://modelcontextprotocol.io) server that lets Claude
-Desktop read accounting data directly out of TallyPrime running on the same
-machine, so you can audit and analyse it in plain language.
+An [MCP](https://modelcontextprotocol.io) server that lets Claude Desktop read
+accounting data directly out of TallyPrime running on the same machine, so you
+can audit and analyse it in plain language — and, with your approval of each
+change, post entries and maintain masters in it.
 
 The server fetches, filters and normalises Tally data. **Claude does the
 reasoning.** There is no audit engine here and no hardcoded notion of what
@@ -43,9 +44,13 @@ Claude Desktop  --MCP/stdio-->  tally-mcp  --HTTP-->  TallyPrime (127.0.0.1:9000
 
 - **Local only.** No cloud, no database, no telemetry. Your accounting data
   never leaves your machine.
-- **Read-only, structurally.** Every request is `TALLYREQUEST=Export`. There is
-  no code path that can create, alter or delete anything in Tally, and a test
-  asserts this against the source tree on every run.
+- **Reads are read-only, structurally.** Every read tool sends only
+  `TALLYREQUEST=Export`. Writes live in their own folders and their own tools
+  (see "Writing to TallyPrime" below), and a test asserts on every run that no
+  read tool can reach the write code.
+- **Every write is previewed, approved, then checked.** A write tool only shows
+  what it would change; nothing reaches TallyPrime until `tally_confirm_write`
+  is called with that preview's token, and the books are read back afterwards.
 - **Stateless.** Claude Desktop launches the process; it holds nothing.
 
 > **One thing on this page is no longer true by default.** "Your accounting data
@@ -835,10 +840,16 @@ through is a bug worth a sample.
 
 ## Security and scope
 
-- **Read-only by construction.** Only `Export` requests are built, and
-  `tests/tally/requests.test.ts` scans `src/` on every run to assert no write
-  verb exists anywhere. This covers the scheduled export too: it sends the same
-  builders' requests and writes nothing to Tally.
+- **Reads are read-only by construction; writes are isolated.** Import
+  (write) envelopes are built in exactly one file, `src/tally/requests/import.ts`,
+  and only the write folders (`src/tools/create`, `alter`, `cancel`, `delete`,
+  `confirm`) may import it. `tests/tally/requests.test.ts` asserts both on every
+  run. The scheduled export sends only read requests and writes nothing to Tally.
+- **Write tools can be switched off per tool.** Each write is its own tool, so
+  an accountant who wants Claude read-only can block `tally_create_*`,
+  `tally_alter_*`, `tally_cancel_*`, `tally_delete_*` and `tally_confirm_write`
+  in Claude Desktop's connector settings. Blocking `tally_confirm_write` alone is
+  enough to make every write impossible while keeping previews.
 - **The daily spreadsheet puts data in Google Drive — read that section.** No
   Google API is called from this codebase and no credential is created here, so
   none can leak. But the folder is deliberately one Drive syncs, and that is a
@@ -1008,3 +1019,65 @@ data is more useful than tidy data.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Writing to TallyPrime
+
+Added after 1.0.9. Every tool below changes the books, so each one works in two
+steps:
+
+1. **Preview.** The tool checks the change against the live books — names
+   exist, debits equal credits, the date is inside the books, nothing would be
+   silently overwritten — and returns exactly what it would write plus a
+   `confirmToken`. **Nothing is changed.**
+2. **Confirm.** Only after the user approves the preview, Claude calls
+   `tally_confirm_write` with the token. The server re-checks the books (if the
+   target changed meanwhile, it refuses), sends the change **once, never
+   retried**, judges TallyPrime's reply on its exact counters, reads the books
+   back, and records everything in the write log.
+
+| Folder | Tools |
+| --- | --- |
+| `src/tools/create` | `tally_create_ledger`, `tally_create_voucher`, `tally_create_master` |
+| `src/tools/alter` | `tally_alter_ledger`, `tally_alter_voucher`, `tally_alter_master` |
+| `src/tools/cancel` | `tally_cancel_voucher` |
+| `src/tools/delete` | `tally_delete_ledger`, `tally_delete_voucher`, `tally_delete_master` |
+| `src/tools/confirm` | `tally_confirm_write`, `tally_list_write_log` |
+
+`tally_create_master` and its alter/delete counterparts cover groups, cost
+centres, units, stock groups, godowns and stock items. Vouchers are accounting
+vouchers of any type (Journal, Payment, Receipt, Contra, Sales, Purchase,
+Credit/Debit Note, custom types), with bill-wise allocations. **Not yet
+supported:** item invoices with inventory lines, GST/TDS tax computation (post
+the tax ledgers as ordinary lines), cost-centre allocations on voucher lines,
+and voucher types, budgets or other masters.
+
+**The write log** is `%LOCALAPPDATA%\tally-mcp\write-log.jsonl` (override with
+`TALLY_WRITE_LOG_PATH`): one line per write with the preview, the exact XML
+sent, TallyPrime's reply, the read-back and how to undo it.
+`tally_list_write_log` reads it.
+
+### TallyPrime behaviour the write tools are built around
+
+Verified live on 2026-10-14. Each is a way a naive integration corrupts books
+without any error:
+
+- **Create silently overwrites.** Importing a ledger with `ACTION="Create"`
+  under a name that exists alters the existing ledger and reports success. Every
+  create checks the name first, and success is judged on `CREATED`, never on
+  `ERRORS`.
+- **Alter on a missing voucher creates one.** An alter aimed at a voucher that
+  no longer exists — or aimed by `REMOTEID` — is not refused: TallyPrime posts a
+  new voucher. Vouchers are targeted by MasterID, re-checked by AlterId
+  immediately before sending, and an unexpected `CREATED` is reported with the
+  new voucher's MasterId.
+- **A cancel is counted as an alter.** TallyPrime reports `ALTERED 1`, not
+  `CANCELLED 1`, for a cancelled voucher.
+- **"Voucher date is missing"** means TallyPrime rejected the date, usually
+  because it runs in Educational mode (only the 1st, 2nd and 31st are allowed).
+- **A retried import posts twice.** TallyPrime keeps working on a request after
+  the client gives up, so writes are never retried after a timeout; the result
+  is reported as `WRITE_OUTCOME_UNKNOWN` with what the read-back found.
+- **"Cannot be deleted!" comes with no reason.** Usually the master is still in
+  use. Ledgers whose vouchers were all deleted did delete in testing, but two
+  test ledgers stayed undeletable with nothing referencing them; the cause was
+  not established. TallyPrime's own delete screen shows the reason.

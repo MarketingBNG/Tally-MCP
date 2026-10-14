@@ -7,10 +7,10 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerTdsTools } from '../../src/tools/tds.js';
-import { registerReportTools } from '../../src/tools/reports.js';
-import { registerGenericReportTools } from '../../src/tools/genericReport.js';
-import { checkStockTieOut } from '../../src/tools/tieOut.js';
+import { registerTdsTools } from '../../src/tools/read/tds.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
+import { registerGenericReportTools } from '../../src/tools/read/genericReport.js';
+import { checkStockTieOut } from '../../src/tools/read/tieOut.js';
 import { Decimal } from 'decimal.js';
 
 /**

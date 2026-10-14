@@ -7,8 +7,8 @@ import {
   callToolEnvelope,
   type ToolRegistry,
 } from './harness.js';
-import { registerReportTools } from '../../src/tools/reports.js';
-import { registerMasterTools } from '../../src/tools/masters.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
+import { registerMasterTools } from '../../src/tools/read/masters.js';
 
 /**
  * One tool call, one copy of each request.

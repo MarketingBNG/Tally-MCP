@@ -7,8 +7,8 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerTieOutTools } from '../../src/tools/tieOut.js';
-import type { Finding } from '../../src/tools/findings.js';
+import { registerTieOutTools } from '../../src/tools/read/tieOut.js';
+import type { Finding } from '../../src/tools/read/findings.js';
 
 /**
  * `tally_check_tie_out` across several companies, with typed findings and a

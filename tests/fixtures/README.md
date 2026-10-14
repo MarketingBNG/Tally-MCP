@@ -55,3 +55,18 @@ quietly delete the test:
 
 The unredacted originals live in `samples/`, which is gitignored — it contains
 real accounting data and must never be committed.
+
+## Import (write) responses
+
+`import-*.xml` are TallyPrime's verbatim replies to `Import Data` requests,
+captured live on 2026-10-14 against a test company. They carry only counters
+and the names of throwaway test masters ("MCP Test Ledger 1", "MCP No Such
+Group"), so there was nothing to redact.
+
+- `import-created.xml` — a ledger created: `CREATED 1`.
+- `import-create-existing-altered.xml` — the SAME create sent again. TallyPrime
+  did not refuse it: it altered the existing ledger and reported `ALTERED 1,
+  ERRORS 0`. This is why a create is judged on `CREATED`, never on `ERRORS`.
+- `import-line-error.xml` — a ledger under a group that does not exist:
+  `EXCEPTIONS 1` plus a `LINEERROR`, with `ERRORS` still 0.
+- `import-deleted.xml` — the test ledger deleted: `DELETED 1`.

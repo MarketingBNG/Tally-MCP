@@ -12,6 +12,24 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.1.0 — unreleased
+**Claude can now make changes in TallyPrime — only with your approval.**
+It can create, change and delete ledgers, groups, cost centres, units, stock
+groups, godowns and stock items, and post, change, cancel or delete vouchers
+of any type. Every change works in two steps: Claude first shows you exactly
+what it would write, and nothing reaches TallyPrime until you approve it. It
+then checks the books to confirm the change landed, and keeps a log of every
+change with how to undo it.
+
+**More you can ask about.** Cost centres, units, stock groups, godowns, stock
+categories and budgets can now be listed. Looking up a ledger now shows its
+address and contact details. And vouchers can be filtered to just the
+cancelled or optional ones, the same lists as Tally's Exception Reports.
+
+**Want it to stay read-only?** In Claude Desktop, open Settings > Connectors
+> tally-mcp and block "tally_confirm_write". Previews still work; changes
+cannot be made.
+
 ## 1.0.9 — 2026-10-10
 **Totals now match Tally's reports when there are optional vouchers.**
 Optional (memorandum) vouchers were being counted in movement totals, even

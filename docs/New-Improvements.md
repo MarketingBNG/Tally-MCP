@@ -3,7 +3,7 @@
 > ## Status as at 14 Aug 2026 — read this before treating anything below as outstanding
 >
 > Four of these ten are **built**, and not as four separate tools. They were merged
-> into one `tally_test_vouchers` (`src/tools/testVouchers.ts`), because all four are
+> into one `tally_test_vouchers` (`src/tools/read/testVouchers.ts`), because all four are
 > the same sentence — define a voucher population, then run a procedure over it —
 > and four copies of the population logic is four chances for them to disagree about
 > what "the journals in March" means.

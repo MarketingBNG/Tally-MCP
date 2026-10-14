@@ -6,7 +6,7 @@ import {
   type CompanyScope,
   type TallyRequestOptions,
 } from '../tally/requests.js';
-import type { ToolDeps } from '../tools/toolResult.js';
+import type { ToolDeps } from '../tools/shared/toolResult.js';
 
 /**
  * "Has anything changed?" — asked cheaply, every minute.

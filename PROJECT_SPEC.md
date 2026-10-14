@@ -79,6 +79,7 @@ Claude Desktop  --MCP-->  Tally MCP Server (Node/TS, local process)  --HTTP-->  
   put it there, but the whole point of the folder is that Drive does.
 - The MCP server is a stateless local process that Claude Desktop launches via stdio.
 - Read-only, always. No tool may create/update/delete/alter/modify Tally data. If some Tally integration mechanism could write data, don't wire it up, even partially.
+  - **Amended 2026-10-14 by the project owner:** write tools are now in scope. Read tools stay read-only; writes are separate tools under `src/tools/{create,alter,cancel,delete}`, each preview-only until `tally_confirm_write`. See README "Writing to TallyPrime".
 
 ## Explicitly out of scope
 

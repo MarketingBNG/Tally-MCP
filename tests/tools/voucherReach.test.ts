@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeVoucherReachShortfall } from '../../src/tools/vouchers.js';
+import { describeVoucherReachShortfall } from '../../src/tools/read/vouchers.js';
 import type { Voucher } from '../../src/tally/normalize.js';
 
 /**

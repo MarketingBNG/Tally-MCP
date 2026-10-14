@@ -6,7 +6,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerVoucherTools } from '../../src/tools/vouchers.js';
+import { registerVoucherTools } from '../../src/tools/read/vouchers.js';
 import { registerSlices } from '../../src/utils/dates.js';
 
 /**

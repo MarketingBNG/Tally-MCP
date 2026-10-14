@@ -239,3 +239,16 @@ export function memoizeWithinCall<T>(key: string, produce: () => Promise<T>): Pr
   inFlight.set(key, started);
   return started;
 }
+
+/**
+ * Drop everything memoised so far in the current tool call.
+ *
+ * The memo's premise — "within a single question, Tally's answer to the same
+ * request cannot have legitimately changed" — is false across a WRITE. A
+ * confirm reads the ledgers to re-check the preview, writes, then reads the
+ * same ledgers back; without this the read-back is served the pre-write list
+ * and every write looks unconfirmed (or, worse, a failed delete looks done).
+ */
+export function forgetWithinCall(): void {
+  storage.getStore()?.inFlight?.clear();
+}

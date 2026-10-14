@@ -7,8 +7,8 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerReportTools } from '../../src/tools/reports.js';
-import { buildTrend } from '../../src/tools/statementComparison.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
+import { buildTrend } from '../../src/tools/read/statementComparison.js';
 
 /**
  * `tally_get_statement` with `periods` — one statement across N periods.

@@ -6,7 +6,7 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerCompanyTools } from '../../src/tools/companies.js';
+import { registerCompanyTools } from '../../src/tools/read/companies.js';
 
 /**
  * `tally_get_company` must scope its ledger fetch to the company it was asked

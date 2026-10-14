@@ -9,7 +9,7 @@ import {
   assertCompanyIsLoaded,
   resolvePeriodForCompany,
   type ToolDeps,
-} from '../../src/tools/toolResult.js';
+} from '../../src/tools/shared/toolResult.js';
 
 /**
  * The wrong-attribution bug these cover.

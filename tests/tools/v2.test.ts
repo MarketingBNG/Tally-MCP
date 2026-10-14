@@ -8,14 +8,14 @@ import {
   makeDeps,
   type ToolRegistry,
 } from './harness.js';
-import { registerCompanyTools } from '../../src/tools/companies.js';
-import { registerVoucherTools } from '../../src/tools/vouchers.js';
-import { registerInventoryTools } from '../../src/tools/inventory.js';
-import { registerMasterTools } from '../../src/tools/masters.js';
-import { registerOutstandingTools } from '../../src/tools/outstanding.js';
-import { registerGstTools } from '../../src/tools/gst.js';
-import { registerReportTools } from '../../src/tools/reports.js';
-import { registerSearchTools } from '../../src/tools/search.js';
+import { registerCompanyTools } from '../../src/tools/read/companies.js';
+import { registerVoucherTools } from '../../src/tools/read/vouchers.js';
+import { registerInventoryTools } from '../../src/tools/read/inventory.js';
+import { registerMasterTools } from '../../src/tools/read/masters.js';
+import { registerOutstandingTools } from '../../src/tools/read/outstanding.js';
+import { registerGstTools } from '../../src/tools/read/gst.js';
+import { registerReportTools } from '../../src/tools/read/reports.js';
+import { registerSearchTools } from '../../src/tools/read/search.js';
 
 /**
  * The shared company fixture, but with books covering the voucher fixtures.
