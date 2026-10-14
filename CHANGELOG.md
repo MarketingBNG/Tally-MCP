@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.1.1 — unreleased
+## 1.1.1 — 2026-10-14
 - In Claude's connector settings the TallyPrime tools are now grouped into read-only and write tools instead of one "Other tools" list, so all writes can be blocked in one click.
 
 ## 1.1.0 — 2026-10-14
