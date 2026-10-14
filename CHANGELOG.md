@@ -12,7 +12,7 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
-## 1.2.0 — unreleased
+## 1.2.0 — 2026-10-14
 **Claude can now post item invoices, split entries across cost centres and move stock.**
 - Sales, purchase, credit and debit notes, delivery and receipt notes can carry stock item lines (item, quantity, rate, godown and the sales/purchase ledger).
 - Any ledger or item line can be split across cost centres; the shares must add up to the line.
