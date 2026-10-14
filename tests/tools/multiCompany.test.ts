@@ -85,7 +85,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+  mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
   mock.onBodyContaining('<ID>Currencies</ID>', {
     body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',
   });
@@ -230,7 +230,7 @@ describe('differences are computed only within one currency', () => {
 
   it('computes differences when every company shares a currency', async () => {
     mock.reset();
-    mock.onBodyContaining('List of Companies', { body: TWO_DOLLAR_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: TWO_DOLLAR_COMPANIES });
     mock.onBodyContaining('<ID>Currencies</ID>', {
       body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',
     });
@@ -260,7 +260,7 @@ describe('differences are computed only within one currency', () => {
 
   it('never calls a cross-company difference a movement over time', async () => {
     mock.reset();
-    mock.onBodyContaining('List of Companies', { body: TWO_DOLLAR_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: TWO_DOLLAR_COMPANIES });
     mock.onBodyContaining('<ID>Currencies</ID>', {
       body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',
     });

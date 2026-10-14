@@ -116,7 +116,7 @@ describe('falling back to the live books', () => {
     const mock = new MockTallyServer();
     // The liveness probe asks for the company list; anything parseable is a
     // Tally that is answering, which is all this test turns on.
-    mock.onBodyContaining('List of Companies', {
+    mock.onBodyContaining('TallyMcpCompanies', {
       body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',
     });
     const port = await mock.start();

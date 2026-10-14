@@ -424,7 +424,7 @@ describe('TallyClient after a timeout', () => {
     const fetchImpl: typeof fetch = (_url, init) => {
       const body = typeof init?.body === 'string' ? init.body : '';
       bodies.push(body);
-      if (!body.includes('List of Companies') && remaining > 0) {
+      if (!body.includes('TallyMcpCompanies') && remaining > 0) {
         remaining -= 1;
         const error = new Error('The operation was aborted');
         error.name = 'AbortError';
@@ -445,7 +445,7 @@ describe('TallyClient after a timeout', () => {
     expect(response.body).toContain('ENVELOPE');
     // The request, a probe proving Tally is free, then the request again.
     expect(bodies[0]).toContain('report');
-    expect(bodies[1]).toContain('List of Companies');
+    expect(bodies[1]).toContain('TallyMcpCompanies');
     expect(bodies[2]).toContain('report');
   });
 

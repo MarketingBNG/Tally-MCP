@@ -5,6 +5,7 @@ import type { MasterFields, MasterTag } from '../../tally/requests/import.js';
 import { TallyError } from '../../tally/TallyError.js';
 import { fetchStockItems } from '../read/inventory.js';
 import { fetchSimpleMasters } from '../read/simpleMasters.js';
+import { fetchVoucherTypes } from '../read/voucherTypes.js';
 import type { ToolDeps } from './toolResult.js';
 import { currentGroups, findExisting, requireExisting } from './writeInputs.js';
 
@@ -17,7 +18,17 @@ import { currentGroups, findExisting, requireExisting } from './writeInputs.js';
  * tools, because a ledger carries far more an accountant needs to see.
  */
 
-export const MASTER_KINDS = ['group', 'costCentre', 'costCategory', 'unit', 'stockGroup', 'godown', 'stockItem'] as const;
+export const MASTER_KINDS = [
+  'group',
+  'costCentre',
+  'costCategory',
+  'unit',
+  'stockGroup',
+  'godown',
+  'stockItem',
+  'voucherType',
+  'budget',
+] as const;
 export type MasterKind = (typeof MASTER_KINDS)[number];
 
 /** One existing master, reduced to what the write tools compare. */
@@ -28,6 +39,8 @@ export interface MasterRecord {
   baseUnits?: string | null;
   openingQuantity?: string | null;
   openingValue?: string | null;
+  /** Voucher type only: the first series' numbering method. */
+  numberingMethod?: string | null;
 }
 
 interface KindSpec {
@@ -73,22 +86,48 @@ export const KIND_SPECS: Record<MasterKind, KindSpec> = {
     accepts: ['baseUnits', 'openingQuantity', 'openingRate'],
     canRename: true,
   },
+  // Parent is the voucher type it is based on (Sales, Journal, ...), which
+  // decides how TallyPrime treats every voucher of the new type.
+  voucherType: {
+    tag: 'VOUCHERTYPE',
+    label: 'voucher type',
+    parentKind: 'voucherType',
+    parentRequired: true,
+    accepts: ['numberingMethod'],
+    canRename: true,
+  },
+  // The budget master only. Budget AMOUNTS sit on each ledger and could not be
+  // read back over HTTP (live 2026-10-14), so they are not written.
+  budget: { tag: 'BUDGET', label: 'budget', parentKind: 'budget', parentRequired: false, accepts: [], canRename: true },
 };
 
 /** The kinds a caller may write. Cost categories are read-only here. */
-export const WRITABLE_KINDS = ['group', 'costCentre', 'unit', 'stockGroup', 'godown', 'stockItem'] as const;
+export const WRITABLE_KINDS = [
+  'group',
+  'costCentre',
+  'unit',
+  'stockGroup',
+  'godown',
+  'stockItem',
+  'voucherType',
+  'budget',
+] as const;
 
 export const masterInputShape = {
   kind: z
     .enum(WRITABLE_KINDS)
-    .describe('group, costCentre, unit, stockGroup, godown or stockItem. (Ledgers have their own tools.)'),
+    .describe(
+      'group, costCentre, unit, stockGroup, godown, stockItem, voucherType or budget. (Ledgers ' +
+        'have their own tools.)'
+    ),
   parent: z
     .string()
     .trim()
     .optional()
     .describe(
       'group: parent group (required). costCentre: parent cost centre. stockGroup: parent stock ' +
-        'group. godown: parent godown. stockItem: its stock group. Empty for top level.'
+        'group. godown: parent godown. stockItem: its stock group. voucherType: the type it is ' +
+        'based on, e.g. "Sales" or "Journal" (required). budget: parent budget. Empty for top level.'
     ),
   category: z.string().trim().min(1).optional().describe('costCentre only: its cost category.'),
   formalName: z.string().trim().min(1).max(100).optional().describe('unit only: full name, e.g. "Kilograms".'),
@@ -96,6 +135,10 @@ export const masterInputShape = {
   baseUnits: z.string().trim().min(1).optional().describe('stockItem only: unit symbol, e.g. "kg". Required on create.'),
   openingQuantity: z.number().positive().optional().describe('stockItem only: opening quantity in its base unit.'),
   openingRate: z.number().nonnegative().optional().describe('stockItem only: opening rate per base unit.'),
+  numberingMethod: z
+    .enum(['Automatic', 'Manual'])
+    .optional()
+    .describe('voucherType only: number vouchers automatically or by hand.'),
 };
 
 export interface MasterInput {
@@ -106,6 +149,7 @@ export interface MasterInput {
   baseUnits?: string | undefined;
   openingQuantity?: number | undefined;
   openingRate?: number | undefined;
+  numberingMethod?: 'Automatic' | 'Manual' | undefined;
 }
 
 const SIMPLE_TYPE: Partial<Record<MasterKind, SimpleMasterType>> = {
@@ -114,6 +158,7 @@ const SIMPLE_TYPE: Partial<Record<MasterKind, SimpleMasterType>> = {
   unit: 'Unit',
   stockGroup: 'StockGroup',
   godown: 'Godown',
+  budget: 'Budget',
 };
 
 /** Every existing master of a kind, read fresh enough for a write decision. */
@@ -130,6 +175,13 @@ export async function listMasters(deps: ToolDeps, company: string, kind: MasterK
       openingValue: item.openingValue?.amount ?? null,
     }));
   }
+  if (kind === 'voucherType') {
+    return (await fetchVoucherTypes(deps, company)).voucherTypes.map((t) => ({
+      name: t.name,
+      parent: t.parent,
+      numberingMethod: t.numberingSeries[0]?.method ?? null,
+    }));
+  }
   const type = SIMPLE_TYPE[kind];
   if (type === undefined) throw new Error(`No list for ${kind}`);
   const { data } = await fetchSimpleMasters(deps, company, type);
@@ -139,7 +191,17 @@ export async function listMasters(deps: ToolDeps, company: string, kind: MasterK
 /** Refuse any field the kind does not take, rather than sending it to TallyPrime to guess at. */
 export function assertFieldsFitKind(kind: MasterKind, input: MasterInput): void {
   const spec = KIND_SPECS[kind];
-  const stray = (['category', 'formalName', 'decimalPlaces', 'baseUnits', 'openingQuantity', 'openingRate'] as const)
+  const stray = (
+    [
+      'category',
+      'formalName',
+      'decimalPlaces',
+      'baseUnits',
+      'openingQuantity',
+      'openingRate',
+      'numberingMethod',
+    ] as const
+  )
     .filter((field) => input[field] !== undefined && !spec.accepts.includes(field));
   if (input.parent !== undefined && input.parent !== '' && spec.parentKind === null) stray.unshift('parent' as never);
   if (stray.length > 0) {
@@ -184,6 +246,7 @@ export async function resolveMasterFields(
   }
   if (input.formalName !== undefined) shown.formalName = fields.formalName = input.formalName;
   if (input.decimalPlaces !== undefined) shown.decimalPlaces = fields.decimalPlaces = input.decimalPlaces;
+  if (input.numberingMethod !== undefined) shown.numberingMethod = fields.numberingMethod = input.numberingMethod;
 
   let units = baseUnitsOfExisting ?? undefined;
   if (input.baseUnits !== undefined) {

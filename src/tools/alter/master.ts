@@ -23,7 +23,8 @@ export function registerAlterMasterTool(server: McpServer, deps: ToolDeps): void
     'tally_alter_master',
     {
       description:
-        'Change an EXISTING group, cost centre, unit, stock group, godown or stock item in ' +
+        'Change an EXISTING group, cost centre, unit, stock group, godown, stock item, voucher type ' +
+          'or budget in ' +
         'TallyPrime: rename it, move it under another parent, or update the fields its kind takes ' +
         '(see tally_create_master). Only the fields you give change. Units cannot be renamed. For ' +
         'ledgers use tally_alter_ledger.\n\n' +
@@ -41,6 +42,15 @@ export function registerAlterMasterTool(server: McpServer, deps: ToolDeps): void
         const { kind } = input;
         const spec = KIND_SPECS[kind];
         assertFieldsFitKind(kind, input);
+        // Verified live 2026-10-14: an alter carrying NUMBERINGMETHOD is accepted
+        // (ALTERED 1) and the method stays as it was. It is set on create only.
+        if (input.numberingMethod !== undefined) {
+          throw new TallyError(
+            'INVALID_PARAMETERS',
+            'TallyPrime does not change a voucher type\'s numbering method this way. Change it in ' +
+              'TallyPrime itself (alter the voucher type), or create a new type with the method wanted.'
+          );
+        }
 
         const company = await writeTargetCompany(deps, input.company);
         const current = await findMaster(deps, company, kind, input.name);
@@ -51,7 +61,9 @@ export function registerAlterMasterTool(server: McpServer, deps: ToolDeps): void
         const { fields, shown } = await resolveMasterFields(deps, company, kind, input, current.baseUnits);
         const changes: Record<string, { from: unknown; to: unknown }> = {};
         for (const [key, value] of Object.entries(shown)) {
-          changes[key] = { from: key === 'parent' ? current.parent : '(see TallyPrime)', to: value };
+          const from =
+            key === 'parent' ? current.parent : key === 'numberingMethod' ? current.numberingMethod : '(see TallyPrime)';
+          changes[key] = { from, to: value };
         }
         if (input.newName !== undefined && input.newName !== current.name) {
           if (!spec.canRename) throw new TallyError('INVALID_PARAMETERS', `A ${spec.label} cannot be renamed here.`);
@@ -90,7 +102,9 @@ export function registerAlterMasterTool(server: McpServer, deps: ToolDeps): void
             const after = await findMaster(d, company, kind, finalName);
             if (after === undefined) return { confirmed: false, detail: `no ${spec.label} named "${finalName}" was found` };
             const parentOk = fields.parent === undefined || sameParent(after.parent, fields.parent);
-            return { confirmed: parentOk, detail: after };
+            const numberingOk =
+              fields.numberingMethod === undefined || after.numberingMethod === fields.numberingMethod;
+            return { confirmed: parentOk && numberingOk, detail: after };
           },
           undo:
             `Alter it back with tally_alter_master (kind "${kind}", name "${finalName}") to name ` +

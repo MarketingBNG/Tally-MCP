@@ -91,7 +91,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: TWO_COMPANIES });
+  mock.onBodyContaining('TallyMcpCompanies', { body: TWO_COMPANIES });
   mock.onBodyContaining('<ID>Currencies</ID>', { body: EMPTY_COLLECTION });
   mock.onBodyContaining('<ID>Groups</ID>', { body: GROUPS });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: EMPTY_COLLECTION });

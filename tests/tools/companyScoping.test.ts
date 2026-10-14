@@ -92,7 +92,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: COMPANY_LIST });
+  mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY_LIST });
 });
 
 describe('tally_get_company scopes its ledger fetch to the named company', () => {
@@ -123,7 +123,7 @@ describe('tally_get_company scopes its ledger fetch to the named company', () =>
     // The path `args.company` leaves undefined. Scoping it anyway is what keeps
     // the cache key distinct per company rather than shared across all of them.
     mock.reset();
-    mock.onBodyContaining('List of Companies', {
+    mock.onBodyContaining('TallyMcpCompanies', {
       body: COMPANY_LIST.replace(
         /<COMPANY NAME="AGBV Nutrition GmbH"[\s\S]*?<\/COMPANY>/,
         ''

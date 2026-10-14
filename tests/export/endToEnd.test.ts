@@ -46,7 +46,7 @@ function serve(): void {
   mock.reset();
   // Order matters only in that later registrations win; each of these matches a
   // distinct request, keyed on the collection or report the request names.
-  mock.onBodyContaining('List of Companies', { body: COMPANY_LIST });
+  mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY_LIST });
   mock.onBodyContaining('VoucherAlterIds', { body: '<ENVELOPE><VOUCHER><MASTERID>1</MASTERID><ALTERID>7</ALTERID></VOUCHER></ENVELOPE>' });
   mock.onBodyContaining('LedgerAlterIds', { body: '<ENVELOPE><LEDGER><MASTERID>2</MASTERID><ALTERID>3</ALTERID></LEDGER></ENVELOPE>' });
   mock.onBodyContaining('Trial Balance', { body: fixture('trial-balance.xml') });

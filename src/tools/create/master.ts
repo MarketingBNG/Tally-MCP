@@ -24,11 +24,14 @@ export function registerCreateMasterTool(server: McpServer, deps: ToolDeps): voi
     {
       description:
         'Create a NEW master in TallyPrime: an account group, cost centre, unit of measure, stock ' +
-        'group, godown (location) or stock item. For ledgers use tally_create_ledger.\n\n' +
+        'group, godown (location), stock item, voucher type or budget. For ledgers use ' +
+        'tally_create_ledger.\n\n' +
         'Fields by kind: group needs parent (an existing group — its nature follows the parent). ' +
         'costCentre takes parent and category. unit takes formalName and decimalPlaces (name is ' +
         'the symbol, e.g. "kg"). stockGroup and godown take parent. stockItem takes parent (stock ' +
-        'group), baseUnits (required) and an optional opening quantity and rate.\n\n' +
+        'group), baseUnits (required) and an optional opening quantity and rate. voucherType needs ' +
+        'parent (the type it is based on, e.g. "Sales") and takes numberingMethod. budget takes ' +
+        'parent only; budget AMOUNTS are entered in TallyPrime itself.\n\n' +
         'REFUSES a name that already exists (TallyPrime would otherwise overwrite it) and any ' +
         'parent, category or unit that does not exist.\n\n' +
         WRITE_NOTICE,
@@ -72,7 +75,9 @@ export function registerCreateMasterTool(server: McpServer, deps: ToolDeps): voi
             if (made === undefined) return { confirmed: false, detail: `no ${spec.label} named "${input.name}" was found` };
             const parentOk = fields.parent === undefined || sameParent(made.parent, fields.parent);
             const valueOk = fields.openingValue === undefined || made.openingValue === fields.openingValue;
-            return { confirmed: parentOk && valueOk, detail: made };
+            const numberingOk =
+              fields.numberingMethod === undefined || made.numberingMethod === fields.numberingMethod;
+            return { confirmed: parentOk && valueOk && numberingOk, detail: made };
           },
           undo: `Delete it with tally_delete_master (kind "${kind}", name "${input.name}") while nothing uses it.`,
         });

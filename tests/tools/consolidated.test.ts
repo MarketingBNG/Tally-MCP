@@ -61,7 +61,7 @@ const NEGATIVE_LEDGERS_XML =
 const EMPTY_REPORT_XML = '<ENVELOPE></ENVELOPE>';
 
 function serveDefaults(): void {
-  mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list.xml') });
   mock.onBodyContaining('<ID>Groups</ID>', { body: GROUP_LIST_XML });
   mock.onBodyContaining('<ID>VoucherTypes</ID>', { body: fixture('voucher-types.xml') });

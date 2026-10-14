@@ -1037,19 +1037,24 @@ steps:
 
 | Folder | Tools |
 | --- | --- |
-| `src/tools/create` | `tally_create_ledger`, `tally_create_voucher`, `tally_create_master` |
+| `src/tools/create` | `tally_create_ledger`, `tally_create_voucher`, `tally_create_stock_journal`, `tally_create_master` |
 | `src/tools/alter` | `tally_alter_ledger`, `tally_alter_voucher`, `tally_alter_master` |
 | `src/tools/cancel` | `tally_cancel_voucher` |
 | `src/tools/delete` | `tally_delete_ledger`, `tally_delete_voucher`, `tally_delete_master` |
 | `src/tools/confirm` | `tally_confirm_write`, `tally_list_write_log` |
 
 `tally_create_master` and its alter/delete counterparts cover groups, cost
-centres, units, stock groups, godowns and stock items. Vouchers are accounting
-vouchers of any type (Journal, Payment, Receipt, Contra, Sales, Purchase,
-Credit/Debit Note, custom types), with bill-wise allocations. **Not yet
-supported:** item invoices with inventory lines, GST/TDS tax computation (post
-the tax ledgers as ordinary lines), cost-centre allocations on voucher lines,
-and voucher types, budgets or other masters.
+centres, units, stock groups, godowns, stock items, voucher types and budgets.
+Vouchers are any type (Journal, Payment, Receipt, Contra, Sales, Purchase,
+Credit/Debit Note, Delivery/Receipt Note, custom types), in accounting form or
+as **item invoices** (stock item, quantity, rate, godown and the sales/purchase
+ledger per line), with bill-wise allocations and **cost-centre splits** on any
+line. `tally_create_stock_journal` moves stock between godowns or into
+production. **Not supported:** GST/TDS tax computation (post the tax ledgers
+as ordinary lines with the amounts you give); budget AMOUNTS (TallyPrime takes
+them on import but they cannot be read back to check, so only the budget
+itself is written); changing a voucher type's numbering method after creation;
+altering a stock journal (cancel or delete it and post it again).
 
 **The write log** is `%LOCALAPPDATA%\tally-mcp\write-log.jsonl` (override with
 `TALLY_WRITE_LOG_PATH`): one line per write with the preview, the exact XML
@@ -1077,6 +1082,15 @@ without any error:
 - **A retried import posts twice.** TallyPrime keeps working on a request after
   the client gives up, so writes are never retried after a timeout; the result
   is reported as `WRITE_OUTCOME_UNKNOWN` with what the read-back found.
+- **A quantity finer than its unit is rounded.** 2.5 of a unit kept to 0
+  decimals was stored as 3 while the amount stayed 2.5 × rate. Such quantities
+  are refused.
+- **A numbering-method change on alter is ignored** (`ALTERED 1`, method
+  unchanged), so it is only offered on create.
+- **"List of Companies" is TallyPrime's own collection name.** Tally began
+  answering our same-named request with its built-in definition — names only,
+  no book dates — so the company list now uses a name of its own. A name with
+  brackets raised a TDL error dialog that froze Tally.
 - **"Cannot be deleted!" comes with no reason.** Usually the master is still in
   use. Ledgers whose vouchers were all deleted did delete in testing, but two
   test ledgers stayed undeletable with nothing referencing them; the cause was

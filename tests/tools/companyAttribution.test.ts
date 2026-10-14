@@ -111,7 +111,7 @@ describe('company_id names the company that was actually asked about', () => {
   it('does NOT name the first company in the list', async () => {
     // The exact live failure: ask about AgEx with AGBV sorting first, and the
     // envelope used to read "AGBV Nutrition GmbH".
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
 
     const envelope = await callToolEnvelope(build(), 'tally_get_report', {
       report: 'negative_ledgers',
@@ -125,7 +125,7 @@ describe('company_id names the company that was actually asked about', () => {
   });
 
   it('names each of the three correctly in turn', async () => {
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
 
     const names = [
       'AGBV Nutrition GmbH',
@@ -147,7 +147,7 @@ describe('company_id names the company that was actually asked about', () => {
     // The envelope's company must agree with SVCURRENTCOMPANY on the wire.
     // Anything re-derived afterwards can disagree with what was asked; the sent
     // body cannot.
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
 
     const envelope = await callToolEnvelope(build(), 'tally_get_report', {
       report: 'negative_ledgers',
@@ -169,7 +169,7 @@ describe('company_id names the company that was actually asked about', () => {
     // TallyPrime answers from whichever company is ACTIVE on the desktop, and
     // nothing in the response says which. Null means "not resolved" — naming a
     // company here would be the original bug with extra steps.
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
 
     const envelope = await callToolEnvelope(build(), 'tally_get_statement', {
       statement: 'trial_balance',
@@ -183,7 +183,7 @@ describe('company_id names the company that was actually asked about', () => {
   it('still names the sole company when only one is loaded', async () => {
     // The single-company case must not regress into an unhelpful null — that is
     // the ordinary install and it is unambiguous.
-    mock.onBodyContaining('List of Companies', { body: ONE_COMPANY });
+    mock.onBodyContaining('TallyMcpCompanies', { body: ONE_COMPANY });
 
     const envelope = await callToolEnvelope(build(), 'tally_get_statement', {
       statement: 'trial_balance',
@@ -200,7 +200,7 @@ describe('currency is never taken from the wrong company', () => {
     // AgEx is in dollars; AGBV and MUDALS both report "?". Taking the first
     // company's currency would put a euro or rupee label on dollar figures, or
     // the reverse — the same bug as company_id, one field over.
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
 
     const envelope = await callToolEnvelope(build(), 'tally_get_statement', {
       statement: 'trial_balance',
@@ -213,7 +213,7 @@ describe('currency is never taken from the wrong company', () => {
   });
 
   it('uses the named company own currency, not the first one', async () => {
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
 
     const envelope = await callToolEnvelope(build(), 'tally_get_statement', {
       statement: 'trial_balance',
@@ -235,7 +235,7 @@ describe('the same assumption, swept out of three more places', () => {
   it('tally_get_company refuses to profile a company nobody named', async () => {
     // It used to describe whichever sorted first: ledger count, groups in use,
     // features — a full description of the WRONG books, under no name at all.
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
 
     const error = await callToolError(build(), 'tally_get_company');
 
@@ -247,7 +247,7 @@ describe('the same assumption, swept out of three more places', () => {
   });
 
   it('tally_get_company still answers with no argument when one is loaded', async () => {
-    mock.onBodyContaining('List of Companies', { body: ONE_COMPANY });
+    mock.onBodyContaining('TallyMcpCompanies', { body: ONE_COMPANY });
     mock.onBodyContaining('<FETCH>*</FETCH>', { body: fixture('ledger-list-allfields.xml') });
 
     const envelope = await callToolEnvelope(build(), 'tally_get_company');
@@ -258,7 +258,7 @@ describe('the same assumption, swept out of three more places', () => {
     // This feeds the caveat saying how far figures REALLY run when Tally
     // ignores the end date. AGBV's books end 2026-07-31 and AgEx's 2026-03-31,
     // so quoting the wrong one makes the correction itself wrong.
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
 
     const envelope = await callToolEnvelope(build(), 'tally_get_statement', {
       statement: 'trial_balance',
@@ -276,7 +276,7 @@ describe('the same assumption, swept out of three more places', () => {
     // The three run a German calendar year and two April years. Defaulting to
     // the first would check a period that company never closed against, and
     // every roll-forward difference would then be an artefact.
-    mock.onBodyContaining('List of Companies', { body: THREE_COMPANIES });
+    mock.onBodyContaining('TallyMcpCompanies', { body: THREE_COMPANIES });
     mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list.xml') });
     mock.onBodyContaining('<ID>Groups</ID>', {
       body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',

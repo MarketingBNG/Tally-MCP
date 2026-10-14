@@ -120,7 +120,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: GERMAN_ONLY });
+  mock.onBodyContaining('TallyMcpCompanies', { body: GERMAN_ONLY });
   mock.onBodyContaining('<ID>Currencies</ID>', { body: ONE_CURRENCY });
   mock.onBodyContaining('<ID>Ledgers</ID>', {
     body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',
@@ -196,7 +196,7 @@ describe('what blocks the derivation', () => {
 
   it('refuses to derive from a country the table does not carry', async () => {
     // An absent country returns null rather than a best guess.
-    mock.onBodyContaining('List of Companies', { body: UNMAPPED_COUNTRY });
+    mock.onBodyContaining('TallyMcpCompanies', { body: UNMAPPED_COUNTRY });
 
     expect(await currenciesOn()).toEqual(['unknown']);
   });
@@ -204,7 +204,7 @@ describe('what blocks the derivation', () => {
   it('never overrides a symbol TallyPrime transported successfully', async () => {
     // The guard must stay narrow: a company reporting a usable symbol must be
     // completely unaffected by any of this.
-    mock.onBodyContaining('List of Companies', {
+    mock.onBodyContaining('TallyMcpCompanies', {
       body: GERMAN_ONLY.replace('<CURRENCYNAME TYPE="String">?</CURRENCYNAME>', '<CURRENCYNAME TYPE="String">$</CURRENCYNAME>'),
     });
 

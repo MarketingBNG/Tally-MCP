@@ -260,7 +260,7 @@ export function buildCollectionRequest(
  */
 export function buildConnectionProbeRequest(): string {
   return buildCollectionRequest(
-    'List of Companies',
+    'TallyMcpCompanies',
     'Company',
     ['Name', 'StartingFrom', 'EndingAt'],
     // Genuinely global: this asks whether Tally is answering at all, which is

@@ -39,7 +39,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
   mock.onBodyContaining('<ID>Stock Summary</ID>', { body: fixture('stock-summary.xml') });
   mock.onBodyContaining('<ID>Godown Summary</ID>', { body: fixture('godown-summary.xml') });
 });
@@ -188,7 +188,7 @@ describe('tally_get_closing_stock on a company without inventory', () => {
    */
   it('explains an empty report instead of implying stock is zero', async () => {
     mock.reset();
-    mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+    mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
     mock.onBodyContaining('<ID>Stock Summary</ID>', { body: '<ENVELOPE></ENVELOPE>' });
 
     const result = await callToolOk(build(), 'tally_get_closing_stock', { by: 'item' });

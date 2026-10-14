@@ -39,7 +39,7 @@ function build(overrides: Record<string, string> = {}): ToolRegistry {
 }
 
 function serveDefaults(): void {
-  mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list.xml') });
   mock.onBodyContaining('<ID>VoucherTypes</ID>', { body: fixture('voucher-types.xml') });
   mock.onBodyContaining('<TYPE>Voucher</TYPE>', { body: fixture('bank-vouchers.xml') });
@@ -715,7 +715,7 @@ describe('tally_get_outstanding ageing', () => {
 describe('tally_get_statement discloses divergence from the ledger masters', () => {
   function serveDivergence(): void {
     mock.reset();
-    mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+    mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
     mock.onBodyContaining('<ID>Groups</ID>', { body: fixture('groups.xml') });
     mock.onBodyContaining('<ID>Ledgers</ID>', {
       body: fixture('stock-divergence-ledgers.xml'),
@@ -781,7 +781,7 @@ describe('tally_get_statement discloses divergence from the ledger masters', () 
    */
   it('still answers when the masters cannot be read', async () => {
     mock.reset();
-    mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+    mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
     mock.onBodyContaining('Trial Balance', {
       body: fixture('stock-divergence-trial-balance.xml'),
     });

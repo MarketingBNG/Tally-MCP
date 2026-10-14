@@ -62,7 +62,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: COMPANY });
+  mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY });
 });
 
 function build() {

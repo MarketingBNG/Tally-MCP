@@ -74,7 +74,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: COMPANY_LIST });
+  mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY_LIST });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: MANY_LEDGERS });
 });
 

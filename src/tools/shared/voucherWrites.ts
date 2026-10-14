@@ -3,11 +3,27 @@ import { Decimal } from 'decimal.js';
 import { z } from 'zod';
 import { buildGroupIndex, groupKey, isUnderAnyGroup } from '../../model/groupTree.js';
 import type { Group, Ledger, Voucher, VoucherType } from '../../tally/normalize.js';
-import type { BillAllocation, VoucherContent, VoucherLine } from '../../tally/requests/import.js';
+import type {
+  BillAllocation,
+  InventoryLine,
+  VoucherContent,
+  VoucherLine,
+} from '../../tally/requests/import.js';
 import { TallyError } from '../../tally/TallyError.js';
 import { fetchVouchers } from '../read/vouchers/fetch.js';
 import { fetchVoucherTypes } from '../read/voucherTypes.js';
 import { isoDateSchema } from '../../schemas/common.js';
+import {
+  costCentresSchema,
+  describeItems,
+  hasStockLines,
+  itemLineSchema,
+  itemVoucherMatches,
+  readLineMasters,
+  resolveCostCentres,
+  resolveItemLines,
+  type ItemLineInput,
+} from './voucherLines.js';
 import { companyBookYear, companyNamed, type ToolDeps } from './toolResult.js';
 import {
   amountSchema,
@@ -46,6 +62,7 @@ export const entrySchema = z.object({
     .max(50)
     .optional()
     .describe('Bill-wise allocations, for party ledgers that keep balances bill by bill.'),
+  costCentres: costCentresSchema,
 });
 
 export type EntryInput = z.infer<typeof entrySchema>;
@@ -61,9 +78,21 @@ export const voucherContentShape = {
   date: isoDateSchema.describe('Voucher date, ISO YYYY-MM-DD.'),
   entries: z
     .array(entrySchema)
-    .min(2)
+    .min(1)
     .max(200)
-    .describe('Ledger lines. Debits must equal credits exactly.'),
+    .describe(
+      'Ledger lines. Debits must equal credits exactly, counting any item lines. On an item ' +
+        'invoice these are the party and any tax, freight or discount ledgers.'
+    ),
+  items: z
+    .array(itemLineSchema)
+    .max(200)
+    .optional()
+    .describe(
+      'Stock item lines, for an ITEM invoice (Sales, Purchase, Credit/Debit Note) or a Delivery / ' +
+        'Receipt Note. Each is item, quantity, rate and the sales or purchase ledger it posts to; ' +
+        'the side follows the voucher type (a sale credits, a purchase debits).'
+    ),
   narration: z.string().max(2000).optional(),
   voucherNumber: z
     .string()
@@ -83,7 +112,16 @@ export interface ValidatedVoucher {
   content: VoucherContent;
   voucherType: VoucherType;
   /** The accountant-readable lines: ledger, Dr, Cr, group. */
-  table: { ledger: string; group: string | null; debit: string; credit: string; bills?: unknown }[];
+  table: {
+    ledger: string;
+    group: string | null;
+    debit: string;
+    credit: string;
+    bills?: unknown;
+    costCentres?: unknown;
+  }[];
+  /** Item lines as an accountant reads them; empty for an accounting voucher. */
+  itemTable: Record<string, string>[];
   total: string;
   warnings: string[];
 }
@@ -106,6 +144,7 @@ export async function validateVoucher(
     voucherType: string;
     date: string;
     entries: EntryInput[];
+    items?: ItemLineInput[] | undefined;
     narration?: string | undefined;
     voucherNumber?: string | undefined;
     reference?: string | undefined;
@@ -121,6 +160,13 @@ export async function validateVoucher(
 
   const voucherType = requireExisting(types, input.voucherType, (t) => t.name, 'voucher type');
   await assertDateInBooks(deps, company, input.date);
+  const hasItems = (input.items?.length ?? 0) > 0;
+  const masters = await readLineMasters(deps, company, {
+    items: hasItems,
+    costCentres:
+      input.entries.some((e) => e.costCentres !== undefined) ||
+      (input.items ?? []).some((i) => i.costCentres !== undefined),
+  });
 
   let debit = new Decimal(0);
   let credit = new Decimal(0);
@@ -165,14 +211,38 @@ export async function validateVoucher(
       }
     }
 
-    lines.push({ ledger: ledger.name, amount: signed, ...(bills === undefined ? {} : { bills }) });
+    const costCentres = resolveCostCentres(
+      masters,
+      entry.costCentres,
+      new Decimal(entry.amount),
+      entry.side,
+      `"${ledger.name}"`
+    );
+
+    lines.push({
+      ledger: ledger.name,
+      amount: signed,
+      ...(bills === undefined ? {} : { bills }),
+      ...(costCentres === undefined ? {} : { costCentres }),
+    });
     table.push({
       ledger: ledger.name,
       group: ledger.parent,
       debit: entry.side === 'Dr' ? new Decimal(entry.amount).toFixed(2) : '',
       credit: entry.side === 'Cr' ? new Decimal(entry.amount).toFixed(2) : '',
       ...(bills === undefined ? {} : { bills: entry.bills }),
+      ...(entry.costCentres === undefined ? {} : { costCentres: entry.costCentres }),
     });
+  }
+
+  let items: InventoryLine[] = [];
+  let itemTable: Record<string, string>[] = [];
+  if (hasItems) {
+    const resolved = resolveItemLines(masters, ledgers, voucherType, input.items ?? []);
+    items = resolved.items;
+    itemTable = resolved.table;
+    if (resolved.side === 'Dr') debit = debit.plus(resolved.total);
+    else credit = credit.plus(resolved.total);
   }
 
   if (!debit.equals(credit)) {
@@ -182,10 +252,8 @@ export async function validateVoucher(
         `${debit.minus(credit).abs().toFixed(2)}. Nothing was prepared.`
     );
   }
-  if (
-    lines.filter((l) => l.amount.startsWith('-')).length === 0 ||
-    lines.every((l) => l.amount.startsWith('-'))
-  ) {
+  const signs = [...lines.map((l) => l.amount), ...items.map((i) => i.amount)];
+  if (signs.every((a) => !a.startsWith('-')) || signs.every((a) => a.startsWith('-'))) {
     throw new TallyError(
       'INVALID_PARAMETERS',
       'A voucher needs at least one debit and one credit line.'
@@ -237,9 +305,11 @@ export async function validateVoucher(
       ...(input.voucherNumber === undefined ? {} : { voucherNumber: input.voucherNumber }),
       ...(input.reference === undefined ? {} : { reference: input.reference }),
       ...(partyLedger === undefined ? {} : { partyLedger }),
+      ...(items.length === 0 ? {} : { items }),
     },
     voucherType,
     table,
+    itemTable,
     total: debit.toFixed(2),
     warnings,
   };
@@ -258,7 +328,7 @@ function touchesCash(
 }
 
 /** Refuse a date before the books begin; TallyPrime would reject it with a misleading message. */
-async function assertDateInBooks(deps: ToolDeps, company: string, date: string): Promise<void> {
+export async function assertDateInBooks(deps: ToolDeps, company: string, date: string): Promise<void> {
   const profile = await companyNamed(deps, company);
   const start = profile?.startingFrom ?? null;
   if (start !== null && date < start) {
@@ -380,10 +450,15 @@ export function describeVoucher(voucher: Voucher): Record<string, unknown> {
       ledger: e.ledgerName,
       amount: describeSigned(e.amount?.amount),
     })),
+    ...(hasStockLines(voucher) ? { items: describeItems(voucher) } : {}),
   };
 }
 
 /** Do a voucher's lines match the content written? Compares ledger and signed amount as multisets. */
+export function contentMatches(voucher: Voucher, content: VoucherContent): boolean {
+  return (content.items?.length ?? 0) > 0 ? itemVoucherMatches(voucher, content) : linesMatch(voucher, content.lines);
+}
+
 export function linesMatch(voucher: Voucher, lines: readonly VoucherLine[]): boolean {
   const key = (ledger: string, amount: string | null | undefined): string =>
     `${ledger}\u0000${amount === null || amount === undefined ? 'null' : new Decimal(amount).toFixed(4)}`;

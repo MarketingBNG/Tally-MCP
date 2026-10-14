@@ -6,15 +6,16 @@ import { fetchVouchers } from '../read/vouchers/fetch.js';
 import { runTool, type ToolDeps } from '../shared/toolResult.js';
 import { writeTargetCompany } from '../shared/writeInputs.js';
 import {
+  contentMatches,
   describeVoucher,
   findVoucherByMasterId,
-  linesMatch,
   headerMismatches,
   missingBills,
   sameNumberElsewhere,
   validateVoucher,
   voucherContentShape,
 } from '../shared/voucherWrites.js';
+import { missingCostCentres } from '../shared/voucherLines.js';
 import { previewResult, WRITE_NOTICE } from '../confirm/flow.js';
 
 /**
@@ -25,13 +26,18 @@ export function registerCreateVoucherTool(server: McpServer, deps: ToolDeps): vo
     'tally_create_voucher',
     {
       description:
-        'Post a NEW accounting voucher in TallyPrime: Journal, Payment, Receipt, Contra, Sales, ' +
-        'Purchase, Credit Note, Debit Note or any custom type, in accounting (not item-invoice) form.\n\n' +
+        'Post a NEW voucher in TallyPrime: Journal, Payment, Receipt, Contra, Sales, Purchase, Credit ' +
+        'Note, Debit Note, Delivery Note, Receipt Note or any custom type.\n\n' +
+        'Two forms: ACCOUNTING (ledger lines only) or ITEM INVOICE (give `items`: stock item, ' +
+        'quantity, rate and the sales/purchase ledger, plus the party and any tax ledgers as ' +
+        '`entries`). Any ledger line or item line can be split across cost centres. For stock ' +
+        'transfers or production use tally_create_stock_journal.\n\n' +
         'WHEN TO USE: audit adjustments, provisions, reclassifications, recording a payment, receipt, ' +
         'sale or purchase.\n\n' +
         'Each line is a ledger, a side (Dr/Cr) and a positive amount. Debits must equal credits ' +
         'exactly. Party lines can carry bill-wise allocations (New Ref for an invoice, Agst Ref to ' +
-        'settle one). GST/TDS are posted as ordinary ledger lines to the tax ledgers.\n\n' +
+        'settle one). GST/TDS are posted as ordinary ledger lines to the tax ledgers, with the ' +
+        'amounts you give: nothing calculates tax for you.\n\n' +
         'REFUSES: an unbalanced voucher, an unknown ledger or voucher type, a date before the books ' +
         'begin. The preview warns about likely duplicates already in the books.\n\n' +
         WRITE_NOTICE,
@@ -60,6 +66,7 @@ export function registerCreateVoucherTool(server: McpServer, deps: ToolDeps): vo
             ...(content.partyLedger === undefined ? {} : { party: content.partyLedger }),
             narration: content.narration ?? '',
             lines: validated.table,
+            ...(validated.itemTable.length > 0 ? { items: validated.itemTable } : {}),
             totalDebit: validated.total,
             totalCredit: validated.total,
             ...(validated.warnings.length + lookalikes.length > 0
@@ -82,18 +89,21 @@ export function registerCreateVoucherTool(server: McpServer, deps: ToolDeps): vo
             }
             const billsMissing = missingBills(made, content.lines);
             const headerProblems = headerMismatches(made, content);
+            const centresMissing = missingCostCentres(made, content);
             const numberNote = await sameNumberElsewhere(d, company, made);
             return {
               confirmed:
-                linesMatch(made, content.lines) &&
+                contentMatches(made, content) &&
                 made.voucherType === content.voucherType &&
                 billsMissing.length === 0 &&
+                centresMissing.length === 0 &&
                 headerProblems.length === 0,
               detail: {
                 guid: made.guid,
                 masterId,
                 ...describeVoucher(made),
                 ...(billsMissing.length > 0 ? { billsNotFound: billsMissing } : {}),
+                ...(centresMissing.length > 0 ? { costCentresNotFound: centresMissing } : {}),
                 ...(headerProblems.length > 0 ? { headerNotStored: headerProblems } : {}),
                 ...(numberNote === null ? {} : { numberingWarning: numberNote }),
               },
@@ -119,9 +129,9 @@ async function possibleDuplicates(
   validated: Awaited<ReturnType<typeof validateVoucher>>
 ): Promise<string[]> {
   try {
-    const { vouchers } = await fetchVouchers(deps, company, { fromDate: date, toDate: date });
+    const { vouchers } = await fetchVouchers(deps, company, { fromDate: date, toDate: date }, true, true);
     const same = vouchers.filter(
-      (v) => !v.isCancelled && v.voucherType === validated.content.voucherType && linesMatch(v, validated.content.lines)
+      (v) => !v.isCancelled && v.voucherType === validated.content.voucherType && contentMatches(v, validated.content)
     );
     return same.map(
       (v) =>

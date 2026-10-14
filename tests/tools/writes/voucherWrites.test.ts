@@ -189,7 +189,7 @@ beforeEach(() => {
   forgetEducationalMode();
   mock.reset();
   mock.onBodyContaining('<TALLYREQUEST>Import Data', (body) => applyVoucherImport(body));
-  mock.onBodyContaining('List of Companies', { body: COMPANY_LIST });
+  mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY_LIST });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: LEDGERS });
   mock.onBodyContaining('<ID>Groups</ID>', { body: GROUPS });
   mock.onBodyContaining('<ID>VoucherTypes</ID>', { body: TYPES });

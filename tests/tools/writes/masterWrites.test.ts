@@ -55,11 +55,14 @@ beforeEach(() => {
   // Later registrations win, so the catch-all goes first.
   mock.onBodyContaining('Masters</ID>', { body: EMPTY });
   mock.onBodyContaining('<TALLYREQUEST>Import Data', { body: fixture('import-created.xml') });
-  mock.onBodyContaining('List of Companies', { body: COMPANY_LIST });
+  mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY_LIST });
   mock.onBodyContaining('<ID>Groups</ID>', { body: GROUPS });
   mock.onBodyContaining('<ID>UnitMasters</ID>', { body: UNITS });
   mock.onBodyContaining('<ID>StockGroupMasters</ID>', { body: STOCK_GROUPS });
   mock.onBodyContaining('<ID>StockItems</ID>', { body: EMPTY });
+  mock.onBodyContaining('<ID>VoucherTypes</ID>', {
+    body: '<ENVELOPE><BODY><DATA><COLLECTION><VOUCHERTYPE NAME="Sales"><PARENT>Sales</PARENT></VOUCHERTYPE></COLLECTION></DATA></BODY></ENVELOPE>',
+  });
 
   registry = createToolRegistry();
   const deps = makeDeps(port, {
@@ -132,5 +135,41 @@ describe('tally_alter_master', () => {
   it('treats "Primary" and empty as the same top level, so nothing changes', async () => {
     const error = await callToolError(registry, 'tally_alter_master', { kind: 'stockGroup', name: 'Raw Material', parent: '' });
     expect(error.message).toMatch(/Nothing to change/);
+  });
+});
+
+describe('voucher types and budgets', () => {
+  it('creates a voucher type based on an existing one, with its numbering method', async () => {
+    const preview = await callToolOk(registry, 'tally_create_master', {
+      kind: 'voucherType',
+      name: 'Export Invoice',
+      parent: 'sales',
+      numberingMethod: 'Manual',
+    });
+    await callToolOk(registry, 'tally_confirm_write', { confirmToken: preview.confirmToken }).catch(() => undefined);
+    const sent = imports()[0] ?? '';
+    expect(sent).toContain('<VOUCHERTYPE NAME="Export Invoice" ACTION="Create">');
+    expect(sent).toContain('<ISACTIVE>Yes</ISACTIVE><PARENT>Sales</PARENT>');
+    expect(sent).toContain('<NUMBERINGMETHOD>Manual</NUMBERINGMETHOD>');
+  });
+
+  it('refuses a voucher type with no base type', async () => {
+    const error = await callToolError(registry, 'tally_create_master', { kind: 'voucherType', name: 'X' });
+    expect(error.message).toMatch(/needs a parent/);
+  });
+
+  it('refuses a numbering change on alter — TallyPrime ignores it (verified live)', async () => {
+    const error = await callToolError(registry, 'tally_alter_master', {
+      kind: 'voucherType',
+      name: 'Sales',
+      numberingMethod: 'Automatic',
+    });
+    expect(error.message).toMatch(/does not change a voucher type's numbering method/);
+  });
+
+  it('creates a budget by name only', async () => {
+    const preview = await callToolOk(registry, 'tally_create_master', { kind: 'budget', name: 'FY Plan' });
+    await callToolOk(registry, 'tally_confirm_write', { confirmToken: preview.confirmToken }).catch(() => undefined);
+    expect(imports()[0]).toContain('<BUDGET NAME="FY Plan" ACTION="Create"><NAME.LIST TYPE="String"><NAME>FY Plan</NAME></NAME.LIST></BUDGET>');
   });
 });

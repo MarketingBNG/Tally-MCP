@@ -63,9 +63,9 @@ function Invoke-Tally {
 # --- 1. Company list -------------------------------------------------------
 Invoke-Tally "Company list" @"
 <ENVELOPE>
-  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>List of Companies</ID></HEADER>
+  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>TallyMcpCompanies</ID></HEADER>
   <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT></STATICVARIABLES>
-  <TDL><TDLMESSAGE><COLLECTION NAME="List of Companies" ISMODIFY="No">
+  <TDL><TDLMESSAGE><COLLECTION NAME="TallyMcpCompanies" ISMODIFY="No">
     <TYPE>Company</TYPE><NATIVEMETHOD>Name</NATIVEMETHOD><NATIVEMETHOD>StartingFrom</NATIVEMETHOD>
   </COLLECTION></TDLMESSAGE></TDL></DESC></BODY>
 </ENVELOPE>

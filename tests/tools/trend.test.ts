@@ -75,7 +75,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: COMPANY });
+  mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY });
   mock.onBodyContaining('<ID>Currencies</ID>', {
     body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',
   });
@@ -122,7 +122,7 @@ describe('the trend refuses periods TallyPrime will not honour', () => {
     // N report-class fetches is the most expensive thing this server does.
     // Validation must never cost them.
     mock.reset();
-    mock.onBodyContaining('List of Companies', { body: COMPANY });
+    mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY });
 
     const error = await callToolError(build(), 'tally_get_statement', {
       statement: 'trial_balance',

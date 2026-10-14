@@ -126,7 +126,7 @@ beforeEach(() => {
   };
   mock.reset();
   mock.onBodyContaining('<TALLYREQUEST>Import Data', (body) => importReply(body));
-  mock.onBodyContaining('List of Companies', { body: COMPANY_LIST });
+  mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY_LIST });
   mock.onBodyContaining('<ID>Ledgers</ID>', () => ({ body: ledgerXml() }));
   mock.onBodyContaining('<ID>Groups</ID>', { body: GROUPS });
   logPath = join(mkdtempSync(join(tmpdir(), 'tally-write-log-')), 'write-log.jsonl');

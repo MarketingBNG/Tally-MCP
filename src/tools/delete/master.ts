@@ -16,7 +16,8 @@ export function registerDeleteMasterTool(server: McpServer, deps: ToolDeps): voi
     'tally_delete_master',
     {
       description:
-        'Delete a group, cost centre, unit, stock group, godown or stock item from TallyPrime. For ' +
+        'Delete a group, cost centre, unit, stock group, godown, stock item, voucher type or budget from ' +
+        'TallyPrime. For ' +
         'ledgers use tally_delete_ledger.\n\n' +
         'TallyPrime refuses to delete a master that is in use — a group with ledgers under it, a ' +
         'unit an item uses, an item with stock movements. That refusal comes back as WRITE_REJECTED ' +

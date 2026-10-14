@@ -88,7 +88,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
   mock.onBodyContaining('<ID>Groups</ID>', { body: GROUPS });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: LEDGERS });
   mock.onBodyContaining('<ID>Voucher', { body: NO_VOUCHERS });
@@ -153,7 +153,7 @@ describe('when the group hierarchy cannot be read', () => {
     // No Groups handler: the mock 501s it, which is what a Tally that rejects
     // the collection looks like from here.
     mock.reset();
-    mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+    mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
     mock.onBodyContaining('<ID>Ledgers</ID>', { body: LEDGERS });
 
     const result = await callToolOk(confirmations(), 'tally_get_confirmation_list', {

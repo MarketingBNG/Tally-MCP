@@ -189,7 +189,16 @@ export function ledgerMessage(action: ImportAction, name: string, fields: Ledger
  * listed here. A tag not on this list is never sent — the same closed-list rule
  * the read side follows for collection types.
  */
-export const MASTER_TAGS = ['GROUP', 'COSTCENTRE', 'UNIT', 'STOCKGROUP', 'GODOWN', 'STOCKITEM'] as const;
+export const MASTER_TAGS = [
+  'GROUP',
+  'COSTCENTRE',
+  'UNIT',
+  'STOCKGROUP',
+  'GODOWN',
+  'STOCKITEM',
+  'VOUCHERTYPE',
+  'BUDGET',
+] as const;
 export type MasterTag = (typeof MASTER_TAGS)[number];
 
 /** Fields across those masters. Each kind uses only its own; see the tools' kind table. */
@@ -211,6 +220,8 @@ export interface MasterFields {
   openingRate?: string;
   /** Stock item opening value in TallyPrime's sign (stock in hand is NEGATIVE, a debit). */
   openingValue?: string;
+  /** Voucher type: how vouchers are numbered. Only the two methods verified live are offered. */
+  numberingMethod?: 'Automatic' | 'Manual';
 }
 
 /**
@@ -242,6 +253,7 @@ export function masterMessage(
     open,
     nameElement,
     tag === 'UNIT' && action === 'Create' ? '<ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>' : '',
+    tag === 'VOUCHERTYPE' && action === 'Create' ? '<ISACTIVE>Yes</ISACTIVE>' : '',
     element('PARENT', fields.parent),
     element('CATEGORY', fields.category),
     element('ORIGINALNAME', fields.formalName),
@@ -250,6 +262,7 @@ export function masterMessage(
     element('OPENINGBALANCE', fields.openingQuantity),
     element('OPENINGRATE', fields.openingRate),
     element('OPENINGVALUE', fields.openingValue),
+    element('NUMBERINGMETHOD', fields.numberingMethod),
     close,
   ].join('');
 }
@@ -266,12 +279,49 @@ export interface BillAllocation {
   amount: string;
 }
 
+/**
+ * A line's split across cost centres of one category. Amounts in TallyPrime's
+ * sign, like the line's, and adding up to it. Verified live 2026-10-14: stored
+ * as CATEGORYALLOCATIONS.LIST on the ledger line (or, on an item invoice, on
+ * the item's accounting allocation) and read back unchanged.
+ */
+export interface CostCategoryAllocation {
+  category: string;
+  centres: readonly { name: string; amount: string }[];
+}
+
 /** One ledger line of a voucher. */
 export interface VoucherLine {
   ledger: string;
   /** TallyPrime's sign: NEGATIVE is debit. */
   amount: string;
   bills?: readonly BillAllocation[];
+  costCentres?: readonly CostCategoryAllocation[];
+}
+
+/**
+ * One stock item line of an item invoice, delivery note or receipt note.
+ *
+ * Verified live 2026-10-14 (Probotix, Purchase / Sales / Delivery Note): sent as
+ * ALLINVENTORYENTRIES.LIST with the godown in a BATCHALLOCATIONS.LIST ("Primary
+ * Batch") and the sales/purchase ledger in ACCOUNTINGALLOCATIONS.LIST; read back
+ * with the item, quantity, rate and amount as sent, and the stock moved.
+ */
+export interface InventoryLine {
+  item: string;
+  /** Plain decimal quantity, e.g. "10". */
+  quantity: string;
+  /** The item's base unit symbol, e.g. "nos". */
+  unit: string;
+  /** Plain decimal rate per unit. */
+  rate: string;
+  /** TallyPrime's sign: NEGATIVE is stock coming IN (a debit). */
+  amount: string;
+  /** The sales or purchase ledger the line posts to. */
+  ledger: string;
+  /** Omitted when the company keeps no godowns. */
+  godown?: string;
+  costCentres?: readonly CostCategoryAllocation[];
 }
 
 /** The content of a voucher, for create and alter. */
@@ -284,6 +334,8 @@ export interface VoucherContent {
   narration?: string;
   partyLedger?: string;
   lines: readonly VoucherLine[];
+  /** Present (and non-empty) only for an item invoice / delivery or receipt note. */
+  items?: readonly InventoryLine[];
 }
 
 /** ISO YYYY-MM-DD to Tally's YYYYMMDD. Kept local so this file needs nothing from the read side. */
@@ -296,7 +348,77 @@ function isDebit(amount: string): boolean {
   return amount.trim().startsWith('-');
 }
 
+function costCentreAllocations(allocations: readonly CostCategoryAllocation[] | undefined): string {
+  return (allocations ?? [])
+    .map(
+      (category) =>
+        '<CATEGORYALLOCATIONS.LIST>' +
+        element('CATEGORY', category.category) +
+        yesNo('ISDEEMEDPOSITIVE', category.centres.some((c) => isDebit(c.amount))) +
+        category.centres
+          .map(
+            (centre) =>
+              '<COSTCENTREALLOCATIONS.LIST>' +
+              element('NAME', centre.name) +
+              element('AMOUNT', centre.amount) +
+              '</COSTCENTREALLOCATIONS.LIST>'
+          )
+          .join('') +
+        '</CATEGORYALLOCATIONS.LIST>'
+    )
+    .join('');
+}
+
+/** A quantity in Tally's own form: "10 nos". */
+function quantityText(quantity: string, unit: string): string {
+  return `${quantity} ${unit}`;
+}
+
+/** The godown/batch block of one stock line. */
+function batchAllocation(godown: string | undefined, amount: string, quantity: string): string {
+  if (godown === undefined) return '';
+  return (
+    '<BATCHALLOCATIONS.LIST>' +
+    element('GODOWNNAME', godown) +
+    '<BATCHNAME>Primary Batch</BATCHNAME>' +
+    element('AMOUNT', amount) +
+    element('ACTUALQTY', quantity) +
+    element('BILLEDQTY', quantity) +
+    '</BATCHALLOCATIONS.LIST>'
+  );
+}
+
+function inventoryEntry(line: InventoryLine): string {
+  const quantity = quantityText(line.quantity, line.unit);
+  return (
+    '<ALLINVENTORYENTRIES.LIST>' +
+    element('STOCKITEMNAME', line.item) +
+    yesNo('ISDEEMEDPOSITIVE', isDebit(line.amount)) +
+    element('RATE', `${line.rate}/${line.unit}`) +
+    element('AMOUNT', line.amount) +
+    element('ACTUALQTY', quantity) +
+    element('BILLEDQTY', quantity) +
+    batchAllocation(line.godown, line.amount, quantity) +
+    '<ACCOUNTINGALLOCATIONS.LIST>' +
+    element('LEDGERNAME', line.ledger) +
+    yesNo('ISDEEMEDPOSITIVE', isDebit(line.amount)) +
+    element('AMOUNT', line.amount) +
+    costCentreAllocations(line.costCentres) +
+    '</ACCOUNTINGALLOCATIONS.LIST>' +
+    '</ALLINVENTORYENTRIES.LIST>'
+  );
+}
+
+/** Whether a voucher is written in TallyPrime's item-invoice form. */
+export function isItemVoucher(content: VoucherContent): boolean {
+  return (content.items?.length ?? 0) > 0;
+}
+
 function voucherBody(content: VoucherContent): string {
+  const itemForm = isItemVoucher(content);
+  // In item-invoice form TallyPrime keeps the party and other ledgers (tax,
+  // freight) as LEDGERENTRIES.LIST, and the item lines carry their own ledger.
+  const ledgerTag = itemForm ? 'LEDGERENTRIES.LIST' : 'ALLLEDGERENTRIES.LIST';
   const lines = content.lines
     .map((line) => {
       const bills = (line.bills ?? [])
@@ -310,12 +432,14 @@ function voucherBody(content: VoucherContent): string {
         )
         .join('');
       return (
-        '<ALLLEDGERENTRIES.LIST>' +
+        `<${ledgerTag}>` +
         element('LEDGERNAME', line.ledger) +
         yesNo('ISDEEMEDPOSITIVE', isDebit(line.amount)) +
+        (itemForm && line.ledger === content.partyLedger ? '<ISPARTYLEDGER>Yes</ISPARTYLEDGER>' : '') +
         element('AMOUNT', line.amount) +
         bills +
-        '</ALLLEDGERENTRIES.LIST>'
+        costCentreAllocations(line.costCentres) +
+        `</${ledgerTag}>`
       );
     })
     .join('');
@@ -327,9 +451,15 @@ function voucherBody(content: VoucherContent): string {
     element('REFERENCE', content.reference) +
     element('PARTYLEDGERNAME', content.partyLedger) +
     element('NARRATION', content.narration) +
-    '<PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>' +
-    lines
+    (itemForm ? '<ISINVOICE>Yes</ISINVOICE>' : '') +
+    `<PERSISTEDVIEW>${voucherView(content)}</PERSISTEDVIEW>` +
+    lines +
+    (content.items ?? []).map(inventoryEntry).join('')
   );
+}
+
+function voucherView(content: VoucherContent): string {
+  return isItemVoucher(content) ? 'Invoice Voucher View' : 'Accounting Voucher View';
 }
 
 /**
@@ -337,8 +467,64 @@ function voucherBody(content: VoucherContent): string {
  */
 export function voucherCreateMessage(content: VoucherContent): string {
   return (
-    `<VOUCHER VCHTYPE="${escapeXml(content.voucherType)}" ACTION="Create" OBJVIEW="Accounting Voucher View">` +
+    `<VOUCHER VCHTYPE="${escapeXml(content.voucherType)}" ACTION="Create" OBJVIEW="${voucherView(content)}">` +
     voucherBody(content) +
+    '</VOUCHER>'
+  );
+}
+
+/** One side of a stock journal: an item, its quantity, rate and godown. Amount positive. */
+export interface StockLine {
+  item: string;
+  quantity: string;
+  unit: string;
+  rate: string;
+  amount: string;
+  godown?: string;
+}
+
+/** A stock journal: stock consumed (out) and produced or received (in), no ledgers. */
+export interface StockJournalContent {
+  voucherType: string;
+  date: string;
+  voucherNumber?: string;
+  narration?: string;
+  consumed: readonly StockLine[];
+  produced: readonly StockLine[];
+}
+
+function stockSide(tag: 'INVENTORYENTRIESOUT.LIST' | 'INVENTORYENTRIESIN.LIST', line: StockLine): string {
+  // Out is a credit (positive), in is a debit (negative), as TallyPrime reads them back.
+  const amount = tag === 'INVENTORYENTRIESIN.LIST' ? `-${line.amount}` : line.amount;
+  const quantity = quantityText(line.quantity, line.unit);
+  return (
+    `<${tag}>` +
+    element('STOCKITEMNAME', line.item) +
+    yesNo('ISDEEMEDPOSITIVE', tag === 'INVENTORYENTRIESIN.LIST') +
+    element('RATE', `${line.rate}/${line.unit}`) +
+    element('AMOUNT', amount) +
+    element('ACTUALQTY', quantity) +
+    element('BILLEDQTY', quantity) +
+    batchAllocation(line.godown, amount, quantity) +
+    `</${tag}>`
+  );
+}
+
+/**
+ * A new stock journal. Verified live 2026-10-14: a transfer between godowns sent
+ * as INVENTORYENTRIESOUT.LIST + INVENTORYENTRIESIN.LIST under the "Consumption
+ * Voucher View" gave CREATED 1 and read back with both godowns as sent.
+ */
+export function stockJournalCreateMessage(content: StockJournalContent): string {
+  return (
+    `<VOUCHER VCHTYPE="${escapeXml(content.voucherType)}" ACTION="Create" OBJVIEW="Consumption Voucher View">` +
+    element('DATE', tallyDate(content.date)) +
+    element('VOUCHERTYPENAME', content.voucherType) +
+    element('VOUCHERNUMBER', content.voucherNumber) +
+    element('NARRATION', content.narration) +
+    '<PERSISTEDVIEW>Consumption Voucher View</PERSISTEDVIEW>' +
+    content.consumed.map((line) => stockSide('INVENTORYENTRIESOUT.LIST', line)).join('') +
+    content.produced.map((line) => stockSide('INVENTORYENTRIESIN.LIST', line)).join('') +
     '</VOUCHER>'
   );
 }
@@ -364,7 +550,7 @@ function targetAttributes(masterId: number, date: string, voucherType: string): 
 /** Replace an existing voucher's content. Verified live: ALTERED 1, entries replaced, not appended. */
 export function voucherAlterMessage(masterId: number, currentDate: string, content: VoucherContent): string {
   return (
-    `<VOUCHER ${targetAttributes(masterId, currentDate, content.voucherType)} ACTION="Alter" OBJVIEW="Accounting Voucher View">` +
+    `<VOUCHER ${targetAttributes(masterId, currentDate, content.voucherType)} ACTION="Alter" OBJVIEW="${voucherView(content)}">` +
     voucherBody(content) +
     '</VOUCHER>'
   );

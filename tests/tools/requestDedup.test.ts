@@ -39,7 +39,7 @@ afterAll(async () => {
 
 /** Route by the report/collection ID in the request, as real Tally does. */
 function serveDefaults(): void {
-  mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list.xml') });
   mock.onBodyContaining('Trial Balance', { body: fixture('trial-balance.xml') });
 }
@@ -116,7 +116,7 @@ describe('request de-duplication within one tool call', () => {
     );
 
     const queries = envelope.source_query as string[];
-    expect(queries.some((query) => query.includes('List of Companies'))).toBe(true);
+    expect(queries.some((query) => query.includes('TallyMcpCompanies'))).toBe(true);
     expect(queries.some((query) => query.includes('Trial Balance'))).toBe(true);
   });
 });

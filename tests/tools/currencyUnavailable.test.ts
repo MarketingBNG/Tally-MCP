@@ -84,7 +84,7 @@ interface Row {
 }
 
 async function statement(companyBody: string): Promise<Record<string, unknown>> {
-  mock.onBodyContaining('List of Companies', { body: companyBody });
+  mock.onBodyContaining('TallyMcpCompanies', { body: companyBody });
   return callToolOk(build(), 'tally_get_statement', {
     statement: 'trial_balance',
     ...PERIOD,
@@ -180,7 +180,7 @@ describe('TALLY_CURRENCY_LABEL closes the gap the symbol left', () => {
     companyBody: string,
     overrides: Record<string, string>
   ): Promise<Record<string, unknown>> {
-    mock.onBodyContaining('List of Companies', { body: companyBody });
+    mock.onBodyContaining('TallyMcpCompanies', { body: companyBody });
     return callToolOk(build(overrides), 'tally_get_statement', {
       statement: 'trial_balance',
       ...PERIOD,

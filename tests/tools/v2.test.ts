@@ -57,7 +57,7 @@ function build(overrides: Record<string, string> = {}): ToolRegistry {
 }
 
 function serveDefaults(): void {
-  mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
   mock.onBodyContaining('<ID>Groups</ID>', { body: fixture('groups-common.xml') });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list.xml') });
   mock.onBodyContaining('<FETCH>*</FETCH>', { body: fixture('ledger-list-allfields.xml') });
@@ -236,7 +236,7 @@ describe('empty result for a period the caller never chose', () => {
     // year covers them. Without the override the defaulted period genuinely IS
     // empty and the note fires correctly — which would assert the opposite of
     // what this test is about.
-    mock.onBodyContaining('List of Companies', { body: COMPANY_WITH_CURRENT_BOOKS });
+    mock.onBodyContaining('TallyMcpCompanies', { body: COMPANY_WITH_CURRENT_BOOKS });
     mock.onBodyContaining('<ID>Groups</ID>', { body: fixture('groups-common.xml') });
 
     const result = await callToolOk(build(), 'tally_get_vouchers', {

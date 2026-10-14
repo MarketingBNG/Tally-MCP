@@ -6,15 +6,16 @@ import { TallyError } from '../../tally/TallyError.js';
 import { runTool, type ToolDeps } from '../shared/toolResult.js';
 import { conflict, writeTargetCompany } from '../shared/writeInputs.js';
 import {
+  contentMatches,
   describeVoucher,
   findVoucher,
-  linesMatch,
   headerMismatches,
   missingBills,
   requireVoucher,
   validateVoucher,
   voucherContentShape,
 } from '../shared/voucherWrites.js';
+import { hasStockLines, missingCostCentres } from '../shared/voucherLines.js';
 import { previewResult, WRITE_NOTICE } from '../confirm/flow.js';
 
 /** How a write names the voucher it acts on — both straight from a read tool's output. */
@@ -38,8 +39,9 @@ export function registerAlterVoucherTool(server: McpServer, deps: ToolDeps): voi
       description:
         'Change an EXISTING voucher in TallyPrime — its lines, amounts, date, narration or reference.\n\n' +
         'Give the voucher\'s guid and current date (from tally_get_vouchers), and the COMPLETE voucher ' +
-        'as it should be afterwards: every line, not only the changed ones. The preview shows it ' +
-        'before and after.\n\n' +
+        'as it should be afterwards: every line, not only the changed ones — including `items` on an ' +
+        'item invoice. The preview shows it before and after. Stock journals cannot be altered here: ' +
+        'cancel or delete one and post it again.\n\n' +
         'If the voucher was changed or deleted in TallyPrime after the preview, the confirm is refused ' +
         '(TallyPrime would otherwise create a new voucher instead of altering).\n\n' +
         WRITE_NOTICE,
@@ -51,6 +53,23 @@ export function registerAlterVoucherTool(server: McpServer, deps: ToolDeps): voi
         const target = await requireVoucher(deps, company, input.guid, input.currentDate);
         if (target.voucher.isCancelled) {
           throw new TallyError('INVALID_PARAMETERS', 'That voucher is cancelled; a cancelled voucher is not altered.');
+        }
+        const stockJournal = ['INVENTORYENTRIESIN.LIST', 'INVENTORYENTRIESOUT.LIST'].some(
+          (tag) => (target.voucher.nested?.[tag]?.length ?? 0) > 0
+        );
+        if (stockJournal) {
+          throw new TallyError(
+            'INVALID_PARAMETERS',
+            'That is a stock journal; it cannot be altered here. Cancel or delete it and post a new one ' +
+              'with tally_create_stock_journal.'
+          );
+        }
+        if (hasStockLines(target.voucher) && (input.items?.length ?? 0) === 0) {
+          throw new TallyError(
+            'INVALID_PARAMETERS',
+            'That voucher has stock item lines. Give the complete voucher including `items`; altering ' +
+              'it with ledger lines only would remove its stock movement.'
+          );
         }
         if (target.alterId === null) {
           throw new TallyError('TALLY_INVALID_RESPONSE', 'Could not read the voucher\'s AlterId, so a safe alter is not possible.');
@@ -95,6 +114,7 @@ export function registerAlterVoucherTool(server: McpServer, deps: ToolDeps): voi
               voucherNumber: finalContent.voucherNumber ?? null,
               narration: finalContent.narration ?? '',
               lines: validated.table,
+              ...(validated.itemTable.length > 0 ? { items: validated.itemTable } : {}),
               total: validated.total,
             },
             ...(validated.warnings.length > 0 ? { warnings: validated.warnings } : {}),
@@ -117,13 +137,18 @@ export function registerAlterVoucherTool(server: McpServer, deps: ToolDeps): voi
             if (after === null) return { confirmed: false, detail: `voucher ${guid} was not found on ${finalContent.date}` };
             const billsMissing = missingBills(after.voucher, finalContent.lines);
             const headerProblems = headerMismatches(after.voucher, finalContent);
+            const centresMissing = missingCostCentres(after.voucher, finalContent);
             return {
-              confirmed: linesMatch(after.voucher, finalContent.lines) && billsMissing.length === 0 &&
+              confirmed:
+                contentMatches(after.voucher, finalContent) &&
+                billsMissing.length === 0 &&
+                centresMissing.length === 0 &&
                 headerProblems.length === 0,
               detail: {
                 guid,
                 ...describeVoucher(after.voucher),
                 ...(billsMissing.length > 0 ? { billsNotFound: billsMissing } : {}),
+                ...(centresMissing.length > 0 ? { costCentresNotFound: centresMissing } : {}),
                 ...(headerProblems.length > 0 ? { headerNotStored: headerProblems } : {}),
               },
             };

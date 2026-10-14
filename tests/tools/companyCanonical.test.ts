@@ -51,7 +51,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
 });
 
 function depsFor(): ToolDeps {
@@ -160,7 +160,7 @@ describe('the default period is the company book year, not an assumed Indian one
 
   it('anchors a calendar-year company on January, not April', async () => {
     mock.reset();
-    mock.onBodyContaining('List of Companies', {
+    mock.onBodyContaining('TallyMcpCompanies', {
       body: [
         '<ENVELOPE><BODY><DATA><COLLECTION><COMPANY NAME="CALENDAR YEAR LLC">',
         '<ENDINGAT TYPE="Date">20261231</ENDINGAT>',
@@ -196,7 +196,7 @@ describe('the default period is the company book year, not an assumed Indian one
 
   it('falls back to the financial year containing today when the company is unreadable', async () => {
     mock.reset();
-    mock.onBodyContaining('List of Companies', {
+    mock.onBodyContaining('TallyMcpCompanies', {
       body: '<ENVELOPE><BODY><DATA><COLLECTION></COLLECTION></DATA></BODY></ENVELOPE>',
     });
 

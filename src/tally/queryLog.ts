@@ -73,7 +73,7 @@ export function withQueryLog<T>(scope: QueryScope, fn: () => Promise<T>): Promis
  * makes the record longer without making anything more reproducible.
  *
  * The clearest case is the company-list probe. Resolving "which company did the
- * caller mean, and how does TallyPrime spell it" sends `List of Companies`, and
+ * caller mean, and how does TallyPrime spell it" sends `TallyMcpCompanies`, and
  * it does so from several helpers on nearly every call. Measured across a short
  * audit sequence it was the single most repeated request in `source_query` —
  * sent on 4 of 4 calls at 649 bytes each — while contributing to no number in

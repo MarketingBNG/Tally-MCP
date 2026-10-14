@@ -12,6 +12,15 @@ work accumulates. `npm version <patch|minor|major>` stamps it with the released
 version and date and commits it alongside the bump, so the number and its notes
 can never drift apart. See the Releasing section in the README.
 
+## 1.2.0 — unreleased
+**Claude can now post item invoices, split entries across cost centres and move stock.**
+- Sales, purchase, credit and debit notes, delivery and receipt notes can carry stock item lines (item, quantity, rate, godown and the sales/purchase ledger).
+- Any ledger or item line can be split across cost centres; the shares must add up to the line.
+- New `tally_create_stock_journal` for transfers between godowns and production.
+- Voucher types and budgets can be created, renamed and deleted.
+- Fixed: TallyPrime started answering the company-list request with its own built-in list, which leaves out the book dates, so tools that need them failed. The request now uses a name of its own.
+- Quantities finer than the item's unit allows are refused, because TallyPrime would round them and the invoice would no longer add up.
+
 ## 1.1.1 — 2026-10-14
 - In Claude's connector settings the TallyPrime tools are now grouped into read-only and write tools instead of one "Other tools" list, so all writes can be blocked in one click.
 

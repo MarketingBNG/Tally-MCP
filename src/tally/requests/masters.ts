@@ -49,8 +49,13 @@ export function buildCompanyListRequest(
   // there is nothing to scope it to and no way to forget one.
   options: TallyRequestOptions = { company: UNSCOPED }
 ): string {
+  // NOT "List of Companies": that is TallyPrime's own built-in collection, and
+  // verified live 2026-10-14 Tally began answering with ITS definition instead of
+  // this one — names only, no StartingFrom/EndingAt — even after a restart, which
+  // broke every tool needing the book dates. A name of our own cannot collide.
+  // Plain letters only: a name with brackets raised a TDL error dialog that froze Tally.
   return buildCollectionRequest(
-    'List of Companies',
+    'TallyMcpCompanies',
     'Company',
     ['Name', 'StartingFrom', 'EndingAt', 'CompanyNumber', 'GUID', 'CurrencyName', 'CountryName'],
     options

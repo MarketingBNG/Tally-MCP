@@ -41,7 +41,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: fixture('company-list.xml') });
+  mock.onBodyContaining('TallyMcpCompanies', { body: fixture('company-list.xml') });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: fixture('ledger-list.xml') });
   mock.onBodyContaining('<TYPE>Voucher</TYPE>', { body: fixture('day-book.xml') });
 });

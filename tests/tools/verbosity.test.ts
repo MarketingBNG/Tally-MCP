@@ -94,7 +94,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mock.reset();
-  mock.onBodyContaining('List of Companies', { body: ONE_COMPANY });
+  mock.onBodyContaining('TallyMcpCompanies', { body: ONE_COMPANY });
   mock.onBodyContaining('<ID>Currencies</ID>', { body: EMPTY_COLLECTION });
   mock.onBodyContaining('<ID>Ledgers</ID>', { body: EMPTY_COLLECTION });
   mock.onBodyContaining('Trial Balance', { body: mixedTrialBalance() });
